@@ -409,6 +409,106 @@ def test_set_hardware_dpi_permission_denied(controller):
     assert result.status.value == "permission_denied"
 
 
+def test_hot_unplug_after_probe_is_device_not_found_with_invalidated_state(
+    controller,
+):
+    """Hot-unplug APÓS probe bem-sucedido: o open dentro de
+    set_hardware_dpi falha com DEVICE_NOT_FOUND, as capabilities HID/DPI
+    ficam False IMEDIATAMENTE e o reason NÃO menciona udev (o endpoint
+    existia e funcionou antes — sumiu do sistema, não é problema de
+    regra udev). O feature index é invalidado: novo efeito exige
+    refresh_device + probe_endpoint."""
+    ctrl, hid, _ = controller
+    # Probe OK → HID/DPI disponíveis.
+    state = ctrl.capability_model().evaluate()
+    assert state.is_available("hid_available")
+    assert state.is_available("hardware_dpi_available")
+
+    # Hot-unplug simulado no próximo open (write_failure_status só atua
+    # no write, então usamos open_permission_denied=False — o fake
+    # precisa de knob de open DEVICE_NOT_FOUND; aqui o desfecho vem do
+    # write, que é o caminho real do hot-unplug pós-open).
+    hid.write_failure_status = "device_not_found"
+    result = ctrl.set_hardware_dpi(800)
+    assert result.status.value == "device_not_found"
+    # applied_dpi não regrediu e nada foi confirmado como aplicado.
+    assert ctrl.applied_dpi is None
+
+    # Capabilities invalidadas imediatamente.
+    state = ctrl.capability_model().evaluate()
+    assert not state.is_available("hid_available")
+    assert not state.is_available("hardware_dpi_available")
+    reason = state.reason_for("hid_available")
+    assert "udev" not in reason.lower()
+
+    # Novo efeito NÃO pode ter sucesso enquanto o estado não for
+    # revalidado: como _probe_access_status carrega a causa real
+    # (device_not_found), o set nem sequer abre — falha imediatamente.
+    hid.write_failure_status = None
+    result = ctrl.set_hardware_dpi(800)
+    assert result.status.value == "device_not_found"
+
+    # Recuperação: refresh + probe revalida o estado e o efeito volta
+    # a funcionar.
+    ctrl.refresh_device(fake_g403_device())
+    assert ctrl.probe_endpoint().status.ok
+    assert ctrl.set_hardware_dpi(800).status.ok
+    assert ctrl.applied_dpi == 800
+
+
+def test_permission_lost_after_probe_invalidates_state(controller):
+    """Permissão perdida APÓS probe bem-sucedido (fd perdeu a regra
+    udev): open dentro de set_hardware_dpi devolve PERMISSION_DENIED e
+    as capabilities refletem imediatamente."""
+    ctrl, hid, _ = controller
+    assert ctrl.capability_model().evaluate().is_available("hid_available")
+
+    hid.open_permission_denied = True
+    result = ctrl.set_hardware_dpi(800)
+    assert result.status.value == "permission_denied"
+    state = ctrl.capability_model().evaluate()
+    assert not state.is_available("hid_available")
+    assert not state.is_available("hardware_dpi_available")
+
+
+def test_generic_failure_after_probe_invalidates_state(controller):
+    """Falha genérica de open após probe bem-sucedido (fd corrompido):
+    open devolve FAILED e as capabilities refletem imediatamente."""
+    ctrl, hid, _ = controller
+    assert ctrl.capability_model().evaluate().is_available("hid_available")
+
+    hid.open_raises = OSError("fd sumiu")
+    result = ctrl.set_hardware_dpi(800)
+    assert result.status.value == "failed"
+    state = ctrl.capability_model().evaluate()
+    assert not state.is_available("hid_available")
+    assert not state.is_available("hardware_dpi_available")
+
+
+def test_write_failure_propagates_cause_and_invalidates(controller):
+    """Falha no WRITE (após open OK) preserva a causa exata:
+    DEVICE_NOT_FOUND/PERMISSION_DENIED/FAILED no write_failure_status
+    (simulação de hot-unplug entre open e write) — a operação nunca
+    vira sucesso e as capabilities são invalidadas."""
+    ctrl, hid, _ = controller
+    for cause in ("device_not_found", "permission_denied", "failed"):
+        hid.write_failure_status = cause
+        result = ctrl.set_hardware_dpi(800)
+        assert result.status.value == cause, (
+            f"causa do write deve ser preservada: {cause}"
+        )
+        assert ctrl.applied_dpi is None
+        state = ctrl.capability_model().evaluate()
+        assert not state.is_available("hid_available")
+        assert not state.is_available("hardware_dpi_available")
+        # Reset: o knob falha TAMBÉM os writes do probe, então limpar
+        # ANTES de revalidar para o próximo cenário do loop.
+        hid.write_failure_status = None
+        ctrl.refresh_device(fake_g403_device())
+        assert ctrl.probe_endpoint().status.ok
+    assert hid.write_failure_status is None
+
+
 def test_set_hardware_dpi_requires_probed_endpoint(controller):
     """Endpoint registrado mas NUNCA probeado: falha com a causa real
     (confirmação pendente), sem abrir nada."""

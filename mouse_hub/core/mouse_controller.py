@@ -189,6 +189,18 @@ class MouseController:
             )
         return OperationResult.applied("Dispositivo registrado")
 
+    def _invalidate_access_state(self, status: OperationStatus) -> None:
+        """Falha real de acesso (open ou write) invalida o snapshot de
+        capacidades E o feature index confirmado — a causa é ambiente
+        (device/transport), não protocolo. Quem quer efeito de novo
+        precisa revalidar o ambiente (refresh_device + probe_endpoint).
+        O snapshot nunca fica True depois de uma falha real: hot-unplug
+        ou perda de permissão durante uma operação não deixam
+        hid_available/hardware_dpi_available True."""
+        self._probe_access_status = status
+        self._probe_accessible = False
+        self._dpi_feature_index = None
+
     def probe_endpoint(self) -> OperationResult:
         """Valida o dispositivo registrado no protocolo HID++ 2.0.
 
@@ -341,8 +353,24 @@ class MouseController:
         opened = False
         try:
             if not self._hid.is_open():
-                open_result = self._hid.open(self._device)
+                try:
+                    open_result = self._hid.open(self._device)
+                except OSError:
+                    # Descritor indisponível na abertura (fd sumiu,
+                    # I/O no OS) — a causa é ambiente: invalidar o
+                    # snapshot e falhar fechado, nunca vaza exceção.
+                    self._invalidate_access_state(OperationStatus.FAILED)
+                    return OperationResult.failed(
+                        "Descritor hidraw indisponível na abertura "
+                        "(device sumiu ou falha de transporte no OS)"
+                    )
                 if not open_result.status.ok:
+                    # Falha real de acesso invalida o snapshot de
+                    # capacidades: open DEVICE_NOT_FOUND/PERMISSION_DENIED/
+                    # FAILED são refletidos em hid_available e
+                    # hardware_dpi_available imediatamente (não ficam
+                    # com o snapshot do probe bem-sucedido anterior).
+                    self._invalidate_access_state(open_result.status)
                     if open_result.status == OperationStatus.PERMISSION_DENIED:
                         return OperationResult.permission_denied(
                             "Descritor hidraw sem permissão de leitura/escrita "
@@ -369,12 +397,18 @@ class MouseController:
             try:
                 write_result = self._hid.write(request)
                 if not write_result.status.ok:
+                    # ── Invalidation: falha real de acesso invalida o
+                    # snapshot de capacidades ANTES de retornar o erro —
+                    # o hot-unplug durante uma operação não deixa
+                    # hid_available/DPI True.
+                    self._invalidate_access_state(write_result.status)
                     return write_result
 
                 ack_result = _wait_for_ack(self._hid, request_key)
             except OSError:
                 # Falha de transporte no descritor (fd sumiu, I/O no OS):
                 # o comando NÃO pode ser considerado aplicado — fail closed.
+                self._invalidate_access_state(OperationStatus.FAILED)
                 return OperationResult.failed(
                     "Falha de transporte no descritor hidraw ao aplicar DPI"
                 )
@@ -539,6 +573,12 @@ class MouseController:
         def _hardware_dpi_available() -> object:
             if device is None or device.hidraw_path is None:
                 return False, "nenhum endpoint com interface hidraw"
+            if self._probe_access_status == OperationStatus.DEVICE_NOT_FOUND:
+                return (
+                    False,
+                    "endpoint desapareceu do sistema (hot-unplug) — "
+                    "execute refresh_device + probe_endpoint após reconexão",
+                )
             if self._probe_access_status == OperationStatus.PERMISSION_DENIED:
                 return False, "acesso negado ao descritor hidraw (regra udev ausente)"
             if self._probe_access_status == OperationStatus.FAILED:

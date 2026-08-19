@@ -40,7 +40,15 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from mouse_hub.core.operation import OperationResult
+from mouse_hub.core.operation import OperationResult, OperationStatus
+
+# Knob write_failure_status → OperationStatus real: "device_not_found"
+# (hot-unplug), "permission_denied", "failed" (genérico).
+_WRITE_FAILURE_STATUS = {
+    "device_not_found": OperationStatus.DEVICE_NOT_FOUND,
+    "permission_denied": OperationStatus.PERMISSION_DENIED,
+    "failed": OperationStatus.FAILED,
+}
 from mouse_hub.platform.hidpp import (
     FAP_REPORT_LENGTH,
     LONG_REPORT_ID,
@@ -112,6 +120,12 @@ class FakeHidAccess(HidAccess):
         # Falha de transporte na escrita (fd sumiu, write falhou no OS):
         # o controller deve tratar como FAILED antes de assumir sucesso.
         self.write_succeeds: bool = True
+        # Hot-unplug SIMULADO após open OK: write retorna uma causa REAL
+        # específica em vez de sucesso — DEVICE_NOT_FOUND (device sumiu
+        # entre open e write), PERMISSION_DENIED (fd perdeu permissão)
+        # ou FAILED (genérico). É o desfecho determinístico do
+        # hot-unplug pós-open: o controller deve propagar a causa exata.
+        self.write_failure_status: Optional[str] = None
         # DPI aplicado
         self.dpi_set_rejected: bool = False
         # Rejeita o SetSensorDPI com erro FAP 0x09 (UNSUPPORTED) em
@@ -216,6 +230,14 @@ class FakeHidAccess(HidAccess):
     def write(self, report: bytes) -> OperationResult:
         if not self.is_open():
             return OperationResult.failed("no open descriptor")
+        if self.write_failure_status is not None:
+            # Hot-unplug/transport failure tipado: DEVICE_NOT_FOUND
+            # (device sumiu), PERMISSION_DENIED (fd sem permissão) ou
+            # FAILED (genérico) — o caller PRESERVA a causa real.
+            return OperationResult(
+                _WRITE_FAILURE_STATUS[self.write_failure_status],
+                "simulated write failure: " + self.write_failure_status,
+            )
         if not self.write_succeeds:
             raise OSError("simulated write failure on hidraw")
         self.written_reports.append(report)

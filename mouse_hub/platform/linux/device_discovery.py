@@ -269,7 +269,14 @@ class HydppEndpointSelection:
             request = root.protocol_version_request()
             write_result = self._hid.write(request)
             if not write_result.status.ok:
-                return ProbeOutcome(valid=False, access_status=OperationStatus.FAILED)
+                # A causa REAL do write é preservada no outcome:
+                # write em device sem /dev/hidraw → DEVICE_NOT_FOUND
+                # (hot-unplug durante o probe); write no descritor sem
+                # permissão → PERMISSION_DENIED; demais falhas → FAILED.
+                # NUNCA colapsar em FAILED genérico.
+                return ProbeOutcome(
+                    valid=False, access_status=write_result.status,
+                )
             kind, response, error_code = self._read_typed(
                 self._hid, root.protocol_version_request_key(), 0.5,
             )
@@ -288,7 +295,11 @@ class HydppEndpointSelection:
             request = root.get_feature_request(FeatureId.ADJUSTABLE_DPI)
             write_result = self._hid.write(request)
             if not write_result.status.ok:
-                return ProbeOutcome(valid=False, access_status=OperationStatus.FAILED)
+                # Idem etapa 1: a causa real do write preserva o
+                # reason para quem consome o outcome.
+                return ProbeOutcome(
+                    valid=False, access_status=write_result.status,
+                )
             kind, response, error_code = self._read_typed(
                 self._hid, root.get_feature_request_key(), 0.5,
             )

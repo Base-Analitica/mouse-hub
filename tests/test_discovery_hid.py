@@ -335,6 +335,31 @@ def test_endpoint_selection_handles_permission_denied(tmp_path):
     assert selection.select(find_g403_hidraw_devices(G403_VID, G403_PID, root)) is None
 
 
+def test_endpoint_selection_write_failure_preserves_cause(tmp_path):
+    """Open OK mas write falha durante o probe (hot-unplug entre open e
+    a primeira escrita): a causa REAL do write (DEVICE_NOT_FOUND /
+    PERMISSION_DENIED / FAILED) é preservada no ProbeOutcome — nunca
+    colapsada em FAILED genérico. O mesmo vale para o write da etapa 2."""
+    root = make_sysfs_root(tmp_path, {"hidraw2": G403_UEVENT})
+    hid = FakeHidAccess()
+    selection = HydppEndpointSelection(hid)
+    candidates = find_g403_hidraw_devices(G403_VID, G403_PID, root)
+
+    # Etapa 1 (GetProtocolVersion) falha no write.
+    for cause, status in (
+        ("device_not_found", OperationStatus.DEVICE_NOT_FOUND),
+        ("permission_denied", OperationStatus.PERMISSION_DENIED),
+        ("failed", OperationStatus.FAILED),
+    ):
+        hid.write_failure_status = cause
+        outcome = selection.probe(candidates)[0]
+        assert outcome.access_status == status, (
+            f"write failure '{cause}' deve virar {status.value}"
+        )
+        assert outcome.valid is False
+        hid.write_failure_status = None
+
+
 def test_endpoint_selection_causes_are_never_collapsed(tmp_path):
     """ProbeOutcome preserva a causa REAL do acesso — permission denied,
     device ausente e falha genérica NUNCA colapsam em um único
