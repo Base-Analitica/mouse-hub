@@ -488,3 +488,135 @@ def fake_g403_device(hidraw: Optional[str] = "/dev/hidraw2") -> MouseDevice:
         pid=G403_PID,
         name="Logitech G403 HERO Gaming Mouse",
     )
+class FakeAutomationIO(AutomationIO):
+    """AutomationIO fake que acumula eventos emitidos — usado para
+    validar o hot path sem abrir Display X real."""
+
+    def __init__(self) -> None:
+        self.events: List[Tuple[str, Any]] = []
+        self._fail = False
+        self._press: Set[str] = set()
+
+    def set_fail(self, fail: bool) -> None:
+        """Força as próximas emissões a retornar False (simula XTest
+        indisponível)."""
+        self._fail = fail
+
+    @property
+    def click_count(self) -> int:
+        return sum(1 for e in self.events if e[0] == "click")
+
+    def click(self, button: MouseButton) -> bool:
+        if self._fail:
+            return False
+        self.events.append(("click", button))
+        return True
+
+    def press(self, button: MouseButton) -> bool:
+        if self._fail:
+            return False
+        self.events.append(("press", button))
+        self._press.add(f"btn:{button.value}")
+        return True
+
+    def release(self, button: MouseButton) -> bool:
+        if self._fail:
+            return False
+        self.events.append(("release", button))
+        self._press.discard(f"btn:{button.value}")
+        return True
+
+    def key_press(self, keycode: int) -> bool:
+        if self._fail:
+            return False
+        self.events.append(("key_press", keycode))
+        self._press.add(f"key:{keycode}")
+        return True
+
+    def key_release(self, keycode: int) -> bool:
+        if self._fail:
+            return False
+        self.events.append(("key_release", keycode))
+        self._press.discard(f"key:{keycode}")
+        return True
+
+    def move(self, x: int, y: int) -> bool:
+        if self._fail:
+            return False
+        self.events.append(("move", (x, y)))
+        return True
+
+    @property
+    def pressed(self) -> Set[str]:
+        return set(self._press)
+
+
+class FakeXRecordBackend(XRecordBackend):
+    """XRecordBackend fake: o teste injeta eventos de forma determinística
+    (sem display X real). O callback é o InputCapture._dispatch."""
+
+    def __init__(self, **_kwargs) -> None:
+        self.events_to_inject: List[Any] = _kwargs.get("events_to_inject", [])
+        self.enable_context_raises: Optional[Exception] = _kwargs.get(
+            "enable_context_raises", None
+        )
+        self._callback = None
+        self._enabled = False
+        self.enable_count = 0
+        self.disable_count = 0
+        self.create_count = 0
+        self.free_count = 0
+        self.data_display_used: Optional[Any] = _kwargs.get("data_display", None)
+
+    # Assinatura canônica do backend XRecord — idêntica à de produção
+    # (`ctx_spec, data_display, ctl_display, callback`), permitindo aos
+    # testes validar qual display cada primitiva usa.
+    def create_context(self, ctx_spec, data_display, ctl_display, callback):
+        self.create_count += 1
+        return 1
+
+    def enable_context(self, ctx, data_display, ctl_display, callback):
+        self.enable_count += 1
+        self._callback = callback
+        self._enabled = True
+        if self.enable_context_raises is not None:
+            raise self.enable_context_raises
+        for event in self.events_to_inject:
+            if self._callback is not None:
+                self._callback(event)
+
+    def disable_context(self, ctx, ctl_display):
+        self.disable_count += 1
+        self._enabled = False
+
+    def free_context(self, ctx, ctl_display):
+        self.free_count += 1
+
+
+class FakeCaptureBackend(FakeXRecordBackend):
+    """CaptureBackend fake para o AutomationService — injeta eventos."""
+
+
+class FakeFocusTitleSource(TitleSource):
+    """TitleSource fake: retorna sempre o mesmo título configurável."""
+
+    def __init__(
+        self,
+        title: Optional[str] = None,
+        fail: bool = False,
+        call_times: int = 0,
+    ) -> None:
+        self.title = title
+        self._fail = fail
+        self.call_count = 0
+        self._call_times = call_times
+
+    @property
+    def is_available(self) -> bool:
+        return not self._fail
+
+    def active_window_title(self) -> Optional[str]:
+        self.call_count += 1
+        if self._fail:
+            raise OSError("título indisponível")
+        return self.title
