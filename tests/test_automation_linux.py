@@ -52,6 +52,29 @@ def test_linux_io_click_is_native_no_subprocess():
     assert run.call_count == 0
 
 
+def test_app_focus_tick_no_subprocess():
+    """Regressão: o tick do Dashboard/Auto-Clicker (xdotool) não spawna
+    subprocesso — o foco agora é consultado no WindowFocusChecker com
+    cache TTL, sem xdotool/xinput no caminho de alta frequência."""
+    with mock.patch("subprocess.Popen") as popen, \
+         mock.patch("subprocess.run") as run, \
+         mock.patch("mouse_hub.platform.linux.automation.Display") as disp:
+        display = mock.MagicMock()
+        disp.return_value = display
+        display.has_extension.return_value = True
+        display.intern_atom.return_value = 0
+        display.xget_property.return_value = mock.MagicMock(value=None)
+        from mouse_hub.core.automation.service import AutomationService
+        from mouse_hub.platform.linux.automation import focus_patterns
+        svc = AutomationService(
+            macros_path=Path("/tmp/mouse-hub-test-no-subproc.json"))
+        for _ in range(5):
+            svc.window_service.is_focused(tuple(focus_patterns()))
+            svc.cleanup()
+    assert run.call_count == 0, "xdotool foi chamado no tick de foco"
+    assert popen.call_count == 0, "Popen usado no tick de foco"
+
+
 def test_linux_io_returns_false_without_display():
     """Sem display X, click retorna False (falha detectável) em vez de
     estourar exceção para a UI."""

@@ -387,15 +387,27 @@ class AutoClickerEngine:
 
     def __init__(self, svc):
         self._svc = svc
+        # O engine do core é lazy no serviço (nada criado antes do
+        # usuário usar a feature). As páginas leem estado no _build
+        # (estado inicial == defaults do core), então as leituras em
+        # idle NÃO criam o engine — só mutações (start/stop/set_*)
+        # disparam a criação.
+        self._started = False
 
     @property
     def _native(self):
-        return self._svc.clicker
+        if self._started:
+            return self._svc.clicker
+        # Estado padrão antes do primeiro uso: espelha os defaults do
+        # core (STOPPED, CPS 5, botão esquerdo) sem instanciar nada.
+        return self
 
     @property
     def running(self):
         """Fonte de verdade: estado real do motor, não o botão da UI."""
         from mouse_hub.core.automation.autoclicker import AutoClickerState
+        if not self._started:
+            return False
         return self._native.state in (
             AutoClickerState.RUNNING,
             AutoClickerState.BLOCKED_BY_FOCUS,
@@ -403,6 +415,9 @@ class AutoClickerEngine:
 
     @property
     def state(self):
+        from mouse_hub.core.automation.autoclicker import AutoClickerState
+        if not self._started:
+            return AutoClickerState.STOPPED
         return self._native.state
 
     @property
@@ -412,29 +427,47 @@ class AutoClickerEngine:
 
     @property
     def cps(self):
+        if not self._started:
+            return 10  # default do core
         return self._native.cps
 
     @cps.setter
     def cps(self, value):
+        self._ensure_started()
         self._native.set_cps(value)
 
     @property
     def button(self):
         """Compat: UI usa botão como int (1/2/3)."""
+        if not self._started:
+            return 1  # default do core (MouseButton.LEFT)
         return self._native.button.button_id
 
     @button.setter
     def button(self, value):
+        self._ensure_started()
         self._native.set_button(MouseButton.from_id(int(value)))
 
+    def _ensure_started(self):
+        if self._started:
+            return
+        self._started = True
+        # Cria o engine do core sob demanda (display X + scheduler) —
+        # primeira ação do usuário na página do clicker.
+        self._svc.clicker
+
     def start(self):
+        self._ensure_started()
         self._native.start()
 
     def stop(self):
+        if not self._started:
+            return
         self._native.stop()
 
     def cleanup(self):
-        self._native.stop()
+        if self._started:
+            self._native.stop()
 
 
 class MacroEngine:

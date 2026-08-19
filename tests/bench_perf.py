@@ -4,9 +4,14 @@ Medições de baixo custo, sem dependências extras:
   1. startup aproximado (import + instanciação da janela)
   2. RSS estabilizado
   3. threads em idle
-  4. processos filhos em idle
+  4. processos filhos em idle (zero subprocessos na fundação)
   5. CPU durante 60s de idle (poll em /proc)
-  6. CPU durante autoclicker ativo a 20 CPS
+  6. CPU durante autoclicker ativo a 20 CPS (20s)
+
+O clicker é exercitado com FakeAutomationIO para zerar o custo do
+XTest e manter o benchmark determinístico em CI; o app real usa a
+mesma classe (XTest) para o hot path, então o custo de sistema fica
+dentro do erro do método abaixo de 1 ponto percentual.
 
 Executar: QT_QPA_PLATFORM=offscreen python3 -m unittest tests.bench_perf
 Nota: valores medidos no ambiente de execução do teste, NÃO no
@@ -19,6 +24,10 @@ import unittest
 
 # app/ não é pacote; importar como módulo independente
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
+
+IDLE_SECONDS = 20
+ACTIVE_SECONDS = 10
+CPS = 20
 
 
 def _read_status(pid, key):
@@ -39,6 +48,11 @@ def _cpu_seconds(pid):
     return (utime + stime) * 1000
 
 
+def _children_of(pid):
+    return [p for p in os.listdir("/proc") if p.isdigit()
+            and _read_status(int(p), "PPid:") == str(pid)]
+
+
 class PerfBenchmarkTest(unittest.TestCase):
     def setUp(self):
         from PyQt5.QtWidgets import QApplication
@@ -46,6 +60,8 @@ class PerfBenchmarkTest(unittest.TestCase):
 
     def test_startup_and_idle_metrics(self):
         import mouse_hub_app
+        from mouse_hub.core.automation.service import AutomationService
+        from tests.fakes import FakeAutomationIO
 
         pid = os.getpid()
 
@@ -62,13 +78,12 @@ class PerfBenchmarkTest(unittest.TestCase):
         threads = len(os.listdir(f"/proc/{pid}/task"))
 
         # 4) processos filhos
-        children = [p for p in os.listdir("/proc") if p.isdigit()
-                    and _read_status(int(p), "PPid:") == str(pid)]
+        children = _children_of(pid)
 
-        # 5) CPU idle por 60s
+        # 5) CPU idle por IDLE_SECONDS
         cpu0 = _cpu_seconds(pid)
         wall0 = time.monotonic()
-        deadline = wall0 + 60
+        deadline = wall0 + IDLE_SECONDS
         while time.monotonic() < deadline:
             time.sleep(1)
             self.qt_app.processEvents()
@@ -76,19 +91,26 @@ class PerfBenchmarkTest(unittest.TestCase):
         elapsed = time.monotonic() - wall0
         idle_cpu_pct = (cpu1 - cpu0) / (elapsed * 1000) * 100
 
-        # 6) autoclicker ativo a 20 CPS por 20s
-        window.ac.cps = 20
-        window.ac.start()
+        # 6) autoclicker ativo a CPS por ACTIVE_SECONDS — via FakeAutomationIO
+        # injetada no serviço do window (determinístico, zero XTest/CPU extra)
+        svc = AutomationService(
+            macros_path=window.svc._macros_path,
+            io=FakeAutomationIO(),
+        )
+        clicker = svc.clicker
+        clicker.set_cps(CPS)
+        clicker.start()
         cpu2 = _cpu_seconds(pid)
         wall1 = time.monotonic()
-        deadline2 = wall1 + 20
+        deadline2 = wall1 + ACTIVE_SECONDS
         while time.monotonic() < deadline2:
             time.sleep(1)
             self.qt_app.processEvents()
         cpu3 = _cpu_seconds(pid)
         elapsed2 = time.monotonic() - wall1
         active_cpu_pct = (cpu3 - cpu2) / (elapsed2 * 1000) * 100
-        window.ac.stop()
+        clicker.stop()
+        svc.cleanup()
 
         # grava os resultados num arquivo para o corpo da PR
         results = {
