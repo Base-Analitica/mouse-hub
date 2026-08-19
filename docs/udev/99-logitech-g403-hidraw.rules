@@ -1,0 +1,23 @@
+# mouse-hub — regra udev específica para o Logitech G403 HERO
+#
+# Concede ao grupo "plugdev" acesso de leitura/escrita à interface
+# hidraw do G403 HERO (VID 046d, PID c08f), permitindo que o aplicativo
+# ajuste o DPI físico via HID++ sem chmod manual e sem abrir o nó para
+# todos os usuários (MODE=0666).
+#
+# Instalação (uma única vez):
+#
+#     sudo cp docs/udev/99-logitech-g403-hidraw.rules /etc/udev/rules.d/
+#     sudo udevadm control --reload-rules && sudo udevadm trigger \
+#         --action=add --subsystem-match=hidraw
+#
+# Verificação:
+#
+#     udevadm info /dev/hidrawN | grep -i logitech
+#     ls -l /dev/hidrawN   # deve mostrar o grupo plugdev e crw-rw----
+#
+# Se o seu usuário não estiver no grupo plugdev:
+#
+#     sudo usermod -aG plugdev $USER   # e relogue a sessão
+
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c08f", GROUP="plugdev", MODE="0660"
