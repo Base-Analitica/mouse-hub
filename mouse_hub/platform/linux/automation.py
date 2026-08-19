@@ -176,6 +176,12 @@ class LinuxAutomationIO(AutomationIO):
 
     def cleanup(self) -> None:
         """Fecha a conexão exatamente uma vez, de forma idempotente."""
+        self.close()
+
+    def close(self) -> None:
+        """Fecha a conexão exatamente uma vez, de forma idempotente —
+        alias do `AutomationIO.close()` consumido pelo
+        `AutomationService.cleanup()`."""
         with self._lock:
             display = self._display
             self._display = None

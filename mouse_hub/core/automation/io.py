@@ -69,6 +69,10 @@ class AutomationIO(ABC):
     def move(self, x: int, y: int) -> bool:
         """Move o ponteiro para coordenadas absolutas."""
 
+    def close(self) -> None:
+        """Libera recursos mantidos (display X, workers) — chamado
+        pelo `AutomationService.cleanup()`. Default no-op para fakes."""
+
 
 class TitleSource:
     """Abstração mínima da leitura do título da janela ativa.

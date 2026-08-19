@@ -207,25 +207,55 @@ class AutomationService:
     def player(self) -> Optional[MacroPlayer]:
         return self._player
 
+    @property
+    def playback_state(self) -> str:
+        """Estado do playback (STOPPED/RUNNING/FAILED) — a UI lê direto
+        daqui sem depender da referência do player (que vira None após
+        o cancel)."""
+        if self._player is None:
+            return "stopped"
+        return self._player.state
+
+    @property
+    def playback_error(self) -> Optional[str]:
+        """Último motivo de falha do playback — ex.: tecla/botão que o
+        backend recusou."""
+        if self._player is None:
+            return None
+        return self._player.last_error
+
     def play(self, name: str, repeat: int = 1) -> bool:
         """Reproduz uma macro no XTest nativo (zero subprocesso no hot
-        path). Rejeita durante gravação (mutex) e quando não há macro
-        válida."""
+        path). Rejeita durante gravação (mutex), durante playback já
+        ativo (nunca sobrescreve o worker em curso) e quando não há
+        macro válida."""
         with self._lock:
             if self.recording:
+                return False
+            if self._player is not None and self._player.playing:
+                # Playback já em curso — o caller não recebe exceção
+                # nem um worker substituído no meio da emissão; o
+                # estado FAILED/last_error continua acessível.
                 return False
             events = self.store.get(name)
             if not events:
                 return False
+            # IO do playback é um recurso único do serviço — criado
+            # uma vez e reutilizado entre play()s (display X não é
+            # aberto/fechado a cada macro). O cancel() apenas encerra
+            # a emissão em curso, nunca o IO.
+            io = self._io or LinuxAutomationIO()
+            self._io = io
+            player = MacroPlayer(io)
+            self._player = player
 
-        io = self._io or LinuxAutomationIO()
-        self._player = MacroPlayer(io)
-        try:
-            self._player.play(events, repeat=repeat)
-        except Exception:  # noqa: BLE001 — player rejeita (já playing,
-            # repeat inválido) sem lançar por contrato; garantir
-            # consistência mesmo que mude
-            self._player = None
+        started = player.play(events, repeat=repeat)
+        if not started:
+            # repeat inválido/sem eventos pós-validação: libera o
+            # player — o IO continua vivo para o próximo play().
+            with self._lock:
+                if self._player is player:
+                    self._player = None
             return False
         return True
 
@@ -236,8 +266,10 @@ class AutomationService:
             self._player.cancel()
         finally:
             # Espera o worker morrer (cancel joina) e limpa a
-            # referência — a próxima play() cria um player novo.
-            self._player = None
+            # referência — a próxima play() cria um player novo, mas
+            # reutiliza o mesmo IO (não cria display X de novo).
+            with self._lock:
+                self._player = None
         return True
 
     def _on_event(self, event: RecordedEvent) -> None:
@@ -259,9 +291,39 @@ class AutomationService:
         return self._clicker
 
     def cleanup(self) -> None:
-        """Encerramento completo e seguro quando nada foi usado."""
+        """Encerramento completo e seguro: gravação cancelada, playback
+        e clicker parados (join), e IO compartilhado fechado quando
+        foi instanciado pelo próprio serviço (injetado de fora =
+        responsabilidade do injetor). Idempotente."""
         self.cancel_recording()
-        if self._player is not None and self._player.playing:
-            self._player.cancel()
-        if self._clicker is not None and self._clicker.running:
-            self._clicker.stop()
+        player = None
+        clicker = None
+        io_owned = self._io is None
+        with self._lock:
+            player = self._player
+            clicker = self._clicker
+            self._player = None
+            self._clicker = None
+            # O IO compartilhado vive enquanto o serviço vive; no
+            # cleanup ele é encerrado para liberar o display X.
+            if io_owned:
+                io = self._io
+                self._io = None
+            else:
+                io = None
+        if player is not None:
+            try:
+                player.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+        if clicker is not None:
+            try:
+                if clicker.running:
+                    clicker.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        if io is not None:
+            try:
+                io.close()
+            except Exception:  # noqa: BLE001
+                pass

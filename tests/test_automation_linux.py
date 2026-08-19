@@ -573,3 +573,52 @@ def test_service_clicker_uses_focus_and_io(svc):
     time.sleep(0.15)
     clicker.stop()
     assert clicker.state == AutoClickerState.STOPPED
+
+
+def test_service_rejects_double_playback(svc):
+    """play() durante playback ativo retorna False — nunca sobrescreve
+    o worker em curso nem lança exceção."""
+    svc.store.add("macro-1", _events())
+    svc.store.flush()
+    assert svc.play("macro-1", repeat=1000)
+    assert svc.playing
+    assert not svc.play("macro-1", repeat=1)
+    assert svc.playback_state == "running"
+    svc.cancel_playback()
+
+
+def test_service_playback_state_and_error_exposed(svc):
+    """playback_state/last_error acessíveis mesmo após cancel (o player
+    vira None, mas o serviço continua reportando o estado final)."""
+    svc.store.add("macro-1", _events())
+    svc.store.flush()
+    assert svc.play("macro-1", repeat=1)
+    time.sleep(0.05)
+    svc.cancel_playback()
+    assert svc.playback_state == "stopped"
+    assert svc.playback_error is None
+
+
+def test_service_playback_io_reused(svc):
+    """O IO do playback é criado UMA vez e reutilizado entre play()s —
+    o display X não é aberto/fechado a cada macro."""
+    io = svc._io  # FakeAutomationIO injetado no fixture
+    svc.store.add("macro-1", _events())
+    svc.store.flush()
+    svc.play("macro-1", repeat=1)
+    time.sleep(0.05)
+    svc.play("macro-1", repeat=1)
+    time.sleep(0.05)
+    assert svc._io is io
+
+
+def test_service_cleanup_closes_owned_io(svc):
+    """cleanup() para gravação/playback/clicker e fecha o IO que o
+    serviço instanciou; IO injetado de fora fica com o injetor."""
+    svc.store.add("macro-1", _events())
+    svc.store.flush()
+    svc.start_recording("x")
+    svc.stop_recording()
+    svc.cleanup()
+    assert not svc.recording
+    assert not svc.playing
