@@ -449,6 +449,20 @@ class MacroEngine:
     """
 
     def __init__(self):
+        # Lazy initialization (Issue #12): store, capturador e player só
+        # são criados quando a primeira operação de macro acontece,
+        # para o app abrir a janela sem carregar XRecord nem ler disco
+        # antes de o usuário usar a feature.
+        self._store = None
+        self._player = None
+        self._capture = None
+        self._events = []
+        self._initialized = False
+
+    def _init_if_needed(self):
+        if self._initialized:
+            return
+        self._initialized = True
         from mouse_hub.automation import (
             MacroStore,
             PlaybackController,
@@ -457,37 +471,41 @@ class MacroEngine:
         self._store = MacroStore(MACROS_PATH)
         self._player = PlaybackController(self._store)
         self._capture = InputCapture(sink=self._on_captured_event)
-        self._events = []
-
         if self._store.load_warnings:
             for w in self._store.load_warnings:
                 print(f"[MACRO] {w}")
 
     @property
     def recording(self):
+        self._init_if_needed()
         return self._capture.state.value == "active"
 
     @property
     def capture_failed(self):
+        self._init_if_needed()
         return self._capture.failed_reason
 
     @property
     def macros(self):
         """Compat: dict {nome: info} usado por MacrosPage."""
+        self._init_if_needed()
         return self._store.list_all()
 
     @property
     def player(self):
+        self._init_if_needed()
         return self._player
 
     @property
     def store(self):
+        self._init_if_needed()
         return self._store
 
     def start_recording(self, name):
         """Inicia gravação real. Se o capturador não conseguir abrir o
         display X, gravação não inicia e o motivo fica acessível em
         self.capture_failed."""
+        self._init_if_needed()
         if self.recording:
             return
         self._events = []
@@ -516,21 +534,27 @@ class MacroEngine:
 
     def play(self, name, repeat=1):
         """Inicia reprodução no worker de playback; valida antes."""
+        self._init_if_needed()
         if not self._player.start(name, repeat=repeat):
             print(f"[MACRO] play rejeitado: {self._player.error}")
             return False
         return True
 
     def delete(self, name):
+        self._init_if_needed()
         return self._store.delete(name)
 
     def list_all(self):
+        self._init_if_needed()
         return self._store.list_all()
 
     def cleanup(self):
-        """Encerramento completo: para captura e playback."""
-        self._capture.cleanup()
-        self._player.cleanup()
+        """Encerramento completo: para captura e playback.
+        Safe quando a engine nunca foi usada (nada foi criado)."""
+        if self._capture is not None:
+            self._capture.cleanup()
+        if self._player is not None:
+            self._player.cleanup()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

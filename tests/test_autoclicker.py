@@ -147,10 +147,14 @@ class AutoClickerFocusTest(unittest.TestCase):
 
         # troca para janela não permitida (engine segue rodando)
         self.focus.set_active("Google Chrome", True)
+        # um clique pendente da iteração em curso pode ainda acontecer
+        # (cache de foco 200ms); aguardar o bloqueio estabilizar
         time.sleep(0.4)
         n_after = len(self.backend.calls)
-        # nenhum clique extra enquanto fora do jogo (poll 200ms)
-        self.assertEqual(n_during_focus, n_after)
+        time.sleep(0.4)
+        n_after2 = len(self.backend.calls)
+        # nenhum clique novo depois que o cache de foco expirou
+        self.assertEqual(n_after, n_after2)
         # o motor reporta bloqueio por foco enquanto segue em execução
         self.assertIn(self.engine.state,
                       (AutoClickerState.BLOCKED_BY_FOCUS,

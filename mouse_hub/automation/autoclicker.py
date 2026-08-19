@@ -63,12 +63,33 @@ class AutoClickerEngine:
         self._lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._cps = 10
+        # cache de estado de foco (performance — Issue #12):
+        # is_allowed() spawna subprocessos xdotool; reutilizar o resultado
+        # por _FOCUS_CACHE_MS limita o spawn a máx 5 consultas/s sem
+        # atrasar a reação a mudança de janela por mais de 200ms
+        self._focus_cache_until = 0.0
+        self._focus_cache_allowed = False
         self._button = 1
         self._jitter_ms = 0
         self._state = AutoClickerState.STOPPED
         self._error = None
         self._thread = None
         self._stop_event = threading.Event()
+
+    # ─── foco com cache ───
+
+    _FOCUS_CACHE_MS = 200
+
+    def _is_allowed_cached(self):
+        """Resultado de is_allowed() reutilizado por 200ms. O motor
+        reage a mudança de janela em até 200ms (poll atual do produto),
+        mas evita spawmar subprocessos xdotool a cada clique."""
+        now = time.monotonic()
+        if now < self._focus_cache_until:
+            return self._focus_cache_allowed
+        self._focus_cache_allowed = self._focus.is_allowed(self._allowed)
+        self._focus_cache_until = now + self._FOCUS_CACHE_MS / 1000.0
+        return self._focus_cache_allowed
 
     # ─── estado real ───
 
@@ -141,7 +162,7 @@ class AutoClickerEngine:
     def _loop(self):
         try:
             while not self._stop_event.is_set():
-                if self._focus.is_allowed(self._allowed):
+                if self._is_allowed_cached():
                     try:
                         self._backend.click(self._button)
                     except Exception as exc:
@@ -181,7 +202,7 @@ class AutoClickerEngine:
                             self._state = AutoClickerState.BLOCKED_BY_FOCUS
                     # poll mais lento quando fora do jogo; evita subprocessos
                     # em alta frequência (comportamento atual do produto)
-                    if self._stop_event.wait(0.2):
+                    if self._stop_event.wait(self._FOCUS_CACHE_MS / 1000.0):
                         break
         except Exception:
             # loop nunca deve morrer silenciosamente sem marcar estado
