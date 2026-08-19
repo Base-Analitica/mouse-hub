@@ -147,6 +147,11 @@ class MouseController:
             (clamp_sensitivity(value), value != clamp_sensitivity(value))
         )
 
+        if self._device is None:
+            return OperationResult.device_not_found(
+                "Nenhum dispositivo registrado; sensibilidade requer o mouse"
+            )
+
         pointer_id = self._input.find_pointer_id(self._mouse_name)
         if pointer_id is None:
             return OperationResult.device_not_found(

@@ -176,14 +176,36 @@ def migrate_legacy_config(paths: ConfigPaths, legacy_dir: Path = DEFAULT_LEGACY_
     return migrated
 
 
-def load_config(paths: Optional[ConfigPaths] = None) -> Dict[str, Any]:
-    """Carrega (e, se necessário, migra) a configuração do produto."""
+def load_config(
+    paths: Optional[ConfigPaths] = None,
+    *,
+    strict: bool = False,
+) -> Dict[str, Any]:
+    """Carrega (e, se necessário, migra) a configuração do produto.
+
+    Com `strict=False` (default), qualquer problema no arquivo de
+    configuração é tratado de forma previsível: JSON inválido é
+    preservado como backup `.corrupted.<ts>` e a configuração parte do
+    default. Com `strict=True`, `ConfigError` é propagado para quem
+    precisa diagnosticar o conteúdo corrompido.
+    """
     paths = paths or ConfigPaths.xdg()
 
-    data = _load_json_safe(paths.config_file)
+    try:
+        data = _load_json_safe(paths.config_file)
+    except ConfigError:
+        if strict:
+            raise
+        data = None
+
     if data is None:
         migrate_legacy_config(paths)
-        data = _load_json_safe(paths.config_file)
+        try:
+            data = _load_json_safe(paths.config_file)
+        except ConfigError:
+            if strict:
+                raise
+            data = None
 
     if data is None:
         data = default_config()

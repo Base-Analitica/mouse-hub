@@ -24,7 +24,7 @@ SYS_HIDRAW_ROOT = Path("/sys/class/hidraw")
 def _parse_vid_pid(vid_str: str, pid_str: str) -> Optional[tuple[int, int]]:
     try:
         return int(vid_str, 16), int(pid_str, 16)
-    except ValueError:
+    except (ValueError, TypeError):
         return None
 
 
@@ -49,6 +49,7 @@ def find_g403_hidraw_devices(
 
         found_vid: Optional[int] = None
         found_pid: Optional[int] = None
+        found_name: str = ""
         try:
             text = uevent.read_text()
         except OSError:
@@ -63,7 +64,8 @@ def find_g403_hidraw_devices(
             elif line.startswith("HID_NAME="):
                 found_name = line.split("=", 1)[-1].strip()
 
-        if _parse_vid_pid(str(found_vid), str(found_pid)) == (vid, pid):
+        if (found_vid is not None and found_pid is not None
+                and (found_vid, found_pid) == (vid, pid)):
             name = found_name or ""
             devices.append(MouseDevice(
                 hidraw_path=f"/dev/{entry.name}",
@@ -88,7 +90,10 @@ def read_uevent_identity(path: Path) -> Optional[tuple[int, int]]:
     ferramentas de diagnóstico)."""
     if not path.exists():
         return None
-    text = path.read_text()
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
     for line in text.splitlines():
         if line.startswith("HID_ID="):
             parts = line.split("=", 1)[-1].split(":")

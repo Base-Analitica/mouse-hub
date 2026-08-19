@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mouse-hub"
+version = "1.1.0"
+description = "Controlador nativo do Logitech G403 HERO para Linux Mint: DPI, sensibilidade, perfis, macros e auto-clicker."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["logitech", "g403", "dpi", "linux", "mint"]
+classifiers = [
+    "Environment :: X11 Applications :: Qt",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Utilities",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+mouse-hub-app = "mouse_hub_app:main"
+
+[tool.setuptools.packages.find]
+include = ["mouse_hub*", "app*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

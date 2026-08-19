@@ -39,6 +39,8 @@ class ProfileStore:
         self._paths = paths or ConfigPaths.xdg()
 
     def _read(self) -> Dict[str, Any]:
+        """Relê sempre do arquivo: o arquivo é a fonte única de verdade,
+        nunca uma cópia em memória entre instâncias."""
         try:
             return load_config(self._paths)
         except (ConfigError, OSError):
