@@ -9,25 +9,37 @@ VID/PID no uevent é condição necessária mas não suficiente:
 
 1. Identidade: o parser de `HID_ID` é defensivo — entradas malformadas
    são ignoradas, jamais lançam exceção.
-2. Protocolo: cada candidato é sondado com um report HID++ 2.0 válido
-   (GET_FEATURE_TABLE_COUNT, long packet) através do mesmo `HidAccess`
-   que fará as escritas. Só o endpoint que responde ao protocolo é
-   elegível para escritas de efeito; candidatos que não respondem são
-   descarte, e se nenhum responder a decisão segura é falhar fechado
-   (device não usável para DPI), em vez de escrever no primeiro match.
+2. Protocolo: cada candidato é sondado de verdade via feature IRoot
+   (0x0000) do HID++ 2.0 — GET_FEATURE_TABLE_COUNT de report curto
+   (feature 0x00, fn 0) para confirmar IRoot (eco de 3 bytes de params,
+   validando device index e software ID), e depois IRoot.GetFeature
+   (fn 0) com o FEATURE ID 0x2201 (Adjustable DPI) para confirmar que o
+   endpoint suporta a feature de DPI e descobrir o feature index que o
+   dispositivo usará para endereçá-la. Só o endpoint que passa nas duas
+   etapas é elegível para escritas de efeito.
 
 Quando vários endpoints do mesmo G403 respondem ao protocolo, a
 seleção é ambígua e o produto não decide por conta própria: nada é
-escrito em endpoint incerto.
+escrito em endpoint incerto. A seleção também reporta a permissão do
+acesso (device acessível vs inacessível) através de `Outcome` para que
+quem usa distinga "device não confirmado" de "device existente mas sem
+permissão (regra udev ausente)".
 """
 
 from __future__ import annotations
 
-import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
 from mouse_hub.core.constants import G403_PID, G403_VID
+from mouse_hub.platform.hidpp import (
+    DIRECT_USB_DEVICE_INDEX,
+    FeatureId,
+    SHORT_REPORT_LENGTH,
+    SoftwareId,
+    RootFeature,
+)
 from mouse_hub.platform.protocol import HidAccess, MouseDevice
 
 SYS_HIDRAW_ROOT = Path("/sys/class/hidraw")
@@ -132,6 +144,29 @@ def discover_g403(
     return devices[0] if devices else None
 
 
+@dataclass(frozen=True)
+class ProbeOutcome:
+    """Resultado do probe de protocolo de um candidato.
+
+    * valid=True e feature_index != None → endpoint confirma IRoot e a
+      feature Adjustable DPI (0x2201), com o feature index descoberto
+      dinamicamente;
+    * valid=True e feature_index == None → endpoint confirma IRoot mas
+      NÃO suporta 0x2201 (dpi indisponível neste dispositivo);
+    * valid=False → endpoint não validável ou rejeitado pelo protocolo.
+    """
+
+    valid: bool
+    feature_index: Optional[int] = None
+
+    # Permissão do acesso ao descritor durante o probe:
+    # * None        → probe não precisou abrir (sem hidraw) ou falha
+    #                 antes do open;
+    # * True        → descritor acessível;
+    # * False       → open recusado (permission denied, regra udev).
+    accessible: Optional[bool] = None
+
+
 class HydppEndpointSelection:
     """Segunda etapa da descoberta: confirma qual candidato realmente
     suporta o protocolo HID++ 2.0.
@@ -147,41 +182,113 @@ class HydppEndpointSelection:
     def __init__(self, hid: HidAccess) -> None:
         self._hid = hid
 
-    def _probe_feature_table(self, device: MouseDevice) -> Optional[int]:
-        """Sonda o endpoint com um GET_FEATURE_TABLE_COUNT (feature 0,
-        function 0, long packet). Retorna a contagem de features se o
-        dispositivo respondeu ao protocolo, ou None se não respondeu.
+    def _probe_one(self, device: MouseDevice) -> ProbeOutcome:
+        """Probe de protocolo completo em duas etapas, conforme a
+        especificação HID++ 2.0:
 
-        Qualquer exceção ou falha de open/read/write é tratada como
-        "endpoint não validável" — nunca como sucesso.
+        1. GET_FEATURE_TABLE_COUNT via report curto (feature index 0 =
+           IRoot, fn 0): confirma que o endpoint responde ao protocolo
+           e que o report ecoa o device index usado.
+        2. IRoot.GetFeature(0x2201 — Adjustable DPI): confirma a
+           presença da feature e descobre o feature index real que o
+           dispositivo usará para endereçar a feature.
+
+        Abre o descritor temporariamente e o fecha em qualquer caminho
+        (inclusive exceção). Nenhum estado fica para trás.
         """
-        from mouse_hub.core.operation import OperationResult
+        from mouse_hub.core.operation import OperationStatus
 
         opened = False
         try:
             open_result = self._hid.open(device)
             if not open_result.status.ok:
-                return None
+                accessible = (
+                    open_result.status != OperationStatus.PERMISSION_DENIED
+                    and open_result.status != OperationStatus.DEVICE_NOT_FOUND
+                )
+                # open rejeitado (permissão negada ou device ausente) =
+                # endpoint não validável; preservamos a permissão para
+                # quem usa distinguir o caso.
+                return ProbeOutcome(valid=False, accessible=accessible)
             opened = True
-            write_result = self._hid.write(b"\x11\xff\x00\x00" + b"\x00" * 16)
+
+            root = RootFeature(DIRECT_USB_DEVICE_INDEX, SoftwareId.MOUSE_HUB)
+
+            # Etapa 1: GET_FEATURE_TABLE_COUNT (feature set 0x0001, fn 0).
+            # O dispositivo ecoa o header completo no report de resposta,
+            # então validamos device_index, feature_index (0x01) e
+            # function+software_id antes de aceitar qualquer dado.
+            request = root.get_feature_table_count_request()
+            write_result = self._hid.write(request)
             if not write_result.status.ok:
-                return None
-            response = self._hid.read(20, timeout=0.5)
-            if response is None or len(response) < 3:
-                return None
-            if response[0] != 0x11:
-                return None
+                return ProbeOutcome(valid=False, accessible=True)
+            response = self._hid.read(SHORT_REPORT_LENGTH, timeout=0.5)
+            if response is None or len(response) < SHORT_REPORT_LENGTH:
+                return ProbeOutcome(valid=False, accessible=True)
+            # Header ecoado: device index e software ID do request.
+            expected_fn_sw = (0x00 << 4) | SoftwareId.MOUSE_HUB
+            if (
+                response[1] != DIRECT_USB_DEVICE_INDEX
+                or response[2] != 0x01
+                or response[3] != expected_fn_sw
+            ):
+                return ProbeOutcome(valid=False, accessible=True)
+            if root.parse_feature_table_count_response(response) is None:
+                return ProbeOutcome(valid=False, accessible=True)
+
+            # Etapa 2: IRoot.GetFeature(0x2201) — presença de DPI.
+            request = root.get_feature_request(FeatureId.ADJUSTABLE_DPI)
+            write_result = self._hid.write(request)
+            if not write_result.status.ok:
+                return ProbeOutcome(valid=False, accessible=True)
+            response = self._hid.read(SHORT_REPORT_LENGTH, timeout=0.5)
+            if response is None or len(response) < SHORT_REPORT_LENGTH:
+                return ProbeOutcome(valid=False, accessible=True)
+            expected_fn_sw = (root.FN_GET_FEATURE << 4) | SoftwareId.MOUSE_HUB
+            if response[1] != DIRECT_USB_DEVICE_INDEX \
+                    or response[3] != expected_fn_sw:
+                # Header não espelha o request — pode ser report
+                # assíncrono de outro software ou de outra feature.
+                return ProbeOutcome(valid=False, accessible=True)
             if response[2] == 0x8F:
-                # Resposta de erro HID++: o endpoint responde, mas rejeita.
-                return None
-            return int(response[3])
+                # Erro RAP ecoado com o header correto: o dispositivo
+                # rejeitou a consulta (HID++ válido, sem o que
+                # consultamos) — endpoint válido, feature ausente.
+                return ProbeOutcome(valid=True, feature_index=None,
+                                    accessible=True)
+            # Qualquer outro valor de byte2 que não seja o feature index
+            # esperado nem 0x8F não cabe em uma resposta legítima do
+            # GetFeature — endpoint não validável.
+            if response[2] != root.FEATURE_INDEX:
+                return ProbeOutcome(valid=False, accessible=True)
+            feature_index = int(response[4])
+            if feature_index == 0xFF:
+                # Erro de protocolo HID++ 2.0: o dispositivo rejeitou o
+                # GetFeature com INVALID_FEATURE_INDEX ou similar.
+                return ProbeOutcome(valid=False, accessible=True)
+            # GetFeature devolve (feature_index, flags, version); index
+            # 0 significa que a feature NÃO é suportada — o endpoint
+            # ainda é HID++ 2.0 válido, só sem Adjustable DPI.
+            return ProbeOutcome(
+                valid=True,
+                feature_index=feature_index if feature_index != 0 else None,
+                accessible=True,
+            )
         except Exception:
             # Exceção de acesso (descritor sumiu, sysfs instável) é
             # "endpoint não validável" — nunca vira seleção nem vaza.
-            return None
+            return ProbeOutcome(valid=False, accessible=True)
         finally:
             if opened:
                 self._hid.close()
+
+    def probe(
+        self, candidates: List[MouseDevice]
+    ) -> List[ProbeOutcome]:
+        """Probeia todos os candidatos e retorna o resultado de cada um
+        (na mesma ordem). O probe sempre fecha o descritor: nada fica
+        aberto."""
+        return [self._probe_one(candidate) for candidate in candidates]
 
     def select(
         self, candidates: List[MouseDevice]
@@ -195,11 +302,12 @@ class HydppEndpointSelection:
         """
         if not candidates:
             return None
-        validated: List[MouseDevice] = []
-        for candidate in candidates:
-            count = self._probe_feature_table(candidate)
-            if count is not None:
-                validated.append(candidate)
+        outcomes = self.probe(candidates)
+        validated = [
+            device
+            for device, outcome in zip(candidates, outcomes)
+            if outcome.valid and outcome.feature_index is not None
+        ]
         if len(validated) == 1:
             return validated[0]
         # 0 validados ou ambiguidade: falhar fechado.

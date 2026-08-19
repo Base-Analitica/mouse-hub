@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 from mouse_hub.core.config import (
     ConfigError,
     ConfigPaths,
+    LoadKind,
     default_config,
     load_config_outcome,
     save_config,
@@ -68,9 +69,57 @@ class ProfileStore:
         Arquivo existente mas ilegível/inválido → ConfigError, nunca
         defaults: retornar default aqui apagaria silenciosamente os
         dados reais numa mutação posterior.
+
+        A exceção é a primeira execução real: arquivo ausente (DEFAULT
+        sem arquivo no disco) → defaults confirmados do módulo.
         """
         outcome = load_config_outcome(self._paths)
-        return outcome.config
+        if outcome.kind == LoadKind.DEFAULT and not self._paths.config_file.exists():
+            return outcome.config
+        return self._read_for_mutation(permit_default=False).config
+
+    def _read_for_mutation(self, *, permit_default: bool = False):
+        """Carrega a configuração com o kind explícito, para uso em
+        operações mutáveis.
+
+        Regras de proteção contra destruição de dados:
+        * LoadKind.FILE → pode prosseguir (dados confirmados no disco);
+        * LoadKind.DEFAULT com arquivo ausente → primeira execução real;
+          mutações só podem prosseguir com `permit_default=True`;
+        * LoadKind.DEFAULT por arquivo ILEGÍVEL → erro explícito: o
+          arquivo existe e não pode ser confirmado, sobrescrevê-lo com
+          default destruiria dados;
+        * LoadKind.CORRUPTED → erro explícito: nunca escrever.
+        """
+        outcome = load_config_outcome(self._paths)
+        if outcome.kind == LoadKind.FILE:
+            return outcome
+        if outcome.kind == LoadKind.CORRUPTED:
+            raise ConfigError(
+                "Arquivo de configuração corrompido; mutação bloqueada "
+                "para não sobrescrever dados existentes"
+            )
+        if outcome.kind == LoadKind.DEFAULT:
+            # DEFAULT sozinho não diz se o arquivo existe: checar. I/O
+            # no arquivo existente (ilegível) também bloqueia mutação.
+            if self._paths.config_file.exists():
+                try:
+                    self._paths.config_file.read_bytes()
+                except OSError as exc:
+                    raise ConfigError(
+                        f"Arquivo de configuração existente mas ilegível "
+                        f"({exc}); mutação bloqueada para não sobrescrever"
+                    ) from exc
+            if permit_default:
+                return outcome
+            raise ConfigError(
+                "Nenhuma configuração confirmada no disco; mutação "
+                "recusada sem permissão explícita de criação inicial"
+            )
+        raise ConfigError(
+            f"Origem da configuração não reconhecida ({outcome.kind}); "
+            "mutação bloqueada"
+        )
 
     def _write(self, config: Dict[str, Any]) -> None:
         self._paths.config_dir.mkdir(parents=True, exist_ok=True)
@@ -104,12 +153,13 @@ class ProfileStore:
         causa, e o arquivo permanece como estava.
         """
         try:
-            config = self._read()
+            outcome = self._read_for_mutation(permit_default=True)
         except ConfigError as exc:
             return ProfileOutcome(
                 success=False,
                 message=f"Não foi possível ler a configuração: {exc}",
             )
+        config = outcome.config
         config["profiles"][name] = {
             "dpi": clamp_dpi(dpi),
             "sensitivity": clamp_sensitivity(sensitivity),
@@ -129,14 +179,17 @@ class ProfileStore:
         """Remove um perfil; falha se não existir ou se a persistência
         falhar. Exclusão é definitiva no arquivo — não há undelete
         automático, o backup `.corrupted` continua existindo para os
-        casos de corrupção."""
+        casos de corrupção. Arquivo inexistente parte do default
+        (presets oficiais confirmados): deletar um preset persiste a
+        primeira configuração sem ele."""
         try:
-            config = self._read()
+            outcome = self._read_for_mutation(permit_default=True)
         except ConfigError as exc:
             return ProfileOutcome(
                 success=False,
                 message=f"Não foi possível ler a configuração: {exc}",
             )
+        config = outcome.config
         profiles = config.get("profiles", {})
         if name not in profiles:
             return ProfileOutcome(success=False, message=f"Perfil '{name}' não existe")
@@ -155,12 +208,13 @@ class ProfileStore:
         """Renomeia preservando os valores; falha se o destino já existe,
         se a origem não existe, ou se a persistência falhar."""
         try:
-            config = self._read()
+            outcome = self._read_for_mutation(permit_default=True)
         except ConfigError as exc:
             return ProfileOutcome(
                 success=False,
                 message=f"Não foi possível ler a configuração: {exc}",
             )
+        config = outcome.config
         profiles = config.get("profiles", {})
         if old_name not in profiles:
             return ProfileOutcome(success=False, message=f"Perfil '{old_name}' não existe")

@@ -5,154 +5,256 @@ capabilities, controller) sem um G403 real, sem /dev/hidraw e sem
 subprocess. Não há nenhum sucesso falso possível: cada fake registra
 exatamente o que "aplicou" e sob quais condições falha.
 
-O FakeHidAccess modela o protocolo HID++ 2.0 na extensão mínima que o
-core exige: feature tables, set de DPI e respostas (ACK, erro 0x8F,
-readback). As constantes de report ID seguem a convenção do HID++ 2.0
-(curto 0x10, longo 0x11; device index 0xFF).
+O FakeHidAccess implementa uma máquina de protocolo HID++ 2.0 mínima
+porém correta: as respostas são COMPUTADAS a partir do request,
+espelhando o header (device_index, feature_index, function+software_id)
+e validando o software ID do próprio cliente, conforme a convenção
+publicada (report curto 0x10 com device index 0x00 para conexão USB
+direta). O fakes não dita o protocolo — a especificação dita, o fake só
+a executa.
+
+Cenários configuráveis:
+
+* open_permission_denied / open_raises → desfecho real de abertura;
+* dpi_feature_index → feature index que IRoot.GetFeature(0x2201)
+  devolve (None/0 = feature ausente; índice dinâmico ≠ hardcoded);
+* sw_id_wrong / async_noise → reports de terceiros e eventos assíncronos
+  que NÃO confirmam request (o core deve rejeitá-los);
+* probe_stage1_error / probe_stage2_error → o endpoint rejeita uma das
+  etapas do probe (0x8F);
+* ack_timeout → o endpoint silencia na resposta;
+* readback_mode → "echo" devolve o eco do SetSensorDPI (fn 0x10) e o
+  valor aplicado, "none" devolve None (sem readback).
 """
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from mouse_hub.core.operation import OperationResult
+from mouse_hub.platform.hidpp import (
+    SHORT_REPORT_LENGTH,
+    SoftwareId,
+)
 from mouse_hub.platform.protocol import HidAccess, MouseDevice, SystemInput
 
-
-def _parse_hidpp_header(report: bytes) -> Optional[tuple[int, int]]:
-    """Retorna (report_id, feature_index) de um report HID++ 2.0."""
-    if len(report) < 3:
-        return None
-    report_id = report[0]
-    # Report curto (0x10): [report_id][feature_index][fn][params...]
-    # Report longo (0x11): [report_id][sw_id][feature_index][fn][params...]
-    if report_id == 0x10:
-        return report_id, report[1]
-    if report_id == 0x11:
-        return report_id, report[2]
-    return None
+# IDs de referência — a máquina de protocolo usa o que o core escreve,
+# não hardcoded de um lado só.
+ROOT_FEATURE_INDEX = 0x00
+FEATURE_SET_INDEX = 0x01
+ROOT_FN_GET_FEATURE = 0x00
+DPI_FN_SET = 0x03
 
 
 class FakeHidAccess(HidAccess):
-    """HidAccess controlável em teste, com modelo de protocolo HID++ 2.0.
+    """HidAccess controlável em teste, com máquina de protocolo HID++ 2.0.
 
-    Permite simular os modos de confirmação que o core exige:
-    * probe_responses: respostas que o endpoint devolve ao probe
-      GET_FEATURE_TABLE_COUNT (report longo, feature 0x00, fn 0x00) —
-      vazio = endpoint mudo, não validável;
-    * probe_error_response: probe devolve erro HID++ 0x8F;
-    * dpi_set_ack: se True, um set de DPI produce ACK; se False, a
-      escrita "falha" no dispositivo;
-    * ack_timeout: se True, o endpoint silencia (o read não devolve ACK);
-    * hidpp_error: se True, respostas usam o sub-report de erro 0x8F;
-    * readback_dpi: valor que o readback do DPI devolve (None = ausente).
-
-    A combinação desses campos modela os cenários do review: endpoint
-    que não responde ao protocolo, write aceito mas rejeitado, e
-    timeout de confirmação — todos devem terminar em FAILED, nunca
-    APPLIED.
+    Requests e responses usam report CURTO (0x10) com device index 0x00
+    (USB direto) — o fake responde a qualquer report_id, preservando
+    nas respostas o que o request trouxe, para que o core valide o eco
+    do header como manda o protocolo.
     """
 
-    FEATURE_DPI = 0x01  # índice simulado da feature AdjustableDPI (0x2201)
-
     def __init__(self) -> None:
-        self.write_succeeds: bool = True
-        self.device_required_for_write: bool = True
-        self.probe_responses: List[bytes] = [b"\x11\xff\x00\x04" + b"\x00" * 14]
-        self.probe_error_response: bool = False
-        self.dpi_set_ack: bool = True
-        self.ack_timeout: bool = False
-        self.hidpp_error: bool = False
+        # Abertura
         self.open_permission_denied: bool = False
         self.open_raises: Optional[BaseException] = None
-        self.readback_dpi: Optional[int] = None
-        self.feature_count: int = 4
-        self.read_calls: int = 0
+        # Feature Adjustable DPI: feature index devolvido por
+        # IRoot.GetFeature(0x2201). 0 (ou None) = feature ausente;
+        # -1 = erro de protocolo (index 0xFF, FAP error).
+        self.dpi_feature_index: Optional[int] = 1
+        # Rejeição das etapas do probe com sub-report de erro 0x8F:
+        # stage1 = feature set count; stage2 = GetFeature(0x2201).
+        self.probe_stage1_error: bool = False
+        self.probe_stage2_error: bool = False
+        # Software ID errado nas respostas: o header ecoa um sw_id de
+        # outro cliente — o core deve tratar como não-ACK.
+        self.sw_id_wrong: bool = False
+        self.wrong_sw_id: int = 0x01
+        # Eventos assíncronos de outro software injetados na fila de
+        # respostas (ex.: event de report de outro aplicativo Logitech)
+        # antes de qualquer resposta esperada.
+        self.async_noise: List[bytes] = []
+        # Confirmação
+        self.ack_timeout: bool = False
+        # Falha de transporte na escrita (fd sumiu, write falhou no OS):
+        # o controller deve tratar como FAILED antes de assumir sucesso.
+        self.write_succeeds: bool = True
+        # DPI aplicado
+        self.dpi_set_rejected: bool = False
+        self.dpi_fn_error: bool = False  # GetSensorDPI fn 0x20 com erro 0x8F
+        # Readback: "echo" devolve o eco do último SetSensorDPI (fn 0x10)
+        # com o valor aplicado; "none" devolve None.
+        self.readback_mode: str = "echo"
+        self.query_count: int = 0
         self._opened: List[MouseDevice] = []
         self._device: Optional[MouseDevice] = None
         self.written_reports: List[bytes] = []
         self._last_set_dpi: Optional[int] = None
-        self._last_write_was_probe: bool = False
+        # Fila FIFO de responses pré-programadas (para cenários que a
+        # computação não cobre). Cada read consome uma entrada.
+        self.probe_responses: List[bytes] = []
+        # Últimos requests por par (report_id, feature_index) para o
+        # eco de header — não usa fila, preserva contexto.
+        self._last_request_header: Optional[bytes] = None
+
+    # ── Lifecycle ─────────────────────────────────────────────────
 
     def open(self, device: MouseDevice) -> OperationResult:
         self._opened.append(device)
         if device.hidraw_path is None:
-            return OperationResult.device_not_found()
-        if device.hidraw_path.startswith("/dev/permission_denied") or self.open_permission_denied:
+            return OperationResult.device_not_found(device.hidraw_path)
+        if (
+            device.hidraw_path.startswith("/dev/permission_denied")
+            or self.open_permission_denied
+        ):
             return OperationResult.permission_denied(device.hidraw_path)
         if self.open_raises is not None:
             raise self.open_raises
         self._device = device
-        return OperationResult.applied()
+        return OperationResult.applied(device.hidraw_path)
 
     def is_open(self) -> bool:
         return self._device is not None
 
+    def close(self) -> None:
+        self._device = None
+        # Abertura nova = contexto novo: descartar o request pendente do
+        # contexto anterior (o read do novo contexto não pode responder
+        # a um request de um handle que já fechou).
+        self._last_request_header = None
+        self._last_set_dpi = None
+
+    # ── Protocolo ─────────────────────────────────────────────────
+
+    def _parse_request(self, report: bytes) -> Optional[dict]:
+        """Header de request: [report_id][device_index][feature_index]
+        [fn+sw_id][params...]. Retorna os campos decodificados."""
+        if len(report) < 4:
+            return None
+        return {
+            "report_id": report[0],
+            "device_index": report[1],
+            "feature_index": report[2],
+            "function": (report[3] >> 4) & 0x0F,
+            "software_id": report[3] & 0x0F,
+            "params": report[4:],
+        }
+
+    def _echo_response(self, req: dict, params: bytes) -> bytes:
+        """Resposta espelhando o header do request, conforme o
+        protocolo: mesmos report_id, device_index, feature_index e
+        function+software_id (o próprio ID ou sw_id de outro cliente,
+        se configurado)."""
+        if self.sw_id_wrong:
+            fn_sw = (req["function"] << 4) | self.wrong_sw_id
+        else:
+            fn_sw = (req["function"] << 4) | req["software_id"]
+        payload = (
+            bytes([req["report_id"]])
+            + bytes([req["device_index"]])
+            + bytes([req["feature_index"]])
+            + bytes([fn_sw])
+            + params
+        )
+        # Report curto = 7 bytes total; preenche com zeros.
+        return (payload + b"\x00" * (SHORT_REPORT_LENGTH - len(payload)))[:SHORT_REPORT_LENGTH]
+
+    def _error_response(self, req: dict) -> bytes:
+        """Sub-report de erro HID++ (RAP 0x8F): report curto com
+        sub_id 0x8F, device index do request, function, error code
+        (INVALID_ARGS 0x02)."""
+        fn_sw = (req["function"] << 4) | req["software_id"]
+        return bytes([
+            req["report_id"],
+            req["device_index"],
+            0x8F,
+            fn_sw,
+            req["function"],
+            0x02,
+            0x00,
+        ])
+
+    def write(self, report: bytes) -> OperationResult:
+        if not self.is_open():
+            return OperationResult.failed("no open descriptor")
+        if not self.write_succeeds:
+            raise OSError("simulated write failure on hidraw")
+        self.written_reports.append(report)
+        req = self._parse_request(report)
+        if req is None:
+            return OperationResult.failed("report sem cabeçalho HID++")
+        self._last_request_header = report
+        return OperationResult.applied("request aceito pelo endpoint")
+
     def read(self, length: int, timeout: float = 0.5) -> Optional[bytes]:
-        self.read_calls += 1
+        self.query_count += 1
         if self._device is None:
             return None
         if self.ack_timeout:
             return None
-        # Resposta de readback: eco do último set-DPI (feature index
-        # 0x01), com o valor que o fake recebeu, para que o controller
-        # valide a confirmação byte a byte.
-        if self.hidpp_error:
-            return b"\x11\xff\x8f\x00\x00\x00" + b"\x00" * (length - 6)
-        if self.probe_error_response:
-            return b"\x11\xff\x8f\x00\x00\x00" + b"\x00\x00" * (length - 6)
-        if self._last_write_was_probe:
-            self._last_write_was_probe = False
-            if self.probe_responses:
-                return self.probe_responses.pop(0)
-            # Probe sem resposta configurada: endpoint mudo, não validado.
-            return None
-        if self.ack_timeout:
-            return None
-        # Resposta de eco do último set-DPI (feature index 0x01), se
-        # houver; caso contrário o endpoint é mudo.
-        if self.readback_value is not None:
-            return self.readback_value
-        return None
 
-    def write(self, report: bytes) -> OperationResult:
-        if not self.is_open() and self.device_required_for_write:
-            return OperationResult.failed("no open descriptor")
-        self.written_reports.append(report)
-        if not self.write_succeeds:
-            return OperationResult.failed("simulated hardware rejection")
-        header = _parse_hidpp_header(report)
-        if header is None:
-            return OperationResult.failed("report sem cabeçalho HID++")
-        report_id, feature_index = header
-        if report_id == 0x11 and feature_index == 0x00:
-            # Get feature table: devolve a contagem configurada (fn 0).
-            self._last_write_was_probe = True
-            return OperationResult.applied()
-        if report_id in (0x10, 0x11) and feature_index == self.FEATURE_DPI:
-            if not self.dpi_set_ack:
-                return OperationResult.failed("device rejected dpi set")
-            if self.hidpp_error:
-                return OperationResult.failed("HID++ error 0x8F")
-            # Guarda o DPI solicitado do payload (bytes 3-4) para
-            # o fake de readback saber o que devolver.
-            if len(report) >= 5:
-                self._last_set_dpi = (report[3] << 8) | report[4]
-            return OperationResult.applied()
-        return OperationResult.applied()
+        # Noise assíncrono primeiro: events de outro software que a
+        # função consumidora deve ignorar (não são ACK).
+        if self.async_noise:
+            return self.async_noise.pop(0)
+
+        # Responses pré-programadas têm precedência explícita.
+        if self.probe_responses:
+            return self.probe_responses.pop(0)
+
+        # Sem header de request válido: endpoint mudo.
+        if self._last_request_header is None:
+            return None
+        req = self._parse_request(self._last_request_header)
+        if req is None:
+            return None
+
+        # Erro RAP 0x8F (rejeição pelo dispositivo).
+        if self.probe_stage1_error and req["feature_index"] == FEATURE_SET_INDEX:
+            return self._error_response(req)
+        if self.probe_stage2_error and req["feature_index"] == ROOT_FEATURE_INDEX:
+            return self._error_response(req)
+
+        # IRoot.GetFeature(id_hi, id_lo, 0) → (feature_index, flags,
+        # version). Feature index 0 = não suportada; configurável.
+        if req["feature_index"] == ROOT_FEATURE_INDEX:
+            if req["function"] == ROOT_FN_GET_FEATURE:
+                feature_id = (req["params"][0] << 8) | req["params"][1]
+                if feature_id == 0x2201:
+                    index = self.dpi_feature_index
+                    if index is None:
+                        index = 0  # feature ausente
+                    return self._echo_response(req, bytes([index, 0x00, 0x03]))
+                # Feature inexistente de teste → não suportada.
+                return self._echo_response(req, bytes([0x00, 0x00, 0x00]))
+            return self._echo_response(req, bytes([0x00, 0x00, 0x00]))
+
+        # Feature set GET_FEATURE_TABLE_COUNT (feature 0x01, fn 0).
+        if req["feature_index"] == FEATURE_SET_INDEX and req["function"] == 0x00:
+            return self._echo_response(req, bytes([0x08, 0x00, 0x00]))
+
+        # SetSensorDPI (fn 0x10, no feature index configurado):
+        # params [sensor_idx, dpi_hi, dpi_lo].
+        if (
+            req["feature_index"] == self.dpi_feature_index
+            and req["function"] == DPI_FN_SET
+            and self.dpi_feature_index not in (None, 0)
+        ):
+            if self.dpi_set_rejected:
+                return self._error_response(req)
+            dpi = (req["params"][1] << 8) | req["params"][2]
+            self._last_set_dpi = dpi
+            # ACK ecoa o request sem params alterados (conferência).
+            return self._echo_response(req, b"")
+
+        # Qualquer outro request: eco simples (funcionalidade extra).
+        return self._echo_response(req, req["params"][:3])
 
     @property
-    def readback_value(self) -> Optional[bytes]:
-        """Resposta que um readback do DPI devolve."""
-        if self.readback_dpi is None and self._last_set_dpi is None:
-            return None
-        value = self.readback_dpi if self.readback_dpi is not None else self._last_set_dpi
-        if value is None:
-            return None
-        return b"\x11\xff\x01" + value.to_bytes(2, "big") + b"\x00" * 4
-
-    def close(self) -> None:
-        self._device = None
+    def applied_dpi(self) -> Optional[int]:
+        """Último DPI confirmado que o fake "aplicou" (eco do SetSensorDPI)."""
+        return self._last_set_dpi
 
 
 class FakeSystemInput(SystemInput):

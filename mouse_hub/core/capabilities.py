@@ -23,6 +23,7 @@ from typing import Callable, Dict, List, Optional
 # vire um saco de booleanos soltos.
 CAPABILITY_NAMES = [
     "mouse_detected",
+    "hid_endpoint_known",
     "hid_available",
     "hardware_dpi_available",
     "sensitivity_available",
@@ -97,6 +98,7 @@ class CapabilityModel:
     """
 
     mouse_detected: Detector = field(default=lambda: False)
+    hid_endpoint_known: Detector = field(default=lambda: False)
     hid_available: Detector = field(default=lambda: False)
     hardware_dpi_available: Detector = field(default=lambda: False)
     sensitivity_available: Detector = field(default=lambda: False)
@@ -108,6 +110,7 @@ class CapabilityModel:
     def _detector_for(self, name: str) -> Optional[Detector]:
         return {
             "mouse_detected": self.mouse_detected,
+            "hid_endpoint_known": self.hid_endpoint_known,
             "hid_available": self.hid_available,
             "hardware_dpi_available": self.hardware_dpi_available,
             "sensitivity_available": self.sensitivity_available,

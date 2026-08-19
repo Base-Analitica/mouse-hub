@@ -3,6 +3,10 @@
 O sysfs real é substituído por diretórios temporários populados com
 uevents sintéticos, exercitando o mesmo código de produção
 (device_discovery) sem depender de um G403 conectado.
+
+O FakeHidAccess é uma máquina de protocolo HID++ 2.0: o probe é
+executado de verdade (feature set count + IRoot.GetFeature(0x2201)),
+com respostas computadas a partir dos requests — nunca fila fixa.
 """
 
 from __future__ import annotations
@@ -226,19 +230,32 @@ def test_discover_and_discover_g403_are_the_same():
 # ── Seleção de endpoint em duas etapas (identidade + protocolo) ───
 
 
-def _selection_device(root: Path, hidraw: str) -> None:
-    ...
-
-
 def test_endpoint_selection_validates_single_candidate(tmp_path):
+    """Candidato com identidade e protocolo corretos é selecionado.
+
+    O fake executa o probe real: feature set count + IRoot.GetFeature
+    devolve o índice dinâmico da Adjustable DPI (0x2201)."""
     root = make_sysfs_root(tmp_path, {"hidraw2": G403_UEVENT})
     hid = FakeHidAccess()
-    # Resposta ao probe GET_FEATURE_TABLE_COUNT: 4 features.
-    hid.probe_responses = [b"\x11\xff\x00\x04" + b"\x00" * 16]
     selection = HydppEndpointSelection(hid)
     selected = selection.select(find_g403_hidraw_devices(G403_VID, G403_PID, root))
     assert selected is not None
     assert selected.hidraw_path == "/dev/hidraw2"
+
+
+def test_endpoint_selection_probe_queries_0x2201_dynamically(tmp_path):
+    """O probe consulta o FEATURE ID 0x2201 via IRoot.GetFeature e usa
+    o índice devolvido — não há feature index hardcoded na seleção."""
+    root = make_sysfs_root(tmp_path, {"hidraw2": G403_UEVENT})
+    hid = FakeHidAccess()
+    selection = HydppEndpointSelection(hid)
+    selection.select(find_g403_hidraw_devices(G403_VID, G403_PID, root))
+    get_feature_request = [
+        r for r in hid.written_reports
+        if len(r) == 7 and r[2] == 0x00 and ((r[3] >> 4) & 0x0F) == 0
+        and ((r[4] << 8) | r[5]) == 0x2201
+    ]
+    assert len(get_feature_request) == 1
 
 
 def test_endpoint_selection_rejects_non_responsive(tmp_path):
@@ -246,16 +263,36 @@ def test_endpoint_selection_rejects_non_responsive(tmp_path):
     protocolo HID++ não é selecionado — fail closed."""
     root = make_sysfs_root(tmp_path, {"hidraw2": G403_UEVENT})
     hid = FakeHidAccess()
-    hid.probe_responses = []  # probe: read devolve None = não validado
+    hid.ack_timeout = True  # endpoint mudo: read devolve None
     selection = HydppEndpointSelection(hid)
     assert selection.select(find_g403_hidraw_devices(G403_VID, G403_PID, root)) is None
 
 
-def test_endpoint_selection_rejects_error_response(tmp_path):
-    """Candidato que responde com erro HID++ (0x8F) não é válido."""
+def test_endpoint_selection_rejects_stage1_error(tmp_path):
+    """Endpoint que rejeita o feature set count (0x8F) não valida."""
     root = make_sysfs_root(tmp_path, {"hidraw2": G403_UEVENT})
     hid = FakeHidAccess()
-    hid.probe_error_response = True
+    hid.probe_stage1_error = True
+    selection = HydppEndpointSelection(hid)
+    assert selection.select(find_g403_hidraw_devices(G403_VID, G403_PID, root)) is None
+
+
+def test_endpoint_selection_rejects_stage2_error(tmp_path):
+    """Endpoint que rejeita o GetFeature(0x2201) com 0x8F é HID++
+    válido, mas sem a feature ajustável — não seleciona."""
+    root = make_sysfs_root(tmp_path, {"hidraw2": G403_UEVENT})
+    hid = FakeHidAccess()
+    hid.probe_stage2_error = True
+    selection = HydppEndpointSelection(hid)
+    assert selection.select(find_g403_hidraw_devices(G403_VID, G403_PID, root)) is None
+
+
+def test_endpoint_selection_feature_absent_is_rejected(tmp_path):
+    """HID++ confirmado mas sem a feature 0x2201 (índice 0): o endpoint
+    não serve para controle de DPI — fail closed."""
+    root = make_sysfs_root(tmp_path, {"hidraw2": G403_UEVENT})
+    hid = FakeHidAccess()
+    hid.dpi_feature_index = 0  # feature ausente
     selection = HydppEndpointSelection(hid)
     assert selection.select(find_g403_hidraw_devices(G403_VID, G403_PID, root)) is None
 
@@ -269,10 +306,9 @@ def test_endpoint_selection_fails_closed_on_ambiguity(tmp_path):
         "hidraw3": G403_UEVENT,
     })
     hid = FakeHidAccess()
-    # Um candidato por resposta: os dois endpoints validam o probe,
-    # então a seleção termina em ambiguidade (fail closed: nada).
-    valid_response = hid.probe_responses[0]
-    hid.probe_responses = [valid_response, valid_response]
+    # O fake computa respostas por request: ambos os candidatos
+    # validam o probe de forma independente — a seleção termina em
+    # ambiguidade e nada é selecionado (fail closed).
     selection = HydppEndpointSelection(hid)
     assert selection.select(find_g403_hidraw_devices(G403_VID, G403_PID, root)) is None
 
@@ -335,7 +371,7 @@ def test_hid_write_without_open_fails():
     device = fake_g403_device()
     hid.open(device)
     hid.close()
-    result = hid.write(b"\x10\x10\x01\x03\x20\x00\x00")
+    result = hid.write(b"\x10\x00\x01\x34\x00\x06\x40")
     assert not result.status.ok
 
 
@@ -344,22 +380,25 @@ def test_hid_write_succeeds_on_confirmed_device():
     device = fake_g403_device()
     open_result = hid.open(device)
     assert open_result.status.ok
-    write_result = hid.write(b"\x10\x10\x01\x03\x20\x00\x00")
+    write_result = hid.write(b"\x10\x00\x01\x34\x00\x06\x40")
     assert write_result.status.ok
-    assert hid.written_reports == [b"\x10\x10\x01\x03\x20\x00\x00"]
+    assert hid.written_reports == [b"\x10\x00\x01\x34\x00\x06\x40"]
 
 
 def test_hid_write_failure_is_reported():
+    """Falha de transporte na escrita (fd sumiu, I/O no OS) é relatada
+    como OSError — quem escreveu não pode presumir sucesso."""
     hid = FakeHidAccess()
     hid.write_succeeds = False
     hid.open(fake_g403_device())
-    result = hid.write(b"\x10\x10\x01\x03\x20\x00\x00")
-    assert result.status == OperationStatus.FAILED
+    with pytest.raises(OSError):
+        hid.write(b"\x10\x00\x01\x34\x00\x06\x40")
+    assert hid.written_reports == []  # nada foi escrito de fato
 
 
 def test_hid_never_writes_before_opening():
     hid = FakeHidAccess()
-    hid.write(b"\x10\x10\x01\x03\x20\x00\x00")
+    hid.write(b"\x10\x00\x01\x34\x00\x06\x40")
     assert hid.written_reports == []
 
 
@@ -368,11 +407,42 @@ def test_hid_read_timeout_returns_none_when_closed():
     assert hid.read(20, timeout=0.01) is None
 
 
+def test_hid_echoes_header_in_response(tmp_path):
+    """A resposta espelha o header do request (report id, device index,
+    feature index, function+software ID) — o eco que o core exige para
+    correlacionar ACKs."""
+    root = make_sysfs_root(tmp_path, {"hidraw2": G403_UEVENT})
+    hid = FakeHidAccess()
+    selection = HydppEndpointSelection(hid)
+    selection.select(find_g403_hidraw_devices(G403_VID, G403_PID, root))
+    # Os writes de probe devem ter respostas com o mesmo header.
+    # Snapshot da lista antes do loop: reescrever os requests de probe
+    # os re-adicionaria à mesma lista durante a iteração (crescimento
+    # infinito).
+    snapshot = list(hid.written_reports)
+    for report in snapshot:
+        hid.open(fake_g403_device())
+        hid.write(report)
+        response = hid.read(20)
+        assert response is not None
+        assert response[0] == report[0]
+        assert response[1] == report[1]
+        assert response[3] == report[3]
+        hid.close()
+
+
 def test_hid_readback_acks_set_dpi():
+    """Readback do SetSensorDPI devolve o DPI aplicado no payload,
+    ecoando o header — a confirmação que o core exige."""
     hid = FakeHidAccess()
     hid.open(fake_g403_device())
-    hid.write(b"\x10\x01\x10\x06\x40\x00\x00")  # set DPI 1600
+    # SetSensorDPI: feature index 1, fn 0x03 + sw, sensor 0, 1600 big endian.
+    hid.write(b"\x10\x00\x01\x34\x00\x06\x40")
     response = hid.read(20)
     assert response is not None
-    assert response[2] == hid.FEATURE_DPI
-    assert (response[3] << 8) | response[4] == 1600
+    # Eco do header.
+    assert response[0] == 0x10
+    assert response[2] == 0x01
+    assert (response[3] >> 4) & 0x0F == 0x03
+    # Payload: DPI aplicado confirmado pelo dispositivo.
+    assert hid.applied_dpi == 1600
