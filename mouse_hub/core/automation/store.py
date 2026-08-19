@@ -113,9 +113,15 @@ def _convert_legacy(entries: List[Any]) -> List[RecordedEvent]:
                 except ValueError:
                     continue
         try:
-            t = float(entry.get("t", 0))
-            button = int(entry.get("button", 0))
-            keycode = int(entry.get("keycode", 0))
+            # O formato REAL do main legado usa `time` (ms), `key`
+            # (keycode), `click` (botão) e `move` ([x, y]) — o v0/web
+            # usava `t`/`keycode`/`button`. Ambos coexistem aqui.
+            t_raw = entry.get("t")
+            t = float(t_raw if t_raw is not None else entry.get("time", 0))
+            key_raw = entry.get("keycode")
+            keycode = int(key_raw if key_raw is not None else entry.get("key", 0))
+            button = int(entry.get("button", entry.get("click", 0)))
+            move_xy = entry.get("move")
         except (TypeError, ValueError):
             continue
         delta_ms = max(0.0, t - prev_t) if events else 0.0
@@ -130,6 +136,20 @@ def _convert_legacy(entries: List[Any]) -> List[RecordedEvent]:
             )
             events.append(
                 RecordedEvent(kind=EventType.MOUSE_RELEASE, button=button, keycode=keycode, delta_ms=0.0)
+            )
+        elif kind == EventType.MOUSE_MOVE:
+            # `move` do main real guarda as coordenadas em [x, y]; o
+            # player lê io.move(x=event.button, y=event.keycode), então
+            # x→button e y→keycode — o formato fica equivalente ao v1.
+            if isinstance(move_xy, (list, tuple)) and len(move_xy) >= 2:
+                mx, my = int(move_xy[0]), int(move_xy[1])
+            else:
+                mx, my = keycode, button
+            # O player emite io.move(x=event.button, y=event.keycode)
+            # — x vai em button, y vai em keycode para fechar o ciclo
+            # do formato canônico (v1).
+            events.append(
+                RecordedEvent(kind=EventType.MOUSE_MOVE, button=mx, keycode=my, delta_ms=delta_ms)
             )
         else:
             events.append(
@@ -156,6 +176,11 @@ class MacroStore:
         self._path = path
         self._macros: Dict[str, List[RecordedEvent]] = {}
         self._dirty = False
+        # Estado publicado — último commit que sobreviveu a um flush
+        # bem-sucedido (ou ao load). Usado como ponto de retorno real
+        # quando a escrita falha: add/delete que não foram persistidos
+        # são desfazidos contra esse snapshot.
+        self._published: Dict[str, List[RecordedEvent]] = {}
 
     @property
     def path(self) -> Path:
@@ -230,10 +255,20 @@ class MacroStore:
             if events is not None and events:
                 macros[name] = events
         self._macros = macros
+        self._published = {name: list(events) for name, events in macros.items()}
         self._dirty = False
         return len(macros)
 
     def _parse_entries(self, entries: Any) -> Optional[List[RecordedEvent]]:
+        # Formato REAL do main legado: cada macro é um wrapper
+        # {name, events, created, count} — a lista de eventos fica
+        # em "events"; created/count são metadados descartáveis para
+        # a reprodução. O container raiz nunca traz schema_version.
+        if isinstance(entries, dict) and "events" in entries:
+            macro_events = entries["events"]
+            if not isinstance(macro_events, list):
+                return None
+            entries = macro_events
         if not isinstance(entries, list):
             return None
         # Schema v1: cada entrada tem "kind"
@@ -300,6 +335,11 @@ class MacroStore:
         self._macros[name] = list(events)
         self._dirty = True
 
+    @property
+    def _live(self) -> Dict[str, List[RecordedEvent]]:
+        """Acesso único ao dicionário vivo (memória) para leitura."""
+        return self._macros
+
     def delete(self, name: str) -> bool:
         if name not in self._macros:
             return False
@@ -322,6 +362,10 @@ class MacroStore:
         o conteúdo garantidamente completo (nada fica pela metade)."""
         if not self._dirty:
             return
+        # Snapshot do estado publicado (último commit) é o ponto de
+        # retorno real: adições/deleções não persistidas são desfazidas
+        # contra ele — nada fica publicado no meio de uma transação.
+        snapshot = {name: list(events) for name, events in self._published.items()}
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": SCHEMA_VERSION,
@@ -347,6 +391,8 @@ class MacroStore:
                 tmp.unlink()
             except OSError:
                 pass
+            self._macros = snapshot
+            self._dirty = True  # estado restaurado ainda precisa de flush
             raise MacroStoreError(f"falha ao escrever o arquivo temporário: {exc}")
         try:
             os.replace(tmp, self._path)
@@ -355,5 +401,11 @@ class MacroStore:
                 tmp.unlink()
             except OSError:
                 pass
+            self._macros = snapshot
+            self._dirty = True  # estado restaurado ainda precisa de flush
             raise MacroStoreError("falha ao persistir o container de macros")
+        # Escrita concluída: o estado atual vira o novo estado publicado
+        # e o snapshot avança junto — a próxima falha desfará apenas as
+        # mudanças posteriores.
+        self._published = {name: list(events) for name, events in self._macros.items()}
         self._dirty = False

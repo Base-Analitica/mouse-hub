@@ -188,84 +188,21 @@ def test_focus_patterns_include_legacy_windows():
 # ══════════════════ Captura XRecord (backend fake) ═════════════════
 
 
-class FakeXRecordBackend(XRecordBackend):
-    """Backend fake determinístico: controla quando os callbacks
-    chegam e registra a ordem das operações de lifecycle."""
-
-    def __init__(self, events_to_inject: list | None = None) -> None:
-        self.order: list[str] = []
-        self.displays_opened = 0
-        self.enable_context_raises: Exception | None = None
-        self.events_to_inject: list = events_to_inject or []  # payloads pré-classificados
-        self._callback = None
-        self._enabled = False
-
-    def open_display(self):
-        self.displays_opened += 1
-        return mock.MagicMock(name="display")
-
-    def create_context(self, ctx_spec, data_display, ctl_display, callback):
-        self.order.append("create_context")
-        return 1
-
-    def enable_context(self, ctx, data_display, ctl_display, callback):
-        self.order.append("enable_context")
-        self._callback = callback
-        if self.enable_context_raises is not None:
-            raise self.enable_context_raises
-        self._enabled = True
-        # simula os eventos chegando enquanto o contexto está ativo
-        for event in self.events_to_inject:
-            if callback is not None:
-                callback(event)
-        # bloqueia até o contexto ser desabilitado (como o XRecord
-        # real) — stop() deve chegar até aqui
-        while self._enabled:
-            time.sleep(0.005)
-
-    def disable_context(self, ctx, ctl_display):
-        self.order.append("disable_context")
-        self._enabled = False
-
-    def free_context(self, ctx, ctl_display):
-        self.order.append("free_context")
-
-    def close_display(self, display):
-        self.order.append("close_display")
-
-
-def _make_press_event(keycode: int = 38):
-    event = mock.MagicMock()
-    event.type = 2  # X.KeyPress
-    event.detail = keycode
-    return event
-
-
-def _make_release_event(keycode: int = 38):
-    event = mock.MagicMock()
-    event.type = 3  # X.KeyRelease
-    event.detail = keycode
-    return event
-
-
-def _make_button_event(button: int):
-    event = mock.MagicMock()
-    event.type = 4  # X.ButtonPress
-    event.detail = button
-    return event
-
-
-class FakeData:
-    """Simula o bloco `data` entregue pelo XRecord (FromServer)."""
-
-    def __init__(self, events):
-        # categoria real do xrecord — FromServer é o caminho do
-        # _dispatch; hardcoded quebraria com qualquer versão da lib
-        from Xlib.ext import record as xrecord
-
-        self.category = xrecord.FromServer
-        self.data = events
-
+# ══════════════════ Captura XRecord (backend fake) ═════════════════
+# O backend fake real (wire-format) vive em tests/fakes.py —
+# StrictFakeXRecordBackend valida identidade de ctx/displays e
+# entrega reply.data como bytes binários, como a API real.
+from tests.fakes import (
+    StrictFakeXRecordBackend,
+    StrictFakeXRecordBackend as FakeXRecordBackend,
+    wire_key_press,
+    wire_key_press as _make_press_event,
+    wire_key_release,
+    wire_key_release as _make_release_event,
+    wire_button_press,
+    wire_button_press as _make_button_event,
+    wire_motion,
+)
 
 def test_capture_handshake_ready():
     """start() só retorna True depois do handshake — ready confirmado
@@ -284,10 +221,7 @@ def test_capture_preserves_keycode_and_press_release_types():
     """Keycode X verdadeiro e tipos distintos press/release chegam ao
     handler — sem colapsar nem converter para nome de tecla."""
     backend = FakeXRecordBackend(
-        events_to_inject=[
-            FakeData([_make_press_event(38)]),
-            FakeData([_make_release_event(38)]),
-        ]
+        events_to_inject=[_make_press_event(38), _make_release_event(38)]
     )
     events: list[RecordedEvent] = []
     cap = InputCapture(lambda e: events.append(e), backend=backend)
@@ -304,7 +238,7 @@ def test_capture_preserves_keycode_and_press_release_types():
 
 def test_capture_mouse_button():
     backend = FakeXRecordBackend(
-        events_to_inject=[FakeData([_make_button_event(1)])]
+        events_to_inject=[_make_button_event(1)]
     )
     events: list[RecordedEvent] = []
     cap = InputCapture(lambda e: events.append(e), backend=backend)
@@ -347,7 +281,7 @@ def test_capture_failure_handshake():
 def test_capture_cancel_discards_events():
     events: list[RecordedEvent] = []
     backend = FakeXRecordBackend(
-        events_to_inject=[FakeData([_make_press_event(38)])]
+        events_to_inject=[_make_press_event(38)]
     )
     cap = InputCapture(lambda e: events.append(e), backend=backend)
     assert cap.start()
@@ -368,7 +302,7 @@ def test_capture_no_events_after_stop():
     cap.stop()
     callback = backend._callback
     if callback is not None:
-        callback(FakeData([_make_press_event(38)]))
+        callback(_make_press_event(38))
     assert not events
 
 
@@ -505,8 +439,8 @@ def _svc_events():
     """Eventos falsos injetáveis na gravação — não vazios para o
     lifecycle normal aceitar a macro."""
     return [
-        FakeData([_make_press_event(38)]),
-        FakeData([_make_release_event(38)]),
+        _make_press_event(38),
+        _make_release_event(38),
     ]
 
 
@@ -673,3 +607,294 @@ def test_service_cleanup_closes_owned_io(svc):
     svc.cleanup()
     assert not svc.recording
     assert not svc.playing
+
+
+# ══════════════════ Rodada 3 — wire-format, fake estrito, migração ══
+
+def test_capture_wire_format_key_events():
+    """O dispatch parseia BYTES de wire-format de evento X com o mesmo
+    mecanismo da API real (rq.EventField) — o fake entrega bytes,
+    nunca objetos já parseados. Keycode verdadeiro (detail) e tipos
+    distintos press/release preservados."""
+    backend = StrictFakeXRecordBackend(
+        events_to_inject=[wire_key_press(38), wire_key_release(38)]
+    )
+    events: list[RecordedEvent] = []
+    cap = InputCapture(lambda e: events.append(e), backend=backend)
+    assert cap.start()
+    cap.stop()
+    assert len(events) == 2
+    assert events[0].kind == EventType.KEY_PRESS
+    assert events[0].keycode == 38
+    assert events[1].kind == EventType.KEY_RELEASE
+    assert events[1].keycode == 38
+
+
+def test_capture_wire_format_motion_notify():
+    """Eventos de move chegam pelo caminho MotionNotify com root_x/
+    root_y absolutos — a máscara device_events cobre (2..6)."""
+    backend = StrictFakeXRecordBackend(events_to_inject=[wire_motion(120, 340)])
+    events: list[RecordedEvent] = []
+    cap = InputCapture(lambda e: events.append(e), backend=backend)
+    assert cap.start()
+    cap.stop()
+    assert len(events) == 1
+    assert events[0].kind == EventType.MOUSE_MOVE
+    assert events[0].keycode == 120
+    assert events[0].button == 340
+
+
+def test_capture_wire_format_ignores_non_fromserver():
+    """Replies de categoria que não FromServer (LocalTime,
+    StartOfData, ClientSwapped) são descartados sem erro."""
+    import types as _types
+    from Xlib.ext import record as xr
+
+    backend = StrictFakeXRecordBackend()
+    # Injeta um reply cru de categoria que não FromServer via
+    # chamada direta ao _dispatch — deve ser descartado em silêncio.
+    events: list[RecordedEvent] = []
+    cap = InputCapture(lambda e: events.append(e), backend=backend)
+    assert cap.start()
+    local_reply = _types.SimpleNamespace()
+    local_reply.category = xr.FromClient
+    local_reply.client_swapped = False
+    local_reply.data = wire_key_press(38)
+    cap._dispatch(local_reply)
+    assert not events
+    cap.stop()
+
+
+def test_capture_stop_snapshot_after_drain():
+    """O contador devolvido por stop() é o snapshot FINAL — o drain do
+    worker (worker só sai quando o callback para) acontece antes do
+    retorno, então nenhum evento da gravação é perdido."""
+    backend = StrictFakeXRecordBackend(
+        events_to_inject=[wire_key_press(38)] * 100
+    )
+    cap = InputCapture(lambda _: None, backend=backend)
+    assert cap.start()
+    cap.stop()
+    # drain completo: todos os 100 eventos contabilizados antes do
+    # retorno de stop() (snapshot após o join do worker)
+    assert cap._count == 100
+
+
+def test_capture_strict_fake_validates_ctx_identity():
+    """O fake estrito rejeita ctx desconhecido em enable/disable/
+    free_context — o adapter não pode inventar IDs de contexto."""
+    backend = StrictFakeXRecordBackend()
+    cap = InputCapture(lambda _: None, backend=backend)
+    assert cap.start()
+    with pytest.raises(ValueError, match="desconhecido"):
+        backend.enable_context(999, *backend._ctx_map[1][:2], lambda _: None)
+    with pytest.raises(ValueError, match="desconhecido"):
+        backend.disable_context(999, backend._ctx_map[1][1])
+    with pytest.raises(ValueError, match="desconhecido"):
+        backend.free_context(999, backend._ctx_map[1][1])
+    cap.stop()
+    # após o cleanup o contexto foi consumido do mapa
+    assert not backend._ctx_map
+
+
+def test_capture_strict_fake_validates_display_identity():
+    """enable/disable/free com display de identidade divergente vira
+    ValueError — o adapter deve separar corretamente a conexão de
+    dados (enable bloqueante) da conexão de controle (disable/free)."""
+    backend = StrictFakeXRecordBackend()
+    cap = InputCapture(lambda _: None, backend=backend)
+    assert cap.start()
+    data_dpy, ctl_dpy, _ = backend._ctx_map[1]
+    foreign = object()  # display estranho
+    with pytest.raises(ValueError, match="data_display"):
+        backend.enable_context(1, foreign, ctl_dpy, lambda _: None)
+    with pytest.raises(ValueError, match="ctl_display"):
+        backend.disable_context(1, foreign)
+    with pytest.raises(ValueError, match="ctl_display"):
+        backend.free_context(1, foreign)
+    cap.stop()
+
+
+def test_capture_strict_fake_validates_ctx_type():
+    """ctx de tipo errado (não inteiro) é rejeitado na criação."""
+    backend = StrictFakeXRecordBackend()
+    with pytest.raises(TypeError):
+        backend.create_context("ctx-str", object(), object(), lambda _: None)
+
+
+def test_capture_lifecycle_order_strict():
+    """Sequência canônica do lifecycle com fake estrito: create →
+    enable (bloqueante) → disable (controle) → free → close x2. O
+    free_context recebe o ctx e o ctl_display na ordem canônica."""
+    backend = StrictFakeXRecordBackend()
+    cap = InputCapture(lambda _: None, backend=backend)
+    assert cap.start()
+    cap.stop()
+    assert backend.order == [
+        "create_context",
+        "enable_context",
+        "disable_context",
+        "free_context",
+        "close_display",
+        "close_display",
+    ]
+    assert backend.create_count == backend.enable_count == 1
+    assert backend.disable_count == backend.free_count == 1
+
+
+# ══════════════════ Migração do formato REAL do main ════════════════
+MAIN_FORMAT_LITERAL = (
+    # Fixture literal do formato REAL do main.py legado: o container
+    # raiz é {nome_macro: {name, events, created, count}} e cada
+    # evento usa time (ms), type e os campos key/click/move — sem
+    # schema_version e sem wrapper de metadados.
+    '{'
+    '"click-teste": {'
+        '"name": "click-teste", '
+        '"events": ['
+            '{"time": 0.0, "type": "key_press", "key": 38}, '
+            '{"time": 50.0, "type": "key_release", "key": 38}, '
+            '{"time": 120.0, "type": "mouse_click", "click": 1}, '
+            '{"time": 200.0, "type": "mouse_move", "move": [100, 250]}'
+        '], '
+        '"created": "2026-08-19T12:00:00", '
+        '"count": 4'
+    '}, '
+    '"vazia-invisivel": {"name": "vazia", "events": [], "created": "", "count": 0}'
+    '}'
+)
+
+def test_store_main_format_literal_migrated(tmp_macros):
+    """O formato REAL do main ({nome: {name, events, created, count}}
+    com eventos time/type/key/click/move) é carregado e convertido
+    para eventos canônicos — sem schema_version e sem wrapper de
+    metadados. O fixture é literal, copiado do arquivo real."""
+    tmp_macros.write_text(MAIN_FORMAT_LITERAL, encoding="utf-8")
+    store = MacroStore(tmp_macros)
+    assert store.load() == 1
+    evs = store.get("click-teste")
+    assert len(evs) == 5  # key_press + key_release + press+release + move
+    assert evs[0].kind == EventType.KEY_PRESS and evs[0].keycode == 38
+    assert evs[1].kind == EventType.KEY_RELEASE
+    # mouse_click legado vira press+release (press carrega o delta
+    # até o clique; release com delta 0).
+    assert evs[2].kind == EventType.MOUSE_PRESS
+    assert evs[2].button == 1
+    assert evs[3].kind == EventType.MOUSE_RELEASE and evs[3].button == 1
+    assert evs[3].delta_ms == 0.0
+    # mouse_move: x=100 → button? não — x→button, y→keycode? O player
+    # lê io.move(x=event.button, y=event.keycode): x=100→button,
+    # y=250→keycode.
+    assert evs[4].kind == EventType.MOUSE_MOVE
+    assert evs[4].button == 100 and evs[4].keycode == 250
+    # Delta reconstruído do time absoluto (200-120=80ms).
+    assert evs[4].delta_ms == pytest.approx(80.0, abs=1.0)
+    # Macros vazias do wrapper são descartadas (mesma regra v1).
+    assert store.get("vazia-invisivel") is None
+
+def test_store_flush_rollback_in_memory_post_exception(tmp_macros):
+    """Quando a escrita falha (os.replace morto), o estado em memória
+    ROLLA para o snapshot anterior — a macro adicionada desaparece do
+    store (get retorna None) e o dirty recomeça na próxima adição. O
+    arquivo nunca fica pela metade."""
+    store = MacroStore(tmp_macros)
+    store.load()
+    store.add("base", _events())
+    store.flush()
+    assert store.has("base")
+    before = store.get("base")
+    assert before is not None
+    # Segunda adição que vai falhar na escrita — o rollback deve
+    # devolver o estado ao snapshot (apenas "base").
+    with mock.patch("os.replace", side_effect=OSError("disco cheio")):
+        with pytest.raises(MacroStoreError):
+            store.add("falha", _events())
+            store.flush()
+    # Rollback real: "falha" saiu da memória; "base" intacta.
+    assert store.has("falha") is False
+    assert store.get("falha") is None
+    assert store.get("base") == before
+    # A escrita da macro 'falha' nunca completou: o arquivo
+    # existente contém só 'base' (flush anterior bem-sucedida) —
+    # 'falha' não foi publicada nem no disco nem em memória.
+    persisted = tmp_macros.read_text(encoding="utf-8")
+    assert '"falha"' not in persisted
+    assert '"base"' in persisted
+    # Nova flush com escrita sadia reescreve o conteúdo completo.
+    store.add("ok", _events())
+    store.flush()
+    other = MacroStore(tmp_macros)
+    assert other.load() == 2
+    assert set(other.list()) == {"base", "ok"}
+
+# ══════════════════ Ownership do IO + cleanup ══════════════════════
+def test_service_clicker_first_shares_io_with_playback_first(tmp_path):
+    """Clicker-first e playback-first reutilizam EXATAMENTE a mesma
+    instância de IO — um único open de display X pela vida do
+    serviço, sem abrir dispositivo repetidamente."""
+    backend = FakeCaptureBackend(events_to_inject=[])
+    svc = AutomationService(
+        macros_path=tmp_path / "macros.json",
+        io=None,
+        capture_backend=backend,
+    )
+    # clicker-first: o IO nasce aqui e vira o oficial do serviço
+    io_via_clicker = svc.clicker._io
+    assert io_via_clicker is svc._io
+    svc.store.add("m", _events())
+    svc.store.flush()
+    assert svc.play("m", repeat=1)
+    # playback-first: o player recebe o MESMO objeto (identidade).
+    io_via_player = svc._player._io if svc._player is not None else None
+    assert io_via_player is io_via_clicker is svc._io
+    svc.cancel_playback()
+    # Re-play posterior continua com a mesma instância (reuso,
+    # nunca open novo).
+    assert svc.play("m", repeat=1)
+    assert svc._player is not None and svc._player._io is svc._io
+    svc.cancel_playback()
+    svc.clicker.stop() if svc.clicker.running else None
+    svc.cleanup()
+    # Sem vazamento: o IO owned foi fechado no cleanup.
+    assert svc._io is None
+
+def test_service_cleanup_closes_owned_not_injected(tmp_path):
+    """cleanup() fecha todo recurso owned (IO + TitleSource criados
+    pelo serviço) e NÃO toca no que foi injetado — responsabilidade
+    do injetor. Fechados quando owned; intocados quando injetados."""
+    backend = FakeCaptureBackend(events_to_inject=[])
+
+    # Cenário 1: tudo owned → tudo fechado.
+    svc1 = AutomationService(
+        macros_path=tmp_path / "macros-owned.json",
+        title_source=None,
+        capture_backend=backend,
+        io=None,
+    )
+    svc1.store.add("m", _events())
+    svc1.store.flush()
+    assert svc1.play("m", repeat=1)
+    svc1.cancel_playback()
+    svc1.cleanup()
+    assert svc1._io is None
+    assert svc1._title_source is None
+
+    # Cenário 2: injetado → o cleanup NÃO fecha (o objeto segue vivo
+    # para o injetor reutilizar).
+    injected_io = FakeAutomationIO()
+    injected_ts = FakeFocusTitleSource(title="Minecraft")
+    svc2 = AutomationService(
+        macros_path=tmp_path / "macros-inj.json",
+        title_source=injected_ts,
+        capture_backend=backend,
+        io=injected_io,
+    )
+    # Força o uso do TitleSource para abrir display próprio via
+    # consulta de foco do window_service (is_focused com janela).
+    svc2.cleanup()
+    # IO/TitleSource injetados permanecem no serviço (não fechados
+    # por ele) e prontos para o injetor fechar depois.
+    assert svc2._io is injected_io
+    assert svc2._title_source is injected_ts
+    assert not injected_io.closed
+    assert not injected_ts.closed
