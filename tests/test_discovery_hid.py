@@ -406,6 +406,53 @@ def test_endpoint_selection_protocol_error_carries_error_code(tmp_path):
     assert outcome.valid is False
 
 
+@pytest.mark.parametrize("cause", [
+    "device_not_found",
+    "permission_denied",
+    "failed",
+], ids=["hot_unplug", "permission_lost", "generic"])
+def test_probe_stage2_write_failure_carries_cause(
+    tmp_path: Path, cause: str
+):
+    """Falha de transporte no SEGUNDO write do probe
+    (IRoot.GetFeature(0x2201)) preserva a causa real no ProbeOutcome e
+    o endpoint NÃO é validado — sem exceções (nem erro FAP 0x09):
+
+    1. open funciona (device existe);
+    2. PRIMEIRO write (GetProtocolVersion) → OK;
+    3. read do GetProtocolVersion → ACK válido;
+    4. SEGUNDO write (GetFeature) → falha de transporte tipada;
+    5. ProbeOutcome.access_status == causa real (A/B/C);
+    6. valid=False — nada é aceito.
+
+    write_failure_at garante que a falha ocorre no write #2
+    (o primeiro passa e o ACK da etapa 1 é recebido antes)."""
+    hid = FakeHidAccess()
+    # write_failure_at é ordinal absoluto da máquina de protocolo:
+    # reset do contador por cenário — o probe em si tem writes #1 e #2.
+    hid._write_counter = 0
+    hid.write_failure_status = cause
+    hid.write_failure_at = 2
+
+    selection = HydppEndpointSelection(hid)
+    root = make_sysfs_root(tmp_path, {"hidraw2": G403_UEVENT})
+    devices = find_g403_hidraw_devices(G403_VID, G403_PID, root)
+    assert devices, "device G403 deve ser encontrado pela identidade"
+    outcome = selection.probe(devices)[0]
+
+    assert outcome.valid is False, (
+        "endpoint NÃO deve ser validado após write falho na etapa 2"
+    )
+    assert outcome.access_status == OperationStatus(cause), (
+        f"causa real do write #2 deve ser preservada: {cause}"
+    )
+    # Evidência de que o write #2 é o que falhou: a primeira etapa
+    # completou (protocol_version_request aceito + ACK consumido).
+    assert hid.query_count >= 1
+    # Sem causa colapsada em FAILED genérico.
+    assert outcome.access_status != OperationStatus.FAILED or cause == "failed"
+
+
 def test_endpoint_selection_closes_descriptor_after_probe(tmp_path):
     """O probe nunca deixa o descritor aberto: open/write/read são
     seguidos de close."""

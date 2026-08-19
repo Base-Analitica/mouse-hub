@@ -109,7 +109,9 @@ class FakeHidAccess(HidAccess):
         # Rejeição do probe em GetFeature(0x2201) com erro FAP
         # correlacionado. probe_stage2_error_code especifica o código
         # real (ex.: 0x06 INVALID_FEATURE_INDEX; 0x08 BUSY; 0x09
-        # UNSUPPORTED — tratado como feature ausente pelo core).
+        # UNSUPPORTED — QUALQUER erro FAP, inclusive 0x09, faz o probe
+        # falhar fechado; feature ausente APENAS via ACK válido com
+        # feature_index == 0).
         self.probe_stage2_error: bool = False
         self.probe_stage2_error_code: int = 0x06
         # GetProtocolVersion: major devolvido (params[0]). 0x04 =
