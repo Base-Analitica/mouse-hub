@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from mouse_hub.core.operation import OperationResult
+from mouse_hub.platform.read_outcome import ReadOutcome
 
 
 @dataclass(frozen=True)
@@ -48,8 +49,14 @@ class HidAccess(ABC):
         """True se há um descritor aberto."""
 
     @abstractmethod
-    def read(self, length: int, timeout: float = 0.5) -> Optional[bytes]:
-        """Lê até `length` bytes do descritor, ou None em caso de erro/timeout."""
+    def read(self, length: int, timeout: float = 0.5) -> ReadOutcome:
+        """Lê até `length` bytes do descritor.
+
+        O desfecho é SEMPRE tipado (ReadOutcome): DATA quando há bytes,
+        TIMEOUT quando o select esgota sem dados (endpoint mudo — não é
+        falha de transporte), ou a causa REAL do erro de leitura
+        (DEVICE_NOT_FOUND/PERMISSION_DENIED/FAILED). Nada colapsa em
+        None: timeout não pode ser confundido com hot-unplug."""
 
     @abstractmethod
     def write(self, report: bytes) -> OperationResult:

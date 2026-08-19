@@ -32,6 +32,7 @@ from typing import Optional
 
 from mouse_hub.core.operation import OperationResult
 from mouse_hub.platform.protocol import HidAccess, MouseDevice
+from mouse_hub.platform.read_outcome import ReadOutcome
 
 
 class LinuxHidAccess(HidAccess):
@@ -83,19 +84,39 @@ class LinuxHidAccess(HidAccess):
     def is_open(self) -> bool:
         return self._fd is not None
 
-    def read(self, length: int, timeout: float = 0.5) -> Optional[bytes]:
-        """Lê até `length` bytes, aguardando com timeout. None =
-        timeout/erro — o chamador deve tratar ausência de resposta como
-        não-confirmação, nunca como sucesso."""
+    def read(self, length: int, timeout: float = 0.5) -> ReadOutcome:
+        """Lê até `length` bytes, aguardando com timeout. O desfecho é
+        SEMPRE tipado (ReadOutcome) — timeout não pode ser confundido
+        com falha de transporte:
+
+        * select sem dados até o fim → TIMEOUT (endpoint mudo, sem
+          evidência de remoção);
+        * BlockingIOError (EAGAIN) → TIMEOUT (o descritor é non-blocking:
+          "nada disponível agora" não é evidência de remoção);
+        * PermissionError → PERMISSION_DENIED (fd perdeu permissão);
+        * OSError errno ENODEV/ENXIO/EIO → DEVICE_NOT_FOUND (device
+          desconectado a quente);
+        * outro OSError → FAILED (transporte genérico, fd corrompido).
+        """
         if self._fd is None:
-            return None
+            return ReadOutcome.timeout("nenhum descritor aberto")
         try:
             ready, _, _ = select.select([self._fd], [], [], timeout)
             if not ready:
-                return None
-            return os.read(self._fd, length)
-        except (BlockingIOError, OSError):
-            return None
+                return ReadOutcome.timeout()
+            return ReadOutcome.from_data(os.read(self._fd, length))
+        except PermissionError:
+            return ReadOutcome.permission_denied("Permissão perdida na leitura")
+        except BlockingIOError:
+            # EAGAIN sem evidência de remoção: nada disponível agora
+            # — timeout é a classificação conservadora correta.
+            return ReadOutcome.timeout()
+        except OSError as exc:
+            if exc.errno in (errno.ENODEV, errno.ENXIO, errno.EIO):
+                return ReadOutcome.device_not_found(
+                    "Descritor desconectado na leitura (hot-unplug)"
+                )
+            return ReadOutcome.failed(f"OSError na leitura: {exc}", errno=exc.errno)
 
     def write(self, report: bytes) -> OperationResult:
         if self._fd is None or self._device is None:
@@ -111,12 +132,13 @@ class LinuxHidAccess(HidAccess):
             return OperationResult.failed(f"OSError durante escrita: {exc}")
         return OperationResult.applied()
 
-    def verify_response(self, timeout: float = 0.5, read_length: int = 20) -> Optional[bytes]:
+    def verify_response(self, timeout: float = 0.5, read_length: int = 20) -> ReadOutcome:
         """Aguarda a resposta do dispositivo a um comando já escrito.
 
-        Retorna os bytes lidos se o dispositivo respondeu dentro do
-        timeout, ou None se não respondeu. O tempo de espera é limitado
-        por `select` com timeout, nunca gira em loop ocupado.
+        O desfecho é tipado (ReadOutcome): DATA com os bytes quando o
+        device respondeu a tempo, ou a causa REAL (TIMEOUT = mudo, não
+        é falha de transporte). O tempo de espera é limitado por
+        `select` com timeout, nunca gira em loop ocupado.
         """
         return self.read(read_length, timeout=timeout)
 

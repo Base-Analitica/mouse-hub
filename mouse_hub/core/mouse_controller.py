@@ -78,6 +78,7 @@ from mouse_hub.platform.hidpp import (
     SoftwareId,
     build_long_report,
 )
+from mouse_hub.platform.read_outcome import ReadOutcomeKind
 from mouse_hub.platform.linux.device_discovery import (
     HydppEndpointSelection,
     ProbeOutcome,
@@ -234,6 +235,16 @@ class MouseController:
                 "Dispositivo presente, mas sem interface hidraw "
                 "acessível — não é controlável via protocolo HID++"
             )
+
+        # Re-probe é autoritativo: o conhecimento do endpoint parte do
+        # zero e só sobrevive se ESTE probe terminar bem — um re-probe
+        # falho NUNCA deixa o feature index do probe anterior vivo
+        # (invalidação do snapshot anterior no início, não só em falha).
+        # O DPI JÁ APLICADO (self._applied_dpi) é preservado: o hardware
+        # mantém o estado; só o conhecimento do endpoint morre.
+        self._dpi_feature_index = None
+        self._probe_accessible = None
+        self._probe_access_status = None
 
         selection = HydppEndpointSelection(self._hid)
         try:
@@ -411,6 +422,37 @@ class MouseController:
                 self._invalidate_access_state(OperationStatus.FAILED)
                 return OperationResult.failed(
                     "Falha de transporte no descritor hidraw ao aplicar DPI"
+                )
+            if ack_result.kind == AckResultKind.TRANSPORT_FAILURE:
+                # Falha REAL de acesso durante a espera do ACK
+                # (device desconectado entre o write e a leitura, fd
+                # sem permissão, transporte quebrado): comando NÃO
+                # considerado aplicado — fail closed com a causa
+                # exata e invalidação do snapshot.
+                transport = ack_result.read_outcome
+                status = (
+                    OperationStatus.DEVICE_NOT_FOUND
+                    if transport is not None
+                    and transport.kind == ReadOutcomeKind.DEVICE_NOT_FOUND
+                    else OperationStatus.PERMISSION_DENIED
+                    if transport is not None
+                    and transport.kind == ReadOutcomeKind.PERMISSION_DENIED
+                    else OperationStatus.FAILED
+                )
+                self._invalidate_access_state(status)
+                if status == OperationStatus.DEVICE_NOT_FOUND:
+                    return OperationResult.device_not_found(
+                        "Dispositivo desconectado durante a espera do "
+                        "ACK (hot-unplug entre o comando e a leitura)"
+                    )
+                if status == OperationStatus.PERMISSION_DENIED:
+                    return OperationResult.permission_denied(
+                        "Permissão perdida durante a espera do ACK "
+                        "(descritor hidraw sem acesso de leitura)"
+                    )
+                return OperationResult.failed(
+                    "Falha de transporte durante a espera do ACK "
+                    "(descritor hidraw indisponível na leitura)"
                 )
             if ack_result.kind == AckResultKind.TIMEOUT:
                 return OperationResult.failed(
@@ -624,7 +666,7 @@ class MouseController:
 
 def _wait_for_ack(hid: HidAccess, request_key: RequestKey) -> AckResult:
     """Classifica a resposta do request em resultado tipado: ACK, erro
-    de protocolo correlacionado ou TIMEOUT.
+    de protocolo correlacionado, causa REAL de transporte ou TIMEOUT.
 
     Reports que não casam com o request (event assíncrono de outro
     software, outra feature, outro report type) são descartados como
@@ -632,7 +674,14 @@ def _wait_for_ack(hid: HidAccess, request_key: RequestKey) -> AckResult:
     longo tem feature_index 0xFF e ecoa o byte function+sw do request
     (params[0]) — sem isso, erro assíncrono de outro request nunca é
     aceito. Máximo de 3 janelas de leitura para não esperar
-    indefinidamente em endpoint mudo."""
+    indefinidamente em endpoint mudo.
+
+    A leitura usa o contrato tipado ReadOutcome: timeout do select é
+    mudez (endpoint sem resposta); a causa REAL de acesso (device
+    desconectado, permissão perdida, transporte quebrado) NÃO vira
+    timeout — volta imediatamente em AckResult(kind=TRANSPORT_FAILURE)
+    com o ReadOutcome original em `read_outcome`, para que o caller
+    propague a causa exata."""
     import time
 
     deadline = time.monotonic() + 1.5
@@ -640,9 +689,21 @@ def _wait_for_ack(hid: HidAccess, request_key: RequestKey) -> AckResult:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return AckResult(AckResultKind.TIMEOUT, timed_out=True)
-        raw = hid.read(FAP_REPORT_LENGTH, timeout=min(0.5, remaining))
-        if raw is None:
+        outcome = hid.read(FAP_REPORT_LENGTH, timeout=min(0.5, remaining))
+        if outcome.is_timeout():
             continue
+        if outcome.is_transport_failure():
+            # Falha REAL de acesso durante a espera do ACK — a causa
+            # exata volta ao caller (device sumiu entre write e ACK,
+            # fd sem permissão, transporte quebrado). Não confundir
+            # com mudez: não há dados ≠ device ausente.
+            return AckResult(
+                AckResultKind.TRANSPORT_FAILURE,
+                read_outcome=outcome,
+            )
+        if outcome.data is None:
+            continue
+        raw = outcome.data
         if matches_ack(raw, request_key):
             return AckResult(AckResultKind.ACK, response=raw)
         if matches_protocol_error(raw, request_key):

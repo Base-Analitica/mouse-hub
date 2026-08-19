@@ -509,6 +509,94 @@ def test_write_failure_propagates_cause_and_invalidates(controller):
     assert hid.write_failure_status is None
 
 
+def test_failed_reprobe_invalidates_known_feature_index(controller):
+    """Re-probe falho NUNCA deixa o feature index do probe anterior
+    vivo (A/B/C) — o snapshot parte do zero e só sobrevive se ESTE
+    probe terminar bem. O DPI JÁ APLICADO é preservado (hardware não
+    perde o estado; só o conhecimento do endpoint morre): applied_dpi
+    continua disponível como evidência do último efeito confirmado."""
+    ctrl, hid, _ = controller
+    assert ctrl.probe_endpoint().status.ok
+    assert ctrl.set_hardware_dpi(800).status.ok
+    applied_before = ctrl.applied_dpi
+
+    causes = ("device_not_found", "permission_denied", "failed")
+    for cause in causes:
+        # Falha pontual no PRIMEIRO write do probe (GetProtocolVersion)
+        # — o probe aborta no meio e não conclui a etapa 2.
+        # O contador é resetado por iteração: a fixture já consumiu
+        # writes anteriores (probe inicial), então write_failure_at
+        # é ordinal absoluto, não relativo ao teste.
+        hid.write_failure_status = cause
+        hid._write_counter = 0
+        hid.write_failure_at = 1
+        result = ctrl.probe_endpoint()
+        assert result.status.value == cause, (
+            f"re-probe falho deve propagar a causa: {cause}"
+        )
+        # O conhecimento do endpoint morreu: nenhum efeito pode
+        # ter sucesso, e a causa é a real (nunca FAILED genérico).
+        hid.write_failure_status = None
+        hid.write_failure_at = None
+        assert not ctrl.capability_model().evaluate().is_available(
+            "hid_available"
+        )
+        result = ctrl.set_hardware_dpi(1600)
+        assert result.status.value == cause
+        # applied_dpi NÃO regrediu: o 800 confirmado antes continua
+        # como última evidência válida.
+        assert ctrl.applied_dpi == applied_before
+        # Recuperação: refresh + probe volta a funcionar.
+        ctrl.refresh_device(fake_g403_device())
+        assert ctrl.probe_endpoint().status.ok
+
+
+def test_read_hot_unplug_during_ack_wait_invalidates_with_cause(
+    controller,
+):
+    """Hot-unplug entre o write do SetSensorDPI e o read do ACK
+    (read_failure_status — causa REAL de transporte, NÃO timeout):
+    A/B/C propagam a causa exata, o snapshot é invalidado
+    imediatamente e nada é confirmado como aplicado."""
+    ctrl, hid, _ = controller
+    for cause in ("device_not_found", "permission_denied", "failed"):
+        hid.read_failure_status = cause
+        result = ctrl.set_hardware_dpi(800)
+        assert result.status.value == cause, (
+            f"hot-unplug no ACK deve propagar a causa: {cause}"
+        )
+        assert ctrl.applied_dpi is None
+        state = ctrl.capability_model().evaluate()
+        assert not state.is_available("hid_available")
+        assert not state.is_available("hardware_dpi_available")
+        hid.read_failure_status = None
+        ctrl.refresh_device(fake_g403_device())
+        assert ctrl.probe_endpoint().status.ok
+
+
+def test_real_timeout_never_becomes_hot_unplug(controller):
+    """Timeout REAL (device mudo) NÃO vira hot-unplug: sem causa de
+    transporte, o comando falha fechado com FAILED genérico — a causa
+    só é propagada quando há evidência REAL de acesso perdido. O
+    snapshot das capabilities NÃO é invalidado por mudez: o endpoint
+    ainda existe, apenas não respondeu."""
+    ctrl, hid, _ = controller
+    assert ctrl.capability_model().evaluate().is_available(
+        "hid_available"
+    )
+    # Mudez total no ACK (endpoint existe, não responde).
+    hid.ack_timeout = True
+    result = ctrl.set_hardware_dpi(800)
+    assert result.status.value == "failed"
+    assert "desconectado" not in result.message.lower()
+    # Mudez não invalida o snapshot: o endpoint continua conhecido.
+    assert ctrl.capability_model().evaluate().is_available(
+        "hid_available"
+    )
+    hid.ack_timeout = False
+    assert ctrl.set_hardware_dpi(800).status.ok
+
+
 def test_set_hardware_dpi_requires_probed_endpoint(controller):
     """Endpoint registrado mas NUNCA probeado: falha com a causa real
     (confirmação pendente), sem abrir nada."""

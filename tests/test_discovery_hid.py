@@ -17,6 +17,7 @@ import pytest
 
 from mouse_hub.core.constants import G403_PID, G403_VID
 from mouse_hub.core.operation import OperationStatus
+from mouse_hub.platform.read_outcome import ReadOutcomeKind
 from mouse_hub.platform.linux.device_discovery import (
     HydppEndpointSelection,
     discover,
@@ -488,7 +489,11 @@ def test_hid_never_writes_before_opening():
 
 def test_hid_read_timeout_returns_none_when_closed():
     hid = FakeHidAccess()
-    assert hid.read(20, timeout=0.01) is None
+    # Contrato tipado (ReadOutcome): handle fechado é TIMEOUT — nunca
+    # falha de transporte inventada (fd fechado ≠ device ausente).
+    outcome = hid.read(20, timeout=0.01)
+    assert outcome.kind == ReadOutcomeKind.TIMEOUT
+    assert outcome.data is None
 
 
 def test_hid_echoes_header_in_response(tmp_path):
@@ -508,10 +513,10 @@ def test_hid_echoes_header_in_response(tmp_path):
         hid.open(fake_g403_device())
         hid.write(report)
         response = hid.read(20)
-        assert response is not None
-        assert response[0] == report[0]
-        assert response[1] == report[1]
-        assert response[3] == report[3]
+        assert response.data is not None
+        assert response.data[0] == report[0]
+        assert response.data[1] == report[1]
+        assert response.data[3] == report[3]
         hid.close()
 
 
@@ -524,11 +529,11 @@ def test_hid_readback_acks_set_dpi():
     # (descoberto), fn 0x03 + sw 0x04, sensor 0, 1600 big endian.
     hid.write(b"\x11\xff\x01\x34\x00\x06\x40" + b"\x00" * 13)
     response = hid.read(20)
-    assert response is not None
+    assert response.data is not None
     # Eco do header em long report.
-    assert response[0] == 0x11
-    assert response[1] == 0xFF
-    assert response[2] == 0x01
-    assert (response[3] >> 4) & 0x0F == 0x03
+    assert response.data[0] == 0x11
+    assert response.data[1] == 0xFF
+    assert response.data[2] == 0x01
+    assert (response.data[3] >> 4) & 0x0F == 0x03
     # Payload: DPI aplicado confirmado pelo dispositivo.
     assert hid.applied_dpi == 1600

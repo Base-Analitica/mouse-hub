@@ -42,6 +42,7 @@ from typing import List, Optional
 
 from mouse_hub.core.constants import G403_PID, G403_VID
 from mouse_hub.core.operation import OperationStatus
+from mouse_hub.platform.read_outcome import ReadOutcomeKind, ReadOutcome
 from mouse_hub.platform.hidpp import (
     AckResultKind,
     DEVICE_INDEX_DIRECT,
@@ -143,6 +144,18 @@ def find_g403_hidraw_devices(
     return devices
 
 
+def _read_outcome_status(outcome) -> OperationStatus:
+    """ReadOutcome de transporte → OperationStatus equivalente, sem
+    colapsar causas (timeout não chega aqui)."""
+    mapping = {
+        ReadOutcomeKind.DEVICE_NOT_FOUND: OperationStatus.DEVICE_NOT_FOUND,
+        ReadOutcomeKind.PERMISSION_DENIED: OperationStatus.PERMISSION_DENIED,
+        ReadOutcomeKind.FAILED: OperationStatus.FAILED,
+    }
+    status = mapping.get(outcome.kind)
+    return status if status is not None else OperationStatus.FAILED
+
+
 def discover_g403(
     vid: int = G403_VID, pid: int = G403_PID, sysfs_root: Path = SYS_HIDRAW_ROOT
 ) -> Optional[MouseDevice]:
@@ -216,17 +229,33 @@ class HydppEndpointSelection:
     @staticmethod
     def _read_typed(hid: HidAccess, request_key, timeout: float):
         """Lê respostas até encontrar uma classificável como ACK, erro
-        correlacionado ou esgotar o tempo — reports que não casam com o
-        request (noise) são descartados sem efeito."""
+        correlacionado, causa real de acesso ou esgotar o tempo —
+        reports que não casam com o request (noise) são descartados
+        sem efeito.
+
+        O read é contrato tipado (ReadOutcome): o timeout real do select
+        continua TIMEOUT (endpoint mudo); a causa REAL de transporte
+        (DEVICE_NOT_FOUND/PERMISSION_DENIED/FAILED) é devolvida na hora
+        — o caller NUNCA trata hot-unplug como mudez."""
         import time
         deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return AckResultKind.TIMEOUT, None, None
-            raw = hid.read(FAP_REPORT_LENGTH, timeout=min(0.5, remaining))
-            if raw is None:
+            outcome = hid.read(FAP_REPORT_LENGTH, timeout=min(0.5, remaining))
+            if outcome.is_timeout():
                 continue
+            if outcome.is_transport_failure():
+                # Causa REAL de acesso (fd sem dado: device sumiu, sem
+                # permissão ou transporte quebrado) — o probe não pode
+                # classificar como mudez: quem consome o outcome deve
+                # propagar a causa.
+                return (AckResultKind.TRANSPORT_FAILURE,
+                        None, outcome)
+            if outcome.data is None:
+                continue
+            raw = outcome.data
             if matches_ack(raw, request_key):
                 return AckResultKind.ACK, raw, None
             if matches_protocol_error(raw, request_key):
@@ -277,9 +306,19 @@ class HydppEndpointSelection:
                 return ProbeOutcome(
                     valid=False, access_status=write_result.status,
                 )
-            kind, response, error_code = self._read_typed(
+            kind, response, error_or_outcome = self._read_typed(
                 self._hid, root.protocol_version_request_key(), 0.5,
             )
+            if kind == AckResultKind.TRANSPORT_FAILURE:
+                # Falha REAL de acesso no read (device sumiu, permissão
+                # perdida, transporte quebrado) — a causa é preservada
+                # no outcome, nunca colapsada em mudez.
+                return ProbeOutcome(
+                    valid=False, access_status=_read_outcome_status(
+                        error_or_outcome
+                    ) if error_or_outcome is not None else
+                    OperationStatus.FAILED,
+                )
             if kind != AckResultKind.ACK:
                 # Device mudo (TIMEOUT) ou rejeitou o ping
                 # (PROTOCOL_ERROR): endpoint não validável.
@@ -300,9 +339,18 @@ class HydppEndpointSelection:
                 return ProbeOutcome(
                     valid=False, access_status=write_result.status,
                 )
-            kind, response, error_code = self._read_typed(
+            kind, response, error_or_outcome = self._read_typed(
                 self._hid, root.get_feature_request_key(), 0.5,
             )
+            if kind == AckResultKind.TRANSPORT_FAILURE:
+                # Idem etapa 1: causa real de acesso no read, preservada
+                # no outcome.
+                return ProbeOutcome(
+                    valid=False, access_status=_read_outcome_status(
+                        error_or_outcome
+                    ) if error_or_outcome is not None else
+                    OperationStatus.FAILED,
+                )
             if kind == AckResultKind.TIMEOUT:
                 return ProbeOutcome(valid=False, access_status=OperationStatus.APPLIED)
             if kind == AckResultKind.PROTOCOL_ERROR:
@@ -317,7 +365,8 @@ class HydppEndpointSelection:
                 # no reason para diagnóstico.
                 return ProbeOutcome(
                     valid=False, access_status=OperationStatus.APPLIED,
-                    error_code=error_code,
+                    error_code=int(error_or_outcome)
+                    if isinstance(error_or_outcome, int) else None,
                 )
             parsed = root.parse_get_feature_response(response)
             if parsed is None:

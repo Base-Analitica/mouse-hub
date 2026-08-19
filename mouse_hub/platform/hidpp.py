@@ -319,6 +319,7 @@ def matches_protocol_error(response: bytes, request_key: RequestKey) -> bool:
 
 
 # ── Resultado tipado de leitura ─────────────────────────────────────
+from mouse_hub.platform.read_outcome import ReadOutcomeKind  # noqa: E402
 
 class AckResultKind(Enum):
     """Desfecho de uma janela de leitura FAP:
@@ -327,7 +328,11 @@ class AckResultKind(Enum):
     * PROTOCOL_ERROR   → erro HID++ 2.0 correlacionado com o request
                          (device rejeitou o comando com código real);
     * TIMEOUT          → nenhuma resposta na janela (device mudo ou
-                         response ainda não chegou).
+                         response ainda não chegou);
+    * TRANSPORT_FAILURE → causa REAL de acesso durante a leitura
+                         (device desconectado, permissão perdida ou
+                         transporte quebrado) — NUNCA confunde com
+                         TIMEOUT: não há dados ≠ device ausente.
     Reports que não casam com o request (event assíncrono de outro
     software, outra feature) são descartados como noise — não são
     nenhum destes.
@@ -336,6 +341,7 @@ class AckResultKind(Enum):
     ACK = "ack"
     PROTOCOL_ERROR = "protocol_error"
     TIMEOUT = "timeout"
+    TRANSPORT_FAILURE = "transport_failure"
 
 
 @dataclass(frozen=True)
@@ -347,6 +353,8 @@ class AckResult:
     error_code: Optional[int] = None
     # TIMEOUT: True.
     timed_out: bool = False
+    # TRANSPORT_FAILURE: ReadOutcome real (None nos demais casos).
+    read_outcome: Optional[object] = None
 
 
 # ── IRoot: entry point do dispositivo ───────────────────────────────

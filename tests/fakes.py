@@ -41,6 +41,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from mouse_hub.core.operation import OperationResult, OperationStatus
+from mouse_hub.platform.read_outcome import ReadOutcome, ReadOutcomeKind
 
 # Knob write_failure_status → OperationStatus real: "device_not_found"
 # (hot-unplug), "permission_denied", "failed" (genérico).
@@ -48,6 +49,18 @@ _WRITE_FAILURE_STATUS = {
     "device_not_found": OperationStatus.DEVICE_NOT_FOUND,
     "permission_denied": OperationStatus.PERMISSION_DENIED,
     "failed": OperationStatus.FAILED,
+}
+# Knob read_failure_status → ReadOutcome real: "device_not_found"
+# (hot-unplug), "permission_denied", "failed" (genérico) — o core
+# propaga a causa exata em vez de tratar como mudez.
+_READ_FAILURE_OUTCOME = {
+    "device_not_found": ReadOutcome.device_not_found(
+        "simulated hot-unplug on read"
+    ),
+    "permission_denied": ReadOutcome.permission_denied(
+        "simulated permission loss on read"
+    ),
+    "failed": ReadOutcome.failed("simulated transport failure on read"),
 }
 from mouse_hub.platform.hidpp import (
     FAP_REPORT_LENGTH,
@@ -126,6 +139,19 @@ class FakeHidAccess(HidAccess):
         # ou FAILED (genérico). É o desfecho determinístico do
         # hot-unplug pós-open: o controller deve propagar a causa exata.
         self.write_failure_status: Optional[str] = None
+        # Knob pontual: writeFailureStatus é GLOBAL (afeta TODOS os
+        # writes). write_failure_at limita o efeito a UMA operação
+        # (N-ésimo write == 1): para testar o SEGUNDO write do probe
+        # (GetFeature) sem afetar o primeiro (GetProtocolVersion).
+        self.write_failure_at: Optional[int] = None
+        self._write_counter: int = 0
+        # Leitura com causa REAL de transporte (fake do contrato
+        # ReadOutcome): read_failure_status ativa a falha; read_failure_at
+        # a limita ao N-ésimo read (determinístico). Hot-unplug entre o
+        # write do SetSensorDPI e o read do ACK é o caso típico.
+        self.read_failure_status: Optional[str] = None
+        self.read_failure_at: Optional[int] = None
+        self._read_counter: int = 0
         # DPI aplicado
         self.dpi_set_rejected: bool = False
         # Rejeita o SetSensorDPI com erro FAP 0x09 (UNSUPPORTED) em
@@ -228,9 +254,16 @@ class FakeHidAccess(HidAccess):
         return (payload + b"\x00" * (FAP_REPORT_LENGTH - len(payload)))[:FAP_REPORT_LENGTH]
 
     def write(self, report: bytes) -> OperationResult:
+        self._write_counter += 1
         if not self.is_open():
             return OperationResult.failed("no open descriptor")
-        if self.write_failure_status is not None:
+        # write_failure_at: falha pontual (N-ésimo write); caso geral
+        # (todos os writes) permanece em write_failure_status.
+        if (
+            self.write_failure_status is not None
+            and (self.write_failure_at is None
+                 or self._write_counter == self.write_failure_at)
+        ):
             # Hot-unplug/transport failure tipado: DEVICE_NOT_FOUND
             # (device sumiu), PERMISSION_DENIED (fd sem permissão) ou
             # FAILED (genérico) — o caller PRESERVA a causa real.
@@ -251,25 +284,36 @@ class FakeHidAccess(HidAccess):
         self._last_request = req
         return OperationResult.applied("request aceito pelo endpoint")
 
-    def read(self, length: int, timeout: float = 0.5) -> Optional[bytes]:
+    def read(self, length: int, timeout: float = 0.5) -> ReadOutcome:
         self.query_count += 1
-        if self._device is None:
-            return None
+        self._read_counter += 1
+        # Falha REAL de transporte na leitura (hot-unplug entre o
+        # write e o read, permissão perdida, transporte quebrado):
+        # read_failure_status define a causa; read_failure_at a
+        # limita ao N-ésimo read.
+        if (
+            self.read_failure_status is not None
+            and (self.read_failure_at is None
+                 or self._read_counter == self.read_failure_at)
+        ):
+            return _READ_FAILURE_OUTCOME[self.read_failure_status]
+        if not self.is_open():
+            return ReadOutcome.timeout("handle fechado no fake")
         if self.ack_timeout:
-            return None
+            return ReadOutcome.timeout()
 
         # Noise assíncrono primeiro: events de outro software que a
         # função consumidora deve ignorar (não são ACK).
         if self.async_noise:
-            return self.async_noise.pop(0)
+            return ReadOutcome.from_data(self.async_noise.pop(0))
 
         # Responses pré-programadas têm precedência explícita.
         if self.probe_responses:
-            return self.probe_responses.pop(0)
+            return ReadOutcome.from_data(self.probe_responses.pop(0))
 
         # Sem header de request válido: endpoint mudo.
         if self._last_request is None:
-            return None
+            return ReadOutcome.timeout()
         req = dict(self._last_request)
 
         # ── IRoot (feature index 0x00) ──────────────────────────────
@@ -286,12 +330,12 @@ class FakeHidAccess(HidAccess):
                 else:
                     ping_echo = req["params"][2] \
                         if len(req["params"]) >= 3 else 0x5A
-                return self._echo_response(
+                return ReadOutcome.from_data(self._echo_response(
                     req, bytes([self.protocol_major, 0x02, ping_echo])
-                )
+                ))
             if req["function"] == ROOT_FN_GET_FEATURE:
                 if len(req["params"]) < 3:
-                    return None
+                    return ReadOutcome.timeout()
                 feature_id = (req["params"][0] << 8) | req["params"][1]
                 # GetFeature(ADJUSTABLE_DPI) rejeitado pelo device?
                 if (
@@ -301,32 +345,40 @@ class FakeHidAccess(HidAccess):
                     # Erro FAP correlacionado com o código configurado
                     # (0x06 INVALID_FEATURE_INDEX, 0x08 BUSY etc.) — o
                     # layout ecoa feature index e fn+sw do request.
-                    return self._fap_error(
+                    return ReadOutcome.from_data(self._fap_error(
                         req, self.probe_stage2_error_code
-                    )
+                    ))
                 if feature_id == ADJUSTABLE_DPI_FEATURE_ID:
-                    return self._echo_response(
+                    return ReadOutcome.from_data(self._echo_response(
                         req, bytes([self.dpi_feature_index, 0x00, 0x03]),
-                    )
+                    ))
                 if feature_id == FEATURE_SET_FEATURE_ID:
                     # Index real da IFeatureSet: o core NUNCA assume 0x01.
-                    return self._echo_response(
+                    return ReadOutcome.from_data(self._echo_response(
                         req, bytes([self.ifeatureset_index, 0x00, 0x03]),
-                    )
+                    ))
                 # Feature ID desconhecida → não suportada (index 0).
-                return self._echo_response(req, bytes([0x00, 0x00, 0x00]))
-            return self._echo_response(req, bytes([0x00, 0x00, 0x00]))
+                return ReadOutcome.from_data(self._echo_response(
+                    req, bytes([0x00, 0x00, 0x00])
+                ))
+            return ReadOutcome.from_data(self._echo_response(
+                req, bytes([0x00, 0x00, 0x00])
+            ))
 
         # ── IFeatureSet ─────────────────────────────────────────────
         if req["feature_index"] == self.ifeatureset_index \
                 and self.ifeatureset_count >= 0:
             if req["function"] == 0x01:  # GetFeatureCount
-                return self._echo_response(req, bytes([self.ifeatureset_count, 0x00, 0x00]))
+                return ReadOutcome.from_data(self._echo_response(
+                    req, bytes([self.ifeatureset_count, 0x00, 0x00])
+                ))
             if req["function"] == 0x00:  # GetFeatureId(index)
                 idx = req["params"][0] if req["params"] else 0
                 ids = {0: ROOT_FEATURE_INDEX, self.ifeatureset_count - 1: 0x2201}
                 fid = ids.get(idx, 0x0000)
-                return self._echo_response(req, bytes([(fid >> 8) & 0xFF, fid & 0xFF, 0x03]))
+                return ReadOutcome.from_data(self._echo_response(
+                    req, bytes([(fid >> 8) & 0xFF, fid & 0xFF, 0x03])
+                ))
 
         # ── Adjustable DPI (feature index descoberto) ───────────────
         if (
@@ -334,26 +386,28 @@ class FakeHidAccess(HidAccess):
             and self.dpi_feature_index not in (None, 0)
         ):
             if req["function"] == GET_SENSOR_DPI_FN:  # GetSensorDPI
-                return self._echo_response(
+                return ReadOutcome.from_data(self._echo_response(
                     req, bytes([
                         0x00,  # sensor index
                         ((self._last_set_dpi or 0) >> 8) & 0xFF,
                         (self._last_set_dpi or 0) & 0xFF,
                         0x00,  # reserved
                     ]),
-                )
+                ))
             if req["function"] == DPI_FN_SET:  # SetSensorDPI
                 if self.dpi_set_fap_error:
-                    return self._fap_error(req, 0x09)  # UNSUPPORTED
+                    return ReadOutcome.from_data(self._fap_error(req, 0x09))
                 if self.dpi_set_rejected:
-                    return self._fap_error(req, 0x02)  # INVALID_ARGS
+                    return ReadOutcome.from_data(self._fap_error(req, 0x02))
                 dpi = (req["params"][1] << 8) | req["params"][2]
                 self._last_set_dpi = dpi
                 # ACK ecoa o header com params zerados (conferência).
-                return self._echo_response(req, b"")
+                return ReadOutcome.from_data(self._echo_response(req, b""))
 
         # Qualquer outro request: eco simples (funcionalidade extra).
-        return self._echo_response(req, req["params"][:3])
+        return ReadOutcome.from_data(self._echo_response(
+            req, req["params"][:3]
+        ))
 
     @property
     def applied_dpi(self) -> Optional[int]:
