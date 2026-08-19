@@ -154,15 +154,18 @@ def test_probe_feature_index_negative_is_error(controller):
 
 
 def test_probe_stage1_error(controller):
-    """GetFeature(0x2201) rejeitado com erro FAP 2.0: endpoint HID++ 2.0
-    válido mas sem a feature Adjustable DPI — probe termina unsupported.
+    """GetFeature(0x2201) rejeitado com erro FAP 2.0
+    (INVALID_FEATURE_INDEX 0x06) é PROTOCOL_ERROR do protocolo — o
+    endpoint NÃO confirmou o protocolo para esta feature; probe termina
+    FAILED (nunca assume feature ausente a partir de erro genérico).
     O erro devolvido pelo device é correlacionado com o request."""
     ctrl, hid, _ = controller
     hid.probe_stage2_error = True
+    hid.probe_stage2_error_code = 0x06
     ctrl.refresh_device(fake_g403_device())
     result = ctrl.probe_endpoint()
-    assert result.status.value == "unsupported"
-    assert ctrl._dpi_feature_index == -1
+    assert result.status.value == "failed"
+    assert ctrl._dpi_feature_index is None
 
 
 def test_probe_rejects_non_responsive_endpoint(controller):
@@ -172,6 +175,30 @@ def test_probe_rejects_non_responsive_endpoint(controller):
     assert not ctrl.probe_endpoint().status.ok
     assert ctrl._dpi_feature_index is None
     assert not hid.is_open()
+
+
+def test_probe_unsupported_feature_is_documented_absence(controller):
+    """Erro FAP 0x09 (UNSUPPORTED) no GetFeature(0x2201) é a forma
+    DOCUMENTADA de ausência da feature: probe confirma o endpoint e
+    marca 0x2201 ausente (não FAILED — a causa é distinta)."""
+    ctrl, hid, _ = controller
+    hid.probe_stage2_error = True
+    hid.probe_stage2_error_code = 0x09
+    ctrl.refresh_device(fake_g403_device())
+    result = ctrl.probe_endpoint()
+    assert result.status.value == "unsupported"
+    assert ctrl._dpi_feature_index == -1
+
+
+def test_probe_busy_or_hw_error_is_failed(controller):
+    """Erros transitórios/genéricos (BUSY 0x08, HW_ERROR) NÃO viram
+    ausência documentada: endpoint não confirmado — fail closed."""
+    ctrl, hid, _ = controller
+    hid.probe_stage2_error = True
+    hid.probe_stage2_error_code = 0x08  # BUSY
+    ctrl.refresh_device(fake_g403_device())
+    assert ctrl.probe_endpoint().status.value == "failed"
+    assert ctrl._dpi_feature_index is None
 
 
 def test_probe_handles_permission_denied(controller):
@@ -385,21 +412,23 @@ def test_persistence_happens_after_confirmation(controller, tmp_path):
     ctrl, hid, _ = controller
     persisted = []
 
-    def persister(value):
-        persisted.append(value)
-        return True
+    class TrackingPersister:
+        def persist_applied_dpi(self, value):
+            persisted.append(value)
+            return True
 
-    ctrl._dpi_persister = persister
+    ctrl._dpi_persister = TrackingPersister()
     result = ctrl.set_hardware_dpi(800)
     assert persisted == [800]
     assert result.details.get("persisted") is True
 
     # Falha de persistência: hardware confirmou, mas o estado não foi
     # gravado — o resultado informa os dois lados.
-    def broken(value):
-        return False
+    class BrokenPersister:
+        def persist_applied_dpi(self, value):
+            return False
 
-    ctrl._dpi_persister = broken
+    ctrl._dpi_persister = BrokenPersister()
     result = ctrl.set_hardware_dpi(1600)
     assert result.details.get("persisted") is False
     assert ctrl.applied_dpi == 1600
@@ -410,10 +439,11 @@ def test_persistence_exception_is_not_applied(controller):
     hardware, mas marca persisted=False."""
     ctrl, _, _ = controller
 
-    def raises(_):
-        raise RuntimeError("disco cheio")
+    class RaisingPersister:
+        def persist_applied_dpi(self, value):
+            raise RuntimeError("disco cheio")
 
-    ctrl._dpi_persister = raises
+    ctrl._dpi_persister = RaisingPersister()
     result = ctrl.set_hardware_dpi(800)
     assert result.status.ok
     assert result.details.get("persisted") is False

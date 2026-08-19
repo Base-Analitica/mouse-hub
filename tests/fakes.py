@@ -15,9 +15,11 @@ porém correta, conforme o driver upstream do kernel:
 * as respostas são COMPUTADAS a partir do request, espelhando o header
   (device_index, feature_index, function+software_id) — o core valida o
   eco do header como manda o protocolo;
-* erros FAP saem em report longo com feature_index 0xFF, params[0] =
-  function+sw do request rejeitado e params[1] = error code (o fake
-  correlaciona o erro ao request, como o dispositivo real faz).
+* erros FAP saem conforme `hidpp_match_error` do kernel upstream:
+  report longo com feature_index 0xFF no byte 2, o feature index do
+  request rejeitado ECHOADO no byte 3, function+sw do request no
+  byte 4 e o error code no byte 5 — o fake correlaciona o erro ao
+  request como o dispositivo real faz.
 
 Cenários configuráveis:
 
@@ -84,8 +86,19 @@ class FakeHidAccess(HidAccess):
         # anuncia. -1 = não implementado (device devolve erro NOT_ALLOWED).
         self.ifeatureset_count: int = 6
         # Rejeição do probe em GetFeature(0x2201) com erro FAP
-        # correlacionado (INVALID_FEATURE_INDEX 0x06).
+        # correlacionado. probe_stage2_error_code especifica o código
+        # real (ex.: 0x06 INVALID_FEATURE_INDEX; 0x08 BUSY; 0x09
+        # UNSUPPORTED — tratado como feature ausente pelo core).
         self.probe_stage2_error: bool = False
+        self.probe_stage2_error_code: int = 0x06
+        # GetProtocolVersion: major devolvido (params[0]). 0x04 =
+        # HID++ 2.0; 0x02 = 2.0 legacy; 0x8F = HID++ 1.0; valores
+        # desconhecidos não confirmam o protocolo.
+        self.protocol_major: int = 0x04
+        # GetProtocolVersion: ping_echo (params[2]) diverge do ping
+        # enviado — o kernel trata como ping mismatch (-EPROTO).
+        self.wrong_ping_echo: bool = False
+        self.ping_echo: Optional[int] = None
         # Software ID errado nas respostas: o header ecoa um sw_id de
         # outro cliente — o core deve tratar como não-ACK.
         self.sw_id_wrong: bool = False
@@ -180,18 +193,23 @@ class FakeHidAccess(HidAccess):
         return (payload + b"\x00" * (FAP_REPORT_LENGTH - len(payload)))[:FAP_REPORT_LENGTH]
 
     def _fap_error(self, req: dict, error_code: int) -> bytes:
-        """Erro FAP 2.0: report LONG com feature_index 0xFF, params[0]
-        = function+sw do request rejeitado (eco do header que o
-        protocolo garante), params[1] = error code. Pertence AO MESMO
-        request — matches_protocol_error exige o eco."""
+        """Erro FAP 2.0 conforme `hidpp_match_error` do kernel
+        upstream: report LONG com
+
+        [0x11][device_index][0xFF][feature_index DO REQUEST]
+        [function+sw DO REQUEST][error_code][zeros...]
+
+        O byte 3 ecoa o feature index do request rejeitado — por isso
+        o erro de OUTRA feature nunca casa com este request
+        (matches_protocol_error exige os três campos)."""
         fn_sw = (req["function"] << 4) | req["software_id"]
         payload = bytes([
             req["report_id"],
             req["device_index"],
             PROTOCOL_ERROR_FEATURE_INDEX,
-            fn_sw,
-            fn_sw,
-            error_code,
+            req["feature_index"],  # feature index do request (eco)
+            fn_sw,                  # function+sw do request (eco)
+            error_code,             # error code real
         ])
         return (payload + b"\x00" * (FAP_REPORT_LENGTH - len(payload)))[:FAP_REPORT_LENGTH]
 
@@ -235,9 +253,20 @@ class FakeHidAccess(HidAccess):
         # ── IRoot (feature index 0x00) ──────────────────────────────
         if req["feature_index"] == ROOT_FEATURE_INDEX:
             if req["function"] == ROOT_FN_GET_PROTOCOL_VERSION:
-                # [major 0x02, target_sw 0x02, ping_echo]
-                ping_echo = req["params"][2] if len(req["params"]) >= 3 else 0x5A
-                return self._echo_response(req, bytes([0x02, 0x02, ping_echo]))
+                # [major, target_sw, ping_echo] — configurable por
+                # teste para cobrir major 0x02/0x04/0x8F/desconhecido,
+                # ping mismatch e ping correto (default = eco).
+                if self.wrong_ping_echo and self.ping_echo is None:
+                    ping_echo = (req["params"][2] + 1) % 256 \
+                        if len(req["params"]) >= 3 else 0x00
+                elif self.ping_echo is not None:
+                    ping_echo = self.ping_echo
+                else:
+                    ping_echo = req["params"][2] \
+                        if len(req["params"]) >= 3 else 0x5A
+                return self._echo_response(
+                    req, bytes([self.protocol_major, 0x02, ping_echo])
+                )
             if req["function"] == ROOT_FN_GET_FEATURE:
                 if len(req["params"]) < 3:
                     return None
@@ -247,8 +276,12 @@ class FakeHidAccess(HidAccess):
                     feature_id == ADJUSTABLE_DPI_FEATURE_ID
                     and self.probe_stage2_error
                 ):
-                    # INVALID_FEATURE_INDEX 0x06 — erro FAP correlacionado.
-                    return self._fap_error(req, 0x06)
+                    # Erro FAP correlacionado com o código configurado
+                    # (0x06 INVALID_FEATURE_INDEX, 0x08 BUSY etc.) — o
+                    # layout ecoa feature index e fn+sw do request.
+                    return self._fap_error(
+                        req, self.probe_stage2_error_code
+                    )
                 if feature_id == ADJUSTABLE_DPI_FEATURE_ID:
                     return self._echo_response(
                         req, bytes([self.dpi_feature_index, 0x00, 0x03]),

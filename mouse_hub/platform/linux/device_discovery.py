@@ -261,7 +261,11 @@ class HydppEndpointSelection:
                 # Device mudo (TIMEOUT) ou rejeitou o ping
                 # (PROTOCOL_ERROR): endpoint não validável.
                 return ProbeOutcome(valid=False, accessible=True)
-            if root.parse_protocol_version_response(response) is None:
+            # Validação REAL do GetProtocolVersion: major in (0x02,
+            # 0x04) e ping_echo == ping enviado (0x5A). Major 0x8F
+            # (HID++ 1.0), valor desconhecido ou ping incorreto não
+            # confirmam HID++ 2.0.
+            if not root.is_protocol_version_confirmed(response):
                 return ProbeOutcome(valid=False, accessible=True)
 
             # Etapa 2: IRoot.GetFeature(0x2201) — presença de DPI.
@@ -275,12 +279,19 @@ class HydppEndpointSelection:
             if kind == AckResultKind.TIMEOUT:
                 return ProbeOutcome(valid=False, accessible=True)
             if kind == AckResultKind.PROTOCOL_ERROR:
-                # Erro FAP correlacionado (feature_index 0xFF, function
-                # ecoada): GetFeature válido para IRoot — erro aqui
-                # significa que a feature NÃO é suportada, mas o
-                # protocolo é real. Endpoint válido sem DPI.
-                return ProbeOutcome(valid=True, feature_index=None,
-                                    accessible=True)
+                # Erro FAP correlacionado NÃO significa "feature
+                # ausente". BUSY / HW_ERROR / NOT_ALLOWED /
+                # INVALID_ARGS / INVALID_FEATURE_INDEX indicam problema
+                # de protocolo ou do endpoint — o probe não pode
+                # confirmar nem negar o DPI: endpoint NÃO confirmado.
+                # Exceção documentada: UNSUPPORTED (0x09) — o
+                # dispositivo declara explicitamente que o Feature ID
+                # não existe — é a forma de o device dizer que o DPI
+                # não está presente, tratada como ausente.
+                if error_code == 0x09:
+                    return ProbeOutcome(valid=True, feature_index=None,
+                                        accessible=True)
+                return ProbeOutcome(valid=False, accessible=True)
             parsed = root.parse_get_feature_response(response)
             if parsed is None:
                 return ProbeOutcome(valid=False, accessible=True)

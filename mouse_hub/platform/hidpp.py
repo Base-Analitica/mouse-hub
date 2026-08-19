@@ -24,7 +24,7 @@ Modelo de protocolo conforme fontes primárias:
     (`LINUX_KERNEL_SW_ID`) no nibble alto de `funcindex_clientid`,
     para correlacionar requests com respostas.
 
-* especificação pública HID++ 2.0 (docs Logitech/OpenLogi):
+    * especificação pública HID++ 2.0 (docs Logitech/OpenLogi):
 
     report longo: [report_id 0x11][device_index 0xFF][feature_index]
                   [function 4b + software_id 4b][16 bytes params]
@@ -35,12 +35,17 @@ Modelo de protocolo conforme fontes primárias:
           (index 0 = feature não suportada)
       GetProtocolVersion(fn 1): params [0x00, 0x00, ping_data]
         → response params [major, target_sw, ping_echo]
+        A confirmação exige major in (0x02, 0x04) e ping_echo ==
+        ping_data enviado (kernel rejeita ping mismatch com -EPROTO).
 
-    Erro FAP: report longo com feature_index == 0xFF,
-      params [function do request, error_code] — o erro pertence ao
-      request que o dispositivo rejeitou; outros reports com
-      feature_index 0xFF de requests diferentes não são o erro deste
-      request.
+    Erro FAP — layout conforme `hidpp_match_error` do kernel:
+
+      [0x11][device_index][0xFF][feature_index do REQUEST]
+      [function+sw do REQUEST][error_code][zeros...]
+
+    O byte 3 do erro é o feature index ORIGINAL do request rejeitado,
+    não 0xFF; por isso um erro de OUTRA feature (mesma ou diferente
+    function) nunca casa com este request.
 
 A única garantia de feature index que a especificação dá sem consulta:
 IRoot (Feature ID 0x0000) está sempre no feature index 0. Para qualquer
@@ -85,9 +90,26 @@ FAP_REPORT_LENGTH = LONG_REPORT_LENGTH
 # (device index 0xFF = corded device / receiver).
 DEVICE_INDEX_DIRECT = 0xFF
 
-# Feature index 0xFF em report longo indica erro de protocolo FAP:
-# params[0] = function do request rejeitado, params[1] = error code.
+# Feature index 0xFF em report longo indica erro de protocolo FAP.
+#
+# Fonte: `hidpp_match_error` do kernel upstream (drivers/hid/
+# hid-logitech-hidpp.c) correlaciona o erro com o request por:
+#
+#   answer->fap.feature_index == HIDPP20_ERROR   (0xFF)
+#   answer->fap.funcindex_clientid == question->fap.feature_index
+#   answer->fap.params[0] == question->fap.funcindex_clientid
+#
+# Ou seja: no report de erro, o byte 3 carrega o feature index do
+# request rejeitado (ECHO), o byte 4 carrega o function+software_id
+# originais do request e o byte 5 carrega o error code real.
 PROTOCOL_ERROR_FEATURE_INDEX = 0xFF
+
+# Major versions devolvidos por IRoot.GetProtocolVersion (params[0]).
+# 0x04 = HID++ 2.0; 0x02 = 2.0 "legacy" (HID++ 2.0 pré-estabilizado,
+# aceito como 2.0 pelo kernel); 0x8F = HID++ 1.0 (fora do escopo).
+# Fonte: driver upstream `hidpp_root_get_protocol_version` + docs
+# Logitech/OpenLogi (IRoot protocol major).
+VALID_PROTOCOL_MAJORS = (0x04, 0x02)
 
 # Erro RAP (HID++ 1.0) em report curto: sub_id.
 RAP_ERROR_SUB_ID = 0x8F
@@ -183,10 +205,18 @@ class ParsedResponseHeader:
         )
 
 
-def parse_protocol_error(raw: bytes) -> Optional[int]:
+def parse_protocol_error(
+    raw: bytes,
+    request_key: Optional["RequestKey"] = None,
+) -> Optional[int]:
     """Código de erro FAP se `raw` é um report de erro de protocolo
     (report longo com feature_index == 0xFF): retorna o error code
-    (params[1]); otherwise None."""
+    (params[1] = raw[5]); otherwise None.
+
+    Com `request_key`, o erro SÓ é reconhecido se pertencer AO MESMO
+    request (feature index e fn+sw ecoados no erro, conforme
+    `hidpp_match_error` do kernel) — erro assíncrono de OUTRA feature
+    nunca é atribuído ao request corrente."""
     header = ParsedResponseHeader.parse(raw)
     if header is None or len(raw) < 6:
         return None
@@ -194,6 +224,13 @@ def parse_protocol_error(raw: bytes) -> Optional[int]:
         return None
     if header.feature_index != PROTOCOL_ERROR_FEATURE_INDEX:
         return None
+    if request_key is not None:
+        if raw[3] != request_key.feature_index:
+            return None
+        if raw[4] != (request_key.function << 4 | request_key.software_id):
+            return None
+        if raw[1] != request_key.device_index:
+            return None
     return raw[5]
 
 
@@ -255,19 +292,29 @@ def matches_ack(response: bytes, request_key: RequestKey) -> bool:
 
 def matches_protocol_error(response: bytes, request_key: RequestKey) -> bool:
     """True quando `response` é o erro FAP que pertence AO MESMO
-    request: report longo, feature_index 0xFF, e params[0] = o byte
-    function+software_id do request original (eco do header que o
-    protocolo garante). Erros de outros requests, outro software_id ou
-    outro report type são rejeitados."""
+    request. Conforme `hidpp_match_error` do kernel upstream, o erro
+    correlaciona com o request por TRÊS campos:
+
+    * feature_index (byte 3) == feature index do request;
+    * params[0] (byte 4) == function+software_id do request;
+    * report type longo (0x11) no mesmo device index.
+
+    Um erro de OUTRA feature com a mesma function/sw NÃO casa (byte 3
+    diverge) — regressão obrigatória: feature A rejeitada não pode ser
+    atribuída ao request da feature B. Erros de outro report type ou
+    outro device também são rejeitados."""
     if not response or len(response) < 6:
         return False
     if response[0] != LONG_REPORT_ID:
         return False
+    if response[1] != request_key.device_index:
+        return False
     if response[2] != PROTOCOL_ERROR_FEATURE_INDEX:
         return False
-    # O dispositivo ecoa o function+sw do request rejeitado em
-    # params[0] (comportamento documentado pelo kernel:
-    # response->fap.params[0]=funcindex, params[1]=error_code).
+    # Byte 3: feature index ORIGINAL do request rejeitado (eco).
+    if response[3] != request_key.feature_index:
+        return False
+    # Byte 4: function+sw originais do request rejeitado (eco).
     return response[4] == (request_key.function << 4 | request_key.software_id)
 
 
@@ -376,6 +423,24 @@ class RootFeature:
         if len(raw) < FAP_REPORT_LENGTH:
             return None
         return raw[4], raw[5], raw[6]
+
+    @staticmethod
+    def is_protocol_version_confirmed(
+        raw: bytes, ping_data: int = 0x5A
+    ) -> bool:
+        """True quando a resposta confirma HID++ 2.0 de verdade:
+
+        * major in (0x02, 0x04) — 0x8F é HID++ 1.0 e não serve;
+        * ping_echo (params[2]) == ping_data enviado.
+
+        O kernel upstream valida exatamente o ping (ping mismatch →
+        -EPROTO) e trata major 0x02 e 0x04 como 2.0.
+        Fonte: `hidpp_root_get_protocol_version` upstream."""
+        parsed = RootFeature.parse_protocol_version_response(raw)
+        if parsed is None:
+            return False
+        major, _target_sw, ping_echo = parsed
+        return major in VALID_PROTOCOL_MAJORS and ping_echo == (ping_data & 0xFF)
 
     def get_feature_request_key(self) -> RequestKey:
         return RequestKey.from_long_request(

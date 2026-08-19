@@ -10,9 +10,16 @@ DPI físico é FAIL CLOSED com confirmação de resposta:
   resposta esperada dentro do timeout (ACK da feature, conforme o
   protocolo HID++ 2.0);
 * escrita aceita mas sem resposta (TIMEOUT) ou erro de protocolo
-  correlacionado (report longo com feature_index 0xFF e function do
-  request ecoada) termina em FAILED com o error code real —
+  correlacionado (report longo conforme `hidpp_match_error` do kernel:
+  feature_index 0xFF, feature index do request ecoado e function+sw
+  originais) termina em FAILED com o error code real —
   `applied_dpi` nunca é atualizado e a sensibilidade nunca é tocada;
+
+COMPOSIÇÃO DE PRODUÇÃO — o caminho padrão é montar o controller com
+`make_linux_controller(hid, system_input)` (ou com ConfigPaths
+próprias): o persister REAL (DpiConfigPersister ligado à ConfigStore)
+é injetado automaticamente. Testes mantêm o hook `dpi_persister`
+(NeverDpiPersister por default) sem acoplar a UI ao controller.
 * todos os comandos FAP via o controller saem em LONG report 0x11 de
   20 bytes, conforme o driver upstream do kernel ("FAP only uses
   HIDPP_LONG messages") — nunca em short report;
@@ -49,6 +56,7 @@ from mouse_hub.core.capabilities import CapabilityModel
 from mouse_hub.core.config import ConfigPaths
 from mouse_hub.core.constants import G403_NAME, G403_PID, G403_VID
 from mouse_hub.core.dpi import clamp_dpi, normalize_dpi
+from mouse_hub.core.dpi_persistence import DpiConfigPersister, NeverDpiPersister
 from mouse_hub.core.operation import OperationResult, OperationStatus
 from mouse_hub.core.sensitivity import (
     accel_to_percent,
@@ -112,7 +120,9 @@ class MouseController:
         # Estado do acesso durante o probe (para capabilities e para
         # distinguir permission_denied sem probe prévio).
         self._probe_accessible: Optional[bool] = None
-        self._dpi_persister = dpi_persister
+        # Persister do DPI: quem chama injeta (tests: NeverDpiPersister;
+        # produção: DpiConfigPersister via make_linux_controller).
+        self._dpi_persister = dpi_persister or NeverDpiPersister()
 
     # ── Descoberta ────────────────────────────────────────────────
 
@@ -515,18 +525,48 @@ def _persist_applied_dpi(
 ) -> Optional[bool]:
     """Persiste o DPI confirmado SOMENTE após ACK físico válido.
 
-    `persister(effective) -> bool | None`:
+    O persister expõe `persist_applied_dpi(effective) -> bool`:
     * True  → persistido (applied_dpi salvo em config.json);
-    * False → hardware confirmou mas persistência falhou — os dois
-      estados ficam explícitos no resultado da operação;
-    * None  → persister ausente (aplicado, não persistido).
+    * False → hardware confirmou mas persistência bloqueada/falhou
+      (ex.: config corrompida/ilegível — guard fail-closed) — os dois
+      estados ficam explícitos no resultado da operação.
     Timeout/rejeição nunca chega aqui — o chamador só invoca após ACK.
-    A persistência nunca destrói arquivo corrompido: o persister padrão
-    (DpiConfigPersister, ligado à ConfigStore) escreve sobre a config
-    já carregada/validada."""
+    O persister de produção (DpiConfigPersister) escreve apenas quando
+    os dados carregados são confirmados (LoadKind.FILE ou DEFAULT com
+    arquivo realmente ausente); config corrompida/ilegível nunca é
+    sobrescrita."""
     if persister is None:
         return None
     try:
-        return bool(persister(effective))
+        return bool(persister.persist_applied_dpi(effective))
     except Exception:
         return False
+
+
+def make_linux_controller(
+    hid: HidAccess,
+    system_input: SystemInput,
+    config_paths: Optional[ConfigPaths] = None,
+    mouse_name: str = G403_NAME,
+    vid: int = G403_VID,
+    pid: int = G403_PID,
+) -> MouseController:
+    """Composição de PRODUÇÃO do MouseController para o Linux.
+
+    Monta o controller com o persister REAL ligado à ConfigStore XDG:
+    o DPI confirmado físico é persistido automaticamente em
+    config.json. Testes continuam injetando outro persister no
+    constructor (o caminho de produção é esta factory, não mutação de
+    atributo privado).
+
+    Falha de persistência NUNCA apaga o efeito aplicado: o hardware
+    mantém o DPI confirmado e o resultado da operação carrega
+    `persisted=False` explícito."""
+    return MouseController(
+        hid,
+        system_input,
+        mouse_name=mouse_name,
+        vid=vid,
+        pid=pid,
+        dpi_persister=DpiConfigPersister(config_paths),
+    )
