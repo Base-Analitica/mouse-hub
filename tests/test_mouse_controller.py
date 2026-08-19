@@ -132,7 +132,9 @@ def test_probe_discovers_feature_index_dynamically(controller):
 
 
 def test_probe_feature_absent_is_unsupported(controller):
-    """Endpoint HID++ 2.0 confirmado, mas sem a feature 0x2201: probe
+    """Endpoint HID++ 2.0 confirmado, mas sem a feature 0x2201:
+    ausência DOCUMENTADA via resposta válida feature_index == 0
+    (única forma da especificação pública IRoot/GetFeature): probe
     termina UNSUPPORTED (não FAILED) — a causa é distinta."""
     ctrl, hid, _ = controller
     hid.dpi_feature_index = 0  # IRoot devolve feature_index 0 = ausente
@@ -177,17 +179,135 @@ def test_probe_rejects_non_responsive_endpoint(controller):
     assert not hid.is_open()
 
 
-def test_probe_unsupported_feature_is_documented_absence(controller):
-    """Erro FAP 0x09 (UNSUPPORTED) no GetFeature(0x2201) é a forma
-    DOCUMENTADA de ausência da feature: probe confirma o endpoint e
-    marca 0x2201 ausente (não FAILED — a causa é distinta)."""
+def _other_logitech_device():
+    """Outro mouse Logitech HID++ 2.0 — protocola OK, mas NÃO é o
+    G403 HERO. Deve ser rejeitado pela validação de identidade."""
+    from mouse_hub.platform.protocol import MouseDevice
+
+    return MouseDevice(
+        hidraw_path="/dev/hidraw7",
+        vid=0x046D,
+        pid=0xC08B,  # G502 HERO, não o G403
+        name="Logitech G502 HERO",
+    )
+
+
+def _other_vendor_device():
+    """Mouse de outro fabricante com o mesmo PID acidental — rejeitado
+    pelo VID."""
+    from mouse_hub.platform.protocol import MouseDevice
+
+    return MouseDevice(
+        hidraw_path="/dev/hidraw9",
+        vid=0x1038,
+        pid=0xC08F,
+        name="SteelSeries genérico",
+    )
+
+
+# ── Identidade G403 (VID/PID) ──────────────────────────────────────
+
+
+def test_refresh_device_rejects_pid_mismatch(controller):
+    """Registrar outro mouse Logitech com PID diferente REJEITA o device:
+    self._device não guarda o device inválido, probe/set não têm efeito
+    sobre hardware errado — zero reports SetSensorDPI."""
+    ctrl, hid, _ = controller
+    result = ctrl.refresh_device(_other_logitech_device())
+    assert result.status.value == "device_not_found"
+    assert ctrl.device is None
+    assert ctrl._dpi_feature_index is None
+    # probe não confirma endpoint para hardware que não é o G403
+    assert not ctrl.probe_endpoint().status.ok
+    # set não escreve nada: defesa em profundidade antes do efeito
+    before = len(hid.written_reports)
+    ctrl.set_hardware_dpi(800)
+    assert len(hid.written_reports) == before
+
+
+def test_refresh_device_rejects_vid_mismatch(controller):
+    ctrl, _, _ = controller
+    result = ctrl.refresh_device(_other_vendor_device())
+    assert result.status.value == "device_not_found"
+    assert ctrl.device is None
+
+
+def test_probe_defends_against_identity_mismatch(controller):
+    """Defesa em profundidade: mesmo que o state interno esteja
+    comprometido com device de identidade errada (via mutação direta
+    em teste), probe NUNCA confirma endpoint para hardware que não é o
+    G403 esperado — o probe falha fechado antes de qualquer efeito."""
+    ctrl, _, _ = controller
+    ctrl._device = _other_logitech_device()
+    ctrl._dpi_feature_index = None
+    assert ctrl.probe_endpoint().status.value == "failed"
+    assert ctrl._dpi_feature_index is None
+
+
+def test_set_dpi_defends_against_identity_mismatch(controller):
+    """Defesa em profundidade no efeito: device comprometido não recebe
+    SetSensorDPI — o controller revalida VID/PID antes de abrir o
+    descritor."""
+    ctrl, hid, _ = controller
+    ctrl._device = _other_logitech_device()
+    before = len(hid.written_reports)
+    result = ctrl.set_hardware_dpi(800)
+    assert result.status.value == "failed"
+    assert len(hid.written_reports) == before
+    assert ctrl.applied_dpi is None
+
+
+def test_valid_device_after_rejection_is_accepted(controller):
+    """Rejeição anterior não contamina o controller: registrar o G403
+    correto DEPOIS de um mismatch é aceito e o lifecycle completo
+    segue funcionando."""
+    ctrl, _, _ = controller
+    ctrl.refresh_device(_other_logitech_device())
+    assert ctrl.refresh_device(fake_g403_device()).status.ok
+    assert ctrl.probe_endpoint().status.ok
+    assert ctrl.set_hardware_dpi(800).status.ok
+    assert ctrl.applied_dpi == 800
+
+
+def test_probe_without_hidraw_is_unsupported_not_absent(controller):
+    """Mouse presente mas sem interface hidraw: probe é UNSUPPORTED
+    (mouse_detected continua True) — device NUNCA é "ausente" aqui,
+    porque a descoberta encontrou o G403; apenas o controle via
+    protocolo HID++ é indisponível."""
+    ctrl, _, _ = controller
+    ctrl.refresh_device(fake_g403_device(hidraw=None))
+    assert ctrl.probe_endpoint().status.value == "unsupported"
+    state = ctrl.capability_model().evaluate()
+    assert state.is_available("mouse_detected")
+    assert not state.is_available("hid_endpoint_known")
+    assert not state.is_available("hid_available")
+    assert not state.is_available("hardware_dpi_available")
+
+
+def test_set_dpi_without_hidraw_is_unsupported(controller):
+    ctrl, _, _ = controller
+    ctrl.refresh_device(fake_g403_device(hidraw=None))
+    assert ctrl.set_hardware_dpi(800).status.value == "unsupported"
+    assert ctrl.applied_dpi is None
+
+
+def test_probe_protocol_error_is_failed_even_unsupported(controller):
+    """Erro FAP no GetFeature(0x2201) — INCLUSIVE 0x09 (UNSUPPORTED) —
+    é rejeição de comando, NÃO ausência documentada: fail closed.
+    A especificação pública IRoot/GetFeature define ausência da feature
+    APENAS via resposta válida com feature_index == 0; não há fonte
+    primária tratando PROTOCOL_ERROR 0x09 como "feature ausente".
+    O error code real é preservado no reason para diagnóstico."""
     ctrl, hid, _ = controller
     hid.probe_stage2_error = True
     hid.probe_stage2_error_code = 0x09
     ctrl.refresh_device(fake_g403_device())
     result = ctrl.probe_endpoint()
-    assert result.status.value == "unsupported"
-    assert ctrl._dpi_feature_index == -1
+    assert result.status.value == "failed"
+    assert result.details.get("fap_error_code") == 0x09, (
+        "error code real do erro FAP deve ser preservado no result"
+    )
+    assert ctrl._dpi_feature_index is None
 
 
 def test_probe_busy_or_hw_error_is_failed(controller):
@@ -207,6 +327,7 @@ def test_probe_handles_permission_denied(controller):
     result = ctrl.probe_endpoint()
     assert result.status.value == "permission_denied"
     assert ctrl._probe_accessible is False
+    assert ctrl._probe_access_status.value == "permission_denied"
 
 
 def test_probe_handles_open_exception(controller):

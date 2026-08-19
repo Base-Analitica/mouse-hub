@@ -330,7 +330,54 @@ def test_endpoint_selection_handles_permission_denied(tmp_path):
     hid = FakeHidAccess()
     hid.open_permission_denied = True
     selection = HydppEndpointSelection(hid)
+    outcomes = selection.probe(find_g403_hidraw_devices(G403_VID, G403_PID, root))
+    assert outcomes and outcomes[0].access_status == OperationStatus.PERMISSION_DENIED
     assert selection.select(find_g403_hidraw_devices(G403_VID, G403_PID, root)) is None
+
+
+def test_endpoint_selection_causes_are_never_collapsed(tmp_path):
+    """ProbeOutcome preserva a causa REAL do acesso — permission denied,
+    device ausente e falha genérica NUNCA colapsam em um único
+    accessible=False (nem se tornam True)."""
+    from mouse_hub.core.operation import OperationStatus
+
+    root = make_sysfs_root(tmp_path, {"hidraw2": G403_UEVENT})
+    hid = FakeHidAccess()
+    selection = HydppEndpointSelection(hid)
+    candidates = find_g403_hidraw_devices(G403_VID, G403_PID, root)
+
+    hid.open_permission_denied = True
+    outcome = selection.probe(candidates)[0]
+    assert outcome.access_status == OperationStatus.PERMISSION_DENIED
+    assert outcome.accessible is False
+
+    hid.open_permission_denied = False
+    hid.open_raises = RuntimeError("fd sumiu")
+    outcome = selection.probe(candidates)[0]
+    assert outcome.access_status == OperationStatus.FAILED
+    assert outcome.accessible is False
+
+    hid.open_raises = None
+    hid.ack_timeout = True  # open OK, protocolo mudo
+    outcome = selection.probe(candidates)[0]
+    assert outcome.access_status == OperationStatus.APPLIED
+    assert outcome.accessible is True
+    assert outcome.valid is False
+
+
+def test_endpoint_selection_protocol_error_carries_error_code(tmp_path):
+    """O error code real do erro FAP é preservado no outcome para o
+    reason do caller — nunca descartado."""
+    root = make_sysfs_root(tmp_path, {"hidraw2": G403_UEVENT})
+    hid = FakeHidAccess()
+    hid.probe_stage2_error = True
+    hid.probe_stage2_error_code = 0x08
+    selection = HydppEndpointSelection(hid)
+    outcome = selection.probe(
+        find_g403_hidraw_devices(G403_VID, G403_PID, root)
+    )[0]
+    assert outcome.error_code == 0x08
+    assert outcome.valid is False
 
 
 def test_endpoint_selection_closes_descriptor_after_probe(tmp_path):

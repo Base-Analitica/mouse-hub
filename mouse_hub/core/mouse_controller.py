@@ -120,11 +120,35 @@ class MouseController:
         # Estado do acesso durante o probe (para capabilities e para
         # distinguir permission_denied sem probe prévio).
         self._probe_accessible: Optional[bool] = None
+        # Desfecho REAL do último acesso no probe (para capabilities e
+        # para nunca colapsar permission_denied/device_not_found/falha
+        # genérica em um único accessible=False).
+        self._probe_access_status: Optional[OperationStatus] = None
         # Persister do DPI: quem chama injeta (tests: NeverDpiPersister;
         # produção: DpiConfigPersister via make_linux_controller).
         self._dpi_persister = dpi_persister or NeverDpiPersister()
 
     # ── Descoberta ────────────────────────────────────────────────
+
+    @staticmethod
+    def _matches_expected_device(
+        device: Optional[MouseDevice],
+        expected_vid: int,
+        expected_pid: int,
+    ) -> bool:
+        """True se o dispositivo corresponde à identidade esperada (VID
+        **e** PID). Usado em refresh_device ANTES de registrar e como
+        defesa em profundidade antes de qualquer efeito HID — o caller
+        pode ter usado discover_g403(), mas o controller NUNCA assume:
+        outro mouse Logitech HID++ 2.0 com a feature 0x2201 passaria no
+        protocolo sem esta checagem.
+
+        Fonte da identidade: core/constants G403_VID/G403_PID (046d:c08f;
+        issue #3 — validar que o dispositivo é realmente o G403 HERO
+        antes de qualquer escrita)."""
+        if device is None:
+            return False
+        return device.vid == expected_vid and device.pid == expected_pid
 
     def refresh_device(self, device: Optional[MouseDevice]) -> OperationResult:
         """Registra o dispositivo descoberto (por uma camada superior).
@@ -132,12 +156,33 @@ class MouseController:
         Não abre nenhum descritor: a abertura acontece apenas quando uma
         operação a exige (probe ou comando), e o descritor é fechado logo
         depois. Este método é somente leitura quanto ao HID.
+
+        A identidade do dispositivo (VID+PID) é validada ANTES de
+        armazenar: um device que não corresponda ao G403 esperado NUNCA
+        é registrado — self._device não pode continuar apontando para o
+        device rejeitado e o estado de probe é descartado.
         """
+        if not self._matches_expected_device(device, self._vid, self._pid):
+            # Rejeição: self._device NÃO guarda o device inválido e o
+            # estado de probe é resetado — nenhuma operação posterior
+            # tem efeito sobre hardware errado.
+            self._device = None
+            self._dpi_feature_index = None
+            self._probe_accessible = None
+            self._probe_access_status = None
+            if device is None:
+                return OperationResult.device_not_found(
+                    "Nenhum dispositivo registrado"
+                )
+            return OperationResult.device_not_found(
+                f"Dispositivo rejeitado: identidade divergente "
+                f"(esperado VID {self._vid:#06x} PID {self._pid:#06x}, "
+                f"recebido VID {device.vid:#06x} PID {device.pid:#06x})"
+            )
         self._device = device
         self._dpi_feature_index = None
         self._probe_accessible = None
-        if device is None:
-            return OperationResult.device_not_found("Nenhum dispositivo registrado")
+        self._probe_access_status = None
         if device.hidraw_path is None:
             return OperationResult.unsupported(
                 "Dispositivo sem interface hidraw acessível"
@@ -161,33 +206,61 @@ class MouseController:
         * PERMISSION_DENIED  → dispositivo presente mas sem regra udev;
         * FAILED/DEVICE_NOT  → endpoint não confirmou o protocolo.
         """
-        if self._device is None or self._device.hidraw_path is None:
-            return OperationResult.device_not_found("Nenhum endpoint para validar")
+        if self._device is None:
+            return OperationResult.device_not_found("Nenhum dispositivo registrado")
+        # Defesa em profundidade: revalidar a identidade do device
+        # registrado antes do probe — mesmo caminho via discover_g403().
+        if not self._matches_expected_device(self._device, self._vid, self._pid):
+            return OperationResult.failed(
+                "Dispositivo registrado não corresponde à identidade "
+                "esperada (VID/PID) — nenhum efeito HID aplicado"
+            )
+        if self._device.hidraw_path is None:
+            # Mouse presente (mouse_detected=True) mas sem interface
+            # hidraw controlável — não é "device ausente" (issue #3/#7).
+            return OperationResult.unsupported(
+                "Dispositivo presente, mas sem interface hidraw "
+                "acessível — não é controlável via protocolo HID++"
+            )
 
         selection = HydppEndpointSelection(self._hid)
         try:
             outcomes = selection.probe([self._device])
         except Exception as exc:
+            self._probe_access_status = OperationStatus.FAILED
             return OperationResult.failed(
                 f"Probe interrompido por falha de acesso: {exc}"
             )
 
         if not outcomes:
+            self._probe_access_status = OperationStatus.FAILED
             return OperationResult.device_not_found("Candidato sem probe")
 
         outcome: ProbeOutcome = outcomes[0]
         self._probe_accessible = outcome.accessible
+        self._probe_access_status = outcome.access_status
 
         if not outcome.valid:
-            if outcome.accessible is False:
+            if outcome.access_status == OperationStatus.PERMISSION_DENIED:
                 return OperationResult.permission_denied(
                     "Descritor hidraw sem permissão de leitura/escrita "
                     "(regra udev ausente ou usuário fora do grupo)"
                 )
+            if outcome.access_status == OperationStatus.DEVICE_NOT_FOUND:
+                return OperationResult.device_not_found(
+                    "Endpoint sumiu entre a descoberta e o probe "
+                    "(hot-unplug ou device removido)"
+                )
+            details: dict = {}
+            if outcome.error_code is not None:
+                details["fap_error_code"] = outcome.error_code
+            if outcome.access_status is not None:
+                details["access"] = outcome.access_status.value
             return OperationResult.failed(
                 "Endpoint não confirmou o protocolo HID++ "
-                "(resposta ausente, header não ecoado, erro 0x8F ou "
-                "ambiguidade entre candidatos)"
+                "(resposta ausente, header não ecoado, ping incorreto, "
+                "erro FAP ou ambiguidade entre candidatos)",
+                **details,
             )
 
         if outcome.feature_index is None:
@@ -227,9 +300,19 @@ class MouseController:
         * NUNCA toca na sensibilidade do sistema.
         """
         effective, was_rounded = normalize_dpi(value)
+        # Defesa em profundidade: a identidade registrada é revalidada
+        # ANTES de qualquer efeito HID — o caller pode ter usado
+        # discover_g403(), mas o controller confirma de novo e nunca
+        # escreve em device que não corresponda ao G403 esperado.
         if self._device is None:
             return OperationResult.device_not_found(
                 f"DPI físico requer o {G403_NAME} registrado"
+            )
+        if not self._matches_expected_device(self._device, self._vid, self._pid):
+            return OperationResult.failed(
+                f"Dispositivo registrado não corresponde ao {G403_NAME} "
+                f"(identidade VID/PID divergente) — nenhum efeito HID "
+                "aplicado"
             )
         if self._device.hidraw_path is None:
             return OperationResult.unsupported(
@@ -237,10 +320,14 @@ class MouseController:
                 "via protocolo HID++"
             )
         if self._dpi_feature_index is None:
-            if self._probe_accessible is False:
+            if self._probe_access_status == OperationStatus.PERMISSION_DENIED:
                 return OperationResult.permission_denied(
                     "Descritor hidraw sem permissão de leitura/escrita "
                     "(regra udev ausente ou usuário fora do grupo)"
+                )
+            if self._probe_access_status == OperationStatus.DEVICE_NOT_FOUND:
+                return OperationResult.device_not_found(
+                    "Endpoint indisponível entre a descoberta e o uso"
                 )
             return OperationResult.failed(
                 "Endpoint não confirmado no protocolo HID++ "
@@ -437,6 +524,12 @@ class MouseController:
         def _hid_access_available() -> object:
             if device is None or device.hidraw_path is None:
                 return False, "nenhum endpoint para acessar"
+            if self._probe_access_status == OperationStatus.PERMISSION_DENIED:
+                return False, "acesso negado ao descritor hidraw (regra udev ausente)"
+            if self._probe_access_status == OperationStatus.DEVICE_NOT_FOUND:
+                return False, "endpoint desapareceu entre a descoberta e o probe"
+            if self._probe_access_status == OperationStatus.FAILED:
+                return False, "falha de acesso ao descritor hidraw não relacionada a permissão"
             if self._probe_accessible is False:
                 return False, "acesso negado ao descritor hidraw (regra udev ausente)"
             if self._probe_accessible is None:
@@ -446,6 +539,10 @@ class MouseController:
         def _hardware_dpi_available() -> object:
             if device is None or device.hidraw_path is None:
                 return False, "nenhum endpoint com interface hidraw"
+            if self._probe_access_status == OperationStatus.PERMISSION_DENIED:
+                return False, "acesso negado ao descritor hidraw (regra udev ausente)"
+            if self._probe_access_status == OperationStatus.FAILED:
+                return False, "falha de acesso ao endpoint (open/probe falhou)"
             if self._probe_accessible is False:
                 return False, "acesso negado ao descritor hidraw (regra udev ausente)"
             if not feature_known:

@@ -55,14 +55,22 @@ def test_corrupted_config_is_never_overwritten(tmp_paths: ConfigPaths) -> None:
     assert outcome.kind == LoadKind.CORRUPTED
 
 
-def test_io_error_config_is_never_overwritten(tmp_paths: ConfigPaths) -> None:
-    """Persistência com dados não confirmados (LoadKind.IO_ERROR ou
-    CORRUPTED) nunca escreve. Rodando como root, chmod 0o000 não
-    bloqueia leitura — então o teste simula o caso pela corrupção do
-    arquivo (dados não confirmados), que é o mesmo guard do IO_ERROR:
-    sem LoadKind.FILE/DEFAULT-ausente não há escrita."""
-    _write(tmp_paths, "config ilegivel simulada: dados nao confirmados")
+def test_io_error_config_is_never_overwritten(
+    tmp_paths: ConfigPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IO_ERROR REAL e determinístico: a leitura do arquivo levanta
+    OSError (perda/indisponibilidade do fd) — o persister NÃO escreve,
+    os bytes do arquivo permanecem idênticos e o load reporta IO_ERROR.
+    monkeypatch substitui Path.read_text por uma que levanta OSError,
+    reproduzindo o caso sem depender de chmod 0o000 (que root ignora
+    e pode flaky em CI)."""
+    _write(tmp_paths, '{"applied_dpi": 800, "applied_sensitivity": 50}')
     original = tmp_paths.config_file.read_bytes()
+    monkeypatch.setattr(
+        "pathlib.Path.read_text",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("fd indisponível")),
+        raising=True,
+    )
     persister = DpiConfigPersister(tmp_paths)
 
     persisted = persister.persist_applied_dpi(1600)
@@ -70,7 +78,7 @@ def test_io_error_config_is_never_overwritten(tmp_paths: ConfigPaths) -> None:
     assert persisted is False
     assert tmp_paths.config_file.read_bytes() == original
     outcome = load_config_outcome(tmp_paths, strict=False)
-    assert outcome.kind == LoadKind.CORRUPTED
+    assert outcome.kind == LoadKind.IO_ERROR
 
 
 def test_valid_config_changes_only_applied_dpi(tmp_paths: ConfigPaths) -> None:

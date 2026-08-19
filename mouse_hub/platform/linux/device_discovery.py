@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from mouse_hub.core.constants import G403_PID, G403_VID
+from mouse_hub.core.operation import OperationStatus
 from mouse_hub.platform.hidpp import (
     AckResultKind,
     DEVICE_INDEX_DIRECT,
@@ -166,17 +167,35 @@ class ProbeOutcome:
     * valid=True e feature_index == None → endpoint confirma IRoot mas
       NÃO suporta 0x2201 (dpi indisponível neste dispositivo);
     * valid=False → endpoint não validável ou rejeitado pelo protocolo.
+
+    `access_status` PRESERVA A CAUSA REAL do acesso (nunca colapsa
+    DEVICE_NOT_FOUND e PERMISSION_DENIED em um único accessible=False):
+    * None            → probe não precisou abrir (sem hidraw) ou falha
+                        antes do open;
+    * OK              → descritor aberto com sucesso;
+    * PERMISSION_DENIED → open recusado (regra udev);
+    * DEVICE_NOT_FOUND  → device sumiu entre a descoberta e o probe
+                          (hot-unplug);
+    * FAILED          → open falhou por outra causa (fd indisponível).
+    `accessible` continua disponível como propriedade derivada (True
+    apenas quando o acesso foi de fato OK) para compatibilidade com quem
+    lê o outcome sem distinguir a causa.
     """
 
     valid: bool
     feature_index: Optional[int] = None
+    access_status: Optional[OperationStatus] = None
+    # Código de erro FAP quando o probe terminou em PROTOCOL_ERROR
+    # (para o reason do caller); None nos demais casos.
+    error_code: Optional[int] = None
 
-    # Permissão do acesso ao descritor durante o probe:
-    # * None        → probe não precisou abrir (sem hidraw) ou falha
-    #                 antes do open;
-    # * True        → descritor acessível;
-    # * False       → open recusado (permission denied, regra udev).
-    accessible: Optional[bool] = None
+    # Compatibilidade: True apenas quando o acesso foi realmente OK —
+    # PERMISSION_DENIED/DEVICE_NOT_FOUND/FAILED NÃO viram True.
+    @property
+    def accessible(self) -> Optional[bool]:
+        if self.access_status is None:
+            return None
+        return self.access_status == OperationStatus.APPLIED
 
 
 class HydppEndpointSelection:
@@ -231,20 +250,17 @@ class HydppEndpointSelection:
         Abre o descritor temporariamente e o fecha em qualquer caminho
         (inclusive exceção). Nenhum estado fica para trás.
         """
-        from mouse_hub.core.operation import OperationStatus
-
         opened = False
         try:
             open_result = self._hid.open(device)
             if not open_result.status.ok:
-                accessible = (
-                    open_result.status != OperationStatus.PERMISSION_DENIED
-                    and open_result.status != OperationStatus.DEVICE_NOT_FOUND
+                # open rejeitado (permissão negada, device ausente ou
+                # falha genérica) = endpoint não validável; a causa REAL
+                # é preservada no outcome (quem usa NUNCA colapsa
+                # permission denied com device ausente).
+                return ProbeOutcome(
+                    valid=False, access_status=open_result.status
                 )
-                # open rejeitado (permissão negada ou device ausente) =
-                # endpoint não validável; preservamos a permissão para
-                # quem usa distinguir o caso.
-                return ProbeOutcome(valid=False, accessible=accessible)
             opened = True
 
             root = RootFeature(DEVICE_INDEX_DIRECT, SoftwareId.MOUSE_HUB)
@@ -253,64 +269,65 @@ class HydppEndpointSelection:
             request = root.protocol_version_request()
             write_result = self._hid.write(request)
             if not write_result.status.ok:
-                return ProbeOutcome(valid=False, accessible=True)
+                return ProbeOutcome(valid=False, access_status=OperationStatus.FAILED)
             kind, response, error_code = self._read_typed(
                 self._hid, root.protocol_version_request_key(), 0.5,
             )
             if kind != AckResultKind.ACK:
                 # Device mudo (TIMEOUT) ou rejeitou o ping
                 # (PROTOCOL_ERROR): endpoint não validável.
-                return ProbeOutcome(valid=False, accessible=True)
+                return ProbeOutcome(valid=False, access_status=OperationStatus.APPLIED)
             # Validação REAL do GetProtocolVersion: major in (0x02,
             # 0x04) e ping_echo == ping enviado (0x5A). Major 0x8F
             # (HID++ 1.0), valor desconhecido ou ping incorreto não
             # confirmam HID++ 2.0.
             if not root.is_protocol_version_confirmed(response):
-                return ProbeOutcome(valid=False, accessible=True)
+                return ProbeOutcome(valid=False, access_status=OperationStatus.APPLIED)
 
             # Etapa 2: IRoot.GetFeature(0x2201) — presença de DPI.
             request = root.get_feature_request(FeatureId.ADJUSTABLE_DPI)
             write_result = self._hid.write(request)
             if not write_result.status.ok:
-                return ProbeOutcome(valid=False, accessible=True)
+                return ProbeOutcome(valid=False, access_status=OperationStatus.FAILED)
             kind, response, error_code = self._read_typed(
                 self._hid, root.get_feature_request_key(), 0.5,
             )
             if kind == AckResultKind.TIMEOUT:
-                return ProbeOutcome(valid=False, accessible=True)
+                return ProbeOutcome(valid=False, access_status=OperationStatus.APPLIED)
             if kind == AckResultKind.PROTOCOL_ERROR:
-                # Erro FAP correlacionado NÃO significa "feature
-                # ausente". BUSY / HW_ERROR / NOT_ALLOWED /
-                # INVALID_ARGS / INVALID_FEATURE_INDEX indicam problema
-                # de protocolo ou do endpoint — o probe não pode
-                # confirmar nem negar o DPI: endpoint NÃO confirmado.
-                # Exceção documentada: UNSUPPORTED (0x09) — o
-                # dispositivo declara explicitamente que o Feature ID
-                # não existe — é a forma de o device dizer que o DPI
-                # não está presente, tratada como ausente.
-                if error_code == 0x09:
-                    return ProbeOutcome(valid=True, feature_index=None,
-                                        accessible=True)
-                return ProbeOutcome(valid=False, accessible=True)
+                # QUALQUER erro FAP correlacionado (incluindo 0x09
+                # UNSUPPORTED) é rejeição de comando, NÃO ausência
+                # documentada: quem usa deve falhar fechado. A
+                # especificação pública IRoot/GetFeature define
+                # ausência da feature APENAS via resposta válida com
+                # feature_index == 0 — não há fonte primária que
+                # trate PROTOCOL_ERROR 0x09 neste comando como
+                # "feature ausente". O error code real é preservado
+                # no reason para diagnóstico.
+                return ProbeOutcome(
+                    valid=False, access_status=OperationStatus.APPLIED,
+                    error_code=error_code,
+                )
             parsed = root.parse_get_feature_response(response)
             if parsed is None:
-                return ProbeOutcome(valid=False, accessible=True)
+                return ProbeOutcome(valid=False, access_status=OperationStatus.APPLIED)
             feature_index, _flags, _version = parsed
             if feature_index == 0xFF:
                 # Resposta com feature index 0xFF não é um GetFeature
                 # legítimo — endpoint não validável.
-                return ProbeOutcome(valid=False, accessible=True)
+                return ProbeOutcome(valid=False, access_status=OperationStatus.APPLIED)
             # index 0 = feature não suportada (endpoint HID++ válido,
-            # sem Adjustable DPI).
+            # sem Adjustable DPI) — a única forma DOCUMENTADA de
+            # ausência da feature (IRoot.GetFeature response válida).
             return ProbeOutcome(
                 valid=True,
                 feature_index=feature_index if feature_index != 0 else None,
-                accessible=True,
+                access_status=OperationStatus.APPLIED,
             )
         except Exception:
             # Exceção de acesso (descritor sumiu, sysfs instável) é
             # "endpoint não validável" — nunca vira seleção nem vaza.
-            return ProbeOutcome(valid=False, accessible=True)
+            return ProbeOutcome(valid=False, access_status=OperationStatus.FAILED)
         finally:
             if opened:
                 self._hid.close()
