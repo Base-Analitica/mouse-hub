@@ -21,17 +21,24 @@ def clamp_dpi(value: int) -> int:
 def round_to_step(value: int, step: int = DPI_STEP) -> int:
     """Alinha um DPI ao step suportado pelo hardware (múltiplo de 50).
 
-    O alinhamento é feito para o múltiplo mais próximo; empates são
-    resolvidos para baixo, como no comportamento original do app.
+    O alinhamento é feito para o múltiplo mais próximo; empates exatos
+    (825, 875, ...) resolvem para cima.
     """
     clamped = clamp_dpi(value)
-    return (clamped // step) * step
+    base = (clamped // step) * step
+    # Múltiplo mais próximo; empates (825, 875, ...) resolvem para cima
+    # na metade superior, como na aritmética do firmware HID++.
+    return base + step if clamped - base >= step // 2 else base
 
 
 def next_dpi(value: int, step: int = DPI_STEP) -> int:
-    """Próximo DPI válido acima de `value` (para botões step up)."""
+    """Próximo DPI válido acima de `value` (para botões step up).
+
+    Valores já alinhados ao step também avançam (pressionar step-up em
+    800 leva a 850), como nos botões físicos de DPI.
+    """
     clamped = clamp_dpi(value)
-    stepped = ((clamped + step - 1) // step) * step
+    stepped = ((clamped + step) // step) * step
     return clamp_dpi(stepped)
 
 

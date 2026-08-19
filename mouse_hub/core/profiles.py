@@ -47,6 +47,7 @@ class ProfileStore:
             return default_config()
 
     def _write(self, config: Dict[str, Any]) -> None:
+        self._paths.config_dir.mkdir(parents=True, exist_ok=True)
         save_config(config, self._paths)
 
     def list_profiles(self) -> List[Profile]:

@@ -44,13 +44,13 @@ def test_clamp_dpi_rejects_non_int_like():
     [
         (800, 800),
         (824, 800),
-        (825, 850),
-        (849, 800),
+        (825, 850),   # empate exato resolve para cima
+        (849, 850),
         (851, 850),
         (100, 100),
         (25600, 25600),
         (123, 100),
-        (25599, 25550),
+        (25599, 25600),
     ],
 )
 def test_round_to_step(value, expected):
@@ -71,6 +71,7 @@ def test_clamp_then_step_composition():
     "value,expected",
     [
         (800, 850),
+        (801, 850),
         (850, 900),
         (25600, 25600),
         (100, 150),

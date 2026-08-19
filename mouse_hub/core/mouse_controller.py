@@ -70,10 +70,16 @@ class MouseController:
         if device.hidraw_path is None:
             # Mouse utilizável como apontador, mas sem acesso direto ao
             # sensor: DPI físico indisponível, sensibilidade ok.
+            self._hid.close()
             return OperationResult.unsupported(
                 "Dispositivo sem interface hidraw acessível"
             )
-        return self._hid.open(device)
+        open_result = self._hid.open(device)
+        if not open_result.status.ok:
+            # Falha ao abrir o novo dispositivo não pode deixar o antigo
+            # descritor aberto apontando para outro nó — fail closed.
+            self._hid.close()
+        return open_result
 
     @property
     def device(self) -> Optional[MouseDevice]:

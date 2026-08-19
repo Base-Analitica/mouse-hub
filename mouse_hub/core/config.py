@@ -134,14 +134,29 @@ def _load_json_safe(path: Path) -> Optional[Dict[str, Any]]:
 
 def _merge_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
     """Completa chaves ausentes com os defaults do produto, preservando
-    todo valor existente (compatível com versões antigas do arquivo)."""
+    todo valor existente (compatível com versões antigas do arquivo).
+
+    O dicionário `profiles` é tratado separadamente: ele é um mapa
+    definido pelo usuário, e perfis deletados não devem voltar do
+    default. Apenas a estrutura de cada perfil existente é garantida.
+    """
     base = default_config()
     for key, default in base.items():
+        if key == "profiles":
+            continue
         if key not in config:
             config[key] = default if not isinstance(default, dict) else dict(default)
         elif isinstance(default, dict) and isinstance(config[key], dict):
             for sub_key, sub_default in default.items():
                 config[key].setdefault(sub_key, sub_default)
+    if "profiles" not in config or not isinstance(config["profiles"], dict):
+        config["profiles"] = {k: dict(v) for k, v in base["profiles"].items()}
+    else:
+        default_profiles = base["profiles"]
+        for name, profile in config["profiles"].items():
+            if isinstance(profile, dict):
+                for sub_key, sub_default in default_profiles.get("default", {}).items():
+                    profile.setdefault(sub_key, sub_default)
     return config
 
 
@@ -168,6 +183,7 @@ def migrate_legacy_config(paths: ConfigPaths, legacy_dir: Path = DEFAULT_LEGACY_
     legacy_macros = legacy_dir / "macros.json"
     if legacy_macros.exists() and not paths.macros_file.exists():
         try:
+            paths.macros_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(legacy_macros, paths.macros_file)
             migrated = True
         except OSError:

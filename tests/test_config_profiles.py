@@ -75,7 +75,7 @@ def test_invalid_json_raises_config_error_with_backup(tmp_path):
     paths.config_dir.mkdir(parents=True)
     paths.config_file.write_text("{this is not json!")
     with pytest.raises(ConfigError):
-        load_config(paths)
+        load_config(paths, strict=True)
     backups = list(paths.config_dir.glob(".corrupted.*"))
     assert len(backups) == 1
     assert "this is not json!" in backups[0].read_text()
@@ -86,19 +86,17 @@ def test_non_object_json_raises_config_error(tmp_path):
     paths.config_dir.mkdir(parents=True)
     paths.config_file.write_text("[1, 2, 3]")
     with pytest.raises(ConfigError):
-        load_config(paths)
+        load_config(paths, strict=True)
 
 
 def test_load_starts_from_defaults_after_invalid_json(tmp_path):
     paths = ConfigPaths(tmp_path / "config", tmp_path / "data")
     paths.config_dir.mkdir(parents=True)
     paths.config_file.write_text("{{{")
-    try:
-        load_config(paths)
-    except ConfigError:
-        pass
     config = load_config(paths)
     assert config["dpi"] == DPI_DEFAULT
+    # O conteúdo corrompido foi preservado para diagnóstico.
+    assert any(paths.config_dir.glob(".corrupted.*"))
 
 
 # ── Migração legacy ───────────────────────────────────────────────
