@@ -47,6 +47,30 @@ class WindowFocusChecker(FocusChecker):
         self._cached: Optional[FocusedState] = None
         self._expiry = 0.0
 
+    @property
+    def is_available(self) -> bool:
+        """Capacidade do backend de leitura de título — distinto de
+        "janela não focada". Quando False (fonte indisponível), o
+        engine de foco trata como FALHA de backend (FAILED com causa
+        legível), não como bloqueio comum — o auto-clicker nunca deve
+        ficar ligado sem conseguir saber a janela ativa.
+
+        Adapter: delega ao `is_available` da fonte injetada quando
+        existir (`X11TitleSource` expõe; fakes de teste podem não
+        expor — aí assume disponível)."""
+        # A fonte pode expor `is_available` como método ou atributo
+        # (property, método, constante de classe). Qualquer valor
+        # existente é avaliado como booleano: False indica fonte
+        # comprometida (ex.: display X de leitura ausente), True
+        # indica capacidade normal. Fonte sem a propriedade assume
+        # disponível (compatibilidade com fakes legados).
+        attr = getattr(self._checker, "is_available", None)
+        if callable(attr):
+            return bool(attr())
+        if attr is None:
+            return True
+        return bool(attr)
+
     def is_focused(self, windows: tuple[str, ...]) -> FocusedState:
         """Consulta cache; só lê a janela ativa quando expirado.
 

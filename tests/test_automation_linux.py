@@ -23,7 +23,7 @@ from unittest import mock
 
 import pytest
 
-from mouse_hub.core.automation.autoclicker import AutoClickerState
+from mouse_hub.core.automation.autoclicker import AutoClickerEngine, AutoClickerState
 from mouse_hub.core.automation.focus import WindowFocusChecker
 from mouse_hub.core.automation.service import AutomationService
 from mouse_hub.core.automation.store import MacroStore, MacroStoreError
@@ -36,6 +36,7 @@ from mouse_hub.platform.linux.automation import (
 from mouse_hub.platform.linux.capture import InputCapture, XRecordBackend
 
 from .fakes import FakeAutomationIO, FakeFocusTitleSource
+from mouse_hub.core.automation.io import TitleSource
 
 
 # ══════════════════ Adapter XTest (LinuxAutomationIO) ═══════════════
@@ -929,3 +930,253 @@ def test_service_cleanup_closes_owned_not_injected(tmp_path):
     assert svc2._title_source is injected_ts
     assert not injected_io.closed
     assert not injected_ts.closed
+
+
+# ════════════════ Lifecycle XRecord pelo protocolo ═════════════════
+# Rodada 4 — o fake estrito agora emite StartOfData (handshake) e
+# EndOfData (barrier de drain) como o protocolo RECORD real.
+
+
+def test_capture_startofdata_handshake():
+    """O estado recording só transita DEPOIS do reply StartOfData —
+    nunca por suposição antes do enable_context retornar (que em
+    produção é bloqueante até a parada)."""
+    received = []
+
+    class HandshakeBackend(StrictFakeXRecordBackend):
+        """Backend controlável: o handshake (StartOfData) e os eventos
+        são entregues SOMENTE quando start_inject é chamado — antes
+        disso o enable_context está bloqueado sem nenhuma categoria."""
+
+        def __init__(self) -> None:
+            super().__init__(events_to_inject=[wire_key_press(38)])
+            self._inject_now = threading.Event()
+
+        def enable_context(self, ctx, data_display, ctl_display, callback):
+            # Validações do fake estrito (identidade).
+            super().__init__  # no-op; validação feita abaixo
+            if ctx not in self._ctx_map:
+                raise ValueError(f"ctx {ctx} desconhecido")
+            stored_data, stored_ctl, _ = self._ctx_map[ctx]
+            if data_display is not stored_data or ctl_display is not stored_ctl:
+                raise ValueError("identidade divergente")
+            self.enable_count += 1
+            self.order.append("enable_context")
+            self._enabled_ctx = ctx
+            self._callback = callback
+            # Bloqueia SEM emitir nada — o mundo real: enable_context
+            # retornando NÃO significa listener ativo.
+            self._inject_now.wait()
+            callback(self._make_reply_start())
+            for blob in self.events_to_inject:
+                callback(self._make_reply(blob))
+            while self._enabled_ctx == ctx:
+                time.sleep(0.005)
+            callback(self._make_reply_end())
+
+    backend = HandshakeBackend()
+    cap = InputCapture(lambda e: received.append(e), backend=backend)
+
+    # start() dispara o worker — que fica preso em enable_context SEM
+    # StartOfData. Em 200 ms o handshake NÃO chegou; recording deve
+    # continuar False (sem suposição).
+    started = threading.Thread(target=lambda: cap.start())
+    started.start()
+    time.sleep(0.2)
+    assert not cap.recording, "recording antes do StartOfData = suposição"
+    assert not received
+
+    # Entrega o handshake: start() deve completar e o evento chega.
+    backend._inject_now.set()
+    started.join(timeout=2.0)
+    assert cap.recording
+    cap.stop()
+    assert received and received[0].kind == EventType.KEY_PRESS
+
+
+def test_capture_endofdata_drain_barrier():
+    """A parada só conclui APÓS o EndOfData (barrier) — o worker não
+    sai por set arbitrário de evento; eventos pós-disable (drain)
+    antes da barrier são aceitos e entregues."""
+    received = []
+
+    class DrainBackend(StrictFakeXRecordBackend):
+        def enable_context(self, ctx, data_display, ctl_display, callback):
+            if ctx not in self._ctx_map:
+                raise ValueError(f"ctx {ctx} desconhecido")
+            stored_data, stored_ctl, _ = self._ctx_map[ctx]
+            if data_display is not stored_data or ctl_display is not stored_ctl:
+                raise ValueError("identidade divergente")
+            self.enable_count += 1
+            self.order.append("enable_context")
+            self._enabled_ctx = ctx
+            self._callback = callback
+            self._barrier_released = False
+            callback(self._make_reply_start())
+            while self._enabled_ctx == ctx:
+                time.sleep(0.005)
+            # drain: evento do servidor chega DEPOIS do disable mas
+            # ANTES da barrier — deve ser capturado
+            callback(self._make_reply(wire_key_press(39)))
+            self._barrier_released = True
+            callback(self._make_reply_end())
+
+    backend = DrainBackend()
+    cap = InputCapture(lambda e: received.append(e), backend=backend)
+    assert cap.start()
+    cap.stop()
+    # O evento de drain (pós-disable) foi capturado — barrier real.
+    assert any(e.kind == EventType.KEY_PRESS and e.keycode == 39 for e in received)
+    assert backend._barrier_released
+
+
+def test_capture_reply_batching():
+    """Um callback único com vários eventos no reply.data (batch real)
+    mantém deltas corretos via event.time do wire — não via monotonic
+    do cliente."""
+    backend = StrictFakeXRecordBackend(
+        events_to_inject=[
+            # 3 eventos no MESMO reply (batch), timestamps do servidor
+            # espaçados 10 ms — delta esperado: 0, 10, 10.
+            wire_key_press(38, time_ms=1000),
+            wire_key_release(38, time_ms=1010),
+            wire_key_press(40, time_ms=1020),
+        ]
+    )
+    received: list[RecordedEvent] = []
+    cap = InputCapture(lambda e: received.append(e), backend=backend)
+    assert cap.start()
+    cap.stop()
+    assert len(received) == 3
+    assert received[0].delta_ms == 0.0
+    assert abs(received[1].delta_ms - 10.0) < 1.0
+    assert abs(received[2].delta_ms - 10.0) < 1.0
+
+
+def test_capture_tail_event_during_stop():
+    """Evento FromServer que chega durante stop() (entre disable e a
+    barrier EndOfData) é aceito — o estado fica 'stopping' durante o
+    drain, não fecha o handler precocemente."""
+    backend = StrictFakeXRecordBackend(
+        events_to_inject=[wire_key_press(38, time_ms=2000)]
+    )
+    received: list[RecordedEvent] = []
+    cap = InputCapture(lambda e: received.append(e), backend=backend)
+    assert cap.start()
+    count = cap.stop()
+    # O único evento (entregue no enable) foi gravado e o contador do
+    # stop() reflete o snapshot pós-drain.
+    assert count == 1
+    assert received[0].kind == EventType.KEY_PRESS
+
+
+# ════════════════ TitleSource close idempotente ═════════════════════
+
+
+def test_titlesource_close_idempotent():
+    """close() fecha o display owned uma vez, é re-chamável sem erro e
+    zera o cache; a próxima consulta reabre sob demanda (sem recurso
+    aberto por padrão — o Display só nasce na primeira consulta)."""
+
+    class TrackDisplay:
+        """Display minimalista com close contabilizado."""
+
+        closed = 0
+
+        def __init__(self):
+            self.event_classes = {}
+
+        def has_extension(self, name):
+            return True
+
+        def close(self):
+            TrackDisplay.closed += 1
+
+        def intern_atom(self, atom, only_if_exists=0):
+            return 0
+
+        def screen(self):
+            screen = types.SimpleNamespace()
+            screen.root = types.SimpleNamespace(id=1)
+            return screen
+
+        def get_input_focus(self):
+            fs = types.SimpleNamespace()
+            fs.focus = None
+            return fs
+
+    TrackDisplay.closed = 0
+    source = X11TitleSource()
+    # Nenhum display aberto por padrão — close() idempotente não
+    # quebra nem trava (recurso nunca nasceu).
+    source.close()
+    source.close()
+    assert source._display is None
+    assert source._cached_title == ""
+
+    # Abre o recurso owned manualmente e fecha duas vezes: o display
+    # real é fechado EXATAMENTE uma vez.
+    with mock.patch.object(source, "_open", return_value=True):
+        source._display = TrackDisplay()
+    source.close()
+    source.close()
+    assert TrackDisplay.closed == 1, "display fechado mais de uma vez"
+    assert source._display is None
+    assert source._cached_title == ""
+
+
+# ════════════════ Falha de foco distinguível ════════════════════════
+
+
+class _UnavailableSource(TitleSource):
+    """TitleSource cuja capacidade está comprometida (is_available
+    False) — simula X11TitleSource com display X de leitura ausente."""
+
+    is_available = False
+
+    def active_window_title(self) -> None:
+        return None
+
+
+def test_focus_source_unavailable_distinguished():
+    """Fonte de título indisponível (X11TitleSource.is_available
+    False) é FALHA de backend — distinta de janela não focada
+    (BLOCKED_BY_FOCUS). O engine fica FAILED com causa legível."""
+
+    class UnavailableSource(TitleSource):
+        """TitleSource cuja capacidade está comprometida."""
+
+        is_available = False
+
+        def active_window_title(self) -> None:
+            return None
+
+    io = FakeAutomationIO()
+    checker = WindowFocusChecker(UnavailableSource())
+    assert checker.is_available is False
+    engine = AutoClickerEngine(
+        io=io, focus=checker, windows=("Minecraft",),
+    )
+    engine.start()
+    time.sleep(0.1)
+    engine.stop()
+    assert engine.state == AutoClickerState.FAILED
+    assert "fonte de título indisponível" in (engine.last_error or "")
+    # O backend NUNCA tentou clicar — o engine não fica "ligado" sem
+    # saber a janela ativa.
+    assert not io.events
+
+
+def test_focus_available_delegates_to_source():
+    """WindowFocusChecker.is_available delega ao is_available da
+    fonte; fonte sem a property (fakes legados) assume disponível."""
+
+    class SilentSource(TitleSource):
+        def active_window_title(self):
+            return "Minecraft"
+
+    checker_silent = WindowFocusChecker(SilentSource())
+    assert checker_silent.is_available is True
+
+    checker_un = WindowFocusChecker(_UnavailableSource())
+    assert checker_un.is_available is False

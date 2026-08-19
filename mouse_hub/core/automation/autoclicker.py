@@ -255,6 +255,15 @@ class AutoClickerEngine:
                     button = self._button
                     sched = self._scheduler
                 self._stats.focus_checks += 1
+                # Falha de foco DISTINGUÍVEL: a fonte de título
+                # (X11TitleSource) está indisponível — display X de
+                # leitura ausente/broken. Não é "janela não focada"
+                # (BLOCKED_BY_FOCUS): é um defeito do backend, e o
+                # engine NÃO deve ficar "ligado" clicando sem saber a
+                # janela ativa. Vira FAILED com causa legível pela UI.
+                if not self._focus.is_available:
+                    self.stop_and_failed("fonte de título indisponível")
+                    break
                 state = self._focus.is_focused(self._windows)
                 if state.focused:
                     if not self._io.click(button):

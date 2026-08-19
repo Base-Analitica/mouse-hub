@@ -536,18 +536,23 @@ class _FakeDisplay:
         return default
 
 
-def _wire_event(event_type: int, detail: int, root_x: int = 0, root_y: int = 0) -> bytes:
+def _wire_event(event_type: int, detail: int, root_x: int = 0, root_y: int = 0,
+                time_ms: int = 0) -> bytes:
     """Monta um evento X de 32 bytes no formato binário do protocolo.
 
     Layout comum (Key/Button/Motion): type(1) | detail(1) | sequence(2)
     | time(4) | root(4) | child(4) | root_x(2) | root_y(2) | x(2) |
     y(2) | state(2) | same_screen(1) | pad(1).
     KeyPress/KeyRelease: detail = keycode; ButtonPress/Release:
-    detail = botão; MotionNotify: root_x/root_y = posição global.
+    detail = botão; MotionNotify: root_x/root_y = posição global;
+    `time_ms` = timestamp do servidor X (bytes 4..7 LE, Card32) —
+    usado pelo _dispatch para deltas corretos dentro de batches.
     """
     buf = bytearray(32)
     buf[0] = event_type & 0xFF
     buf[1] = detail & 0xFF
+    # time: bytes 4..7 (Card32 LE — ms do servidor X)
+    buf[4:8] = (time_ms & 0xFFFFFFFF).to_bytes(4, "little")
     # Layout real do python-xlib (KeyButtonPointer): type(0)
     # detail(1) | sequence(2) | time(4) | root(8) | window(12) |
     # child(16) | root_x(20) | root_y(22) | event_x(24) | event_y(26)
@@ -556,24 +561,24 @@ def _wire_event(event_type: int, detail: int, root_x: int = 0, root_y: int = 0) 
     return bytes(buf)
 
 
-def wire_key_press(keycode: int) -> bytes:
-    return _wire_event(2, keycode)  # X.KeyPress
+def wire_key_press(keycode: int, time_ms: int = 0) -> bytes:
+    return _wire_event(2, keycode, time_ms=time_ms)  # X.KeyPress
 
 
-def wire_key_release(keycode: int) -> bytes:
-    return _wire_event(3, keycode)  # X.KeyRelease
+def wire_key_release(keycode: int, time_ms: int = 0) -> bytes:
+    return _wire_event(3, keycode, time_ms=time_ms)  # X.KeyRelease
 
 
-def wire_button_press(button: int) -> bytes:
-    return _wire_event(4, button)  # X.ButtonPress
+def wire_button_press(button: int, time_ms: int = 0) -> bytes:
+    return _wire_event(4, button, time_ms=time_ms)  # X.ButtonPress
 
 
-def wire_button_release(button: int) -> bytes:
-    return _wire_event(5, button)  # X.ButtonRelease
+def wire_button_release(button: int, time_ms: int = 0) -> bytes:
+    return _wire_event(5, button, time_ms=time_ms)  # X.ButtonRelease
 
 
-def wire_motion(x: int, y: int) -> bytes:
-    return _wire_event(6, 0, root_x=x, root_y=y)  # X.MotionNotify
+def wire_motion(x: int, y: int, time_ms: int = 0) -> bytes:
+    return _wire_event(6, 0, root_x=x, root_y=y, time_ms=time_ms)  # X.MotionNotify
 
 
 class StrictFakeXRecordBackend(XRecordBackend):
@@ -647,12 +652,24 @@ class StrictFakeXRecordBackend(XRecordBackend):
             raise self.enable_context_raises
         self._enabled_ctx = ctx
         self._callback = callback
+        # Lifecycle real do protocolo RECORD:
+        # 1) StartOfData — handshake que confirma o contexto
+        #    habilitado (o servidor SÓ começa a entregar eventos
+        #    depois deste reply) — como o XRecord real.
+        if callback is not None:
+            callback(self._make_reply_start())
+        # 2) eventos FromServer (wire-format cru, como a API real)
         for blob in self.events_to_inject:
             if callback is not None:
                 callback(self._make_reply(blob))
         # bloqueante até disable_context — como o XRecord real
         while self._enabled_ctx == ctx:
             time.sleep(0.005)
+        # 3) EndOfData — barrier de parada: o servidor encerrou o
+        #    stream DEPOIS do disable (drain completo) — como o
+        #    XRecord real. É este reply que destrava o worker.
+        if callback is not None:
+            callback(self._make_reply_end())
 
     def disable_context(self, ctx, ctl_display):
         if ctx not in self._ctx_map:
@@ -685,11 +702,32 @@ class StrictFakeXRecordBackend(XRecordBackend):
     @staticmethod
     def _make_reply(data: bytes):
         """Monta o reply `record.EnableContext` cru — data binário,
-        category FromServer (a única que o _dispatch processa)."""
+        category FromServer."""
         reply = types.SimpleNamespace()
         reply.category = xrecord.FromServer
         reply.client_swapped = False
         reply.data = data
+        return reply
+
+    @staticmethod
+    def _make_reply_start():
+        """Reply `StartOfData` — handshake que confirma o contexto
+        habilitado (o servidor começa a entregar eventos a partir
+        daqui). data vazio, como no protocolo real."""
+        reply = types.SimpleNamespace()
+        reply.category = xrecord.StartOfData
+        reply.client_swapped = False
+        reply.data = b""
+        return reply
+
+    @staticmethod
+    def _make_reply_end():
+        """Reply `EndOfData` — barrier de parada: o servidor encerrou
+        o stream. data vazio, como no protocolo real."""
+        reply = types.SimpleNamespace()
+        reply.category = xrecord.EndOfData
+        reply.client_swapped = False
+        reply.data = b""
         return reply
 
 

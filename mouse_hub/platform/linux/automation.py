@@ -272,6 +272,21 @@ class X11TitleSource(TitleSource):
     def is_available(self) -> bool:
         return not self._unavailable
 
+    def close(self) -> None:
+        """Fecha o display X owned exatamente uma vez, de forma
+        idempotente — consumido pelo `AutomationService.cleanup()`
+        para o TitleSource que ele mesmo criou (injetado = injetor).
+        Chamadas após a primeira são no-ops; consultas posteriores
+        reabrem sob demanda (o TTL zera junto)."""
+        with self._lock:
+            display = self._display
+            self._display = None
+            self._cached_title = ""
+            self._cached_until = 0.0
+        if display is not None:
+            with contextlib.suppress(Exception):
+                display.close()
+
     def _open(self) -> bool:
         if self._display is not None:
             return True

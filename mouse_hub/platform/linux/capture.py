@@ -28,6 +28,21 @@ Contrato de lifecycle desta implementação:
   (campo `RawField`) — os eventos são parseados com
   `rq.EventField(None).parse_binary_value(reply.data, display,
   None, None)`, exatamente como no exemplo oficial da biblioteca;
+* **lifecycle pelo protocolo RECORD**: a transição para
+  `recording` só ocorre no callback com categoria
+  `StartOfData` (o servidor confirma o contexto habilitado);
+  eventos `FromServer` recebidos antes disso são descartados
+  (buffer de pré-ativação); a parada é completada pela barrier
+  `EndOfData` — depois do `disable_context` o servidor ainda
+  entrega os eventos bufferizados e encerra o stream com
+  `EndOfData`, e só então o estado sai de `stopping` e o
+  worker retorna (drain completo, zero eventos perdidos);
+* **batching real**: um callback único pode carregar MÚLTIPLOS
+  eventos no `reply.data` — cada evento usa o timestamp `time`
+  do próprio wire (bytes 4..7, ms do servidor X) para calcular
+  delta contra o anterior, então deltas são corretos mesmo
+  dentro de um batch; deltas absolutos ignoram o monotonic
+  do cliente (o clock de referência é o do servidor X).
 * a máscara `device_events` é o range `(X.KeyPress .. X.MotionNotify)`
   (2..6) — cobre key, botão (4/5 dentro do range) e move real do
   ponteiro (6); sem colapsar press em release;
@@ -196,6 +211,8 @@ class InputCapture:
 
         self._start_mono: float = 0.0
         self._last_at: float = 0.0
+        self._first_time_ms: int = 0   # clock do servidor X do 1º evento
+        self._last_at_ms: float = 0.0  # offset ms do evento anterior
         self._count: int = 0
 
     # ── Estado ─────────────────────────────────────────────────────
@@ -263,7 +280,8 @@ class InputCapture:
         with self._lock:
             self._handles = XRecordHandles(ctl_display=ctl, data_display=data, ctx=ctx)
             self._start_mono = time.monotonic()
-            self._last_at = 0.0
+            self._first_time_ms = 0
+            self._last_at_ms = 0.0
             self._count = 0
 
         self._worker = threading.Thread(
@@ -293,7 +311,17 @@ class InputCapture:
                 return self._count
             self._state = "stopping"
             handles = self._handles
-            self._handles = None
+            # Os handles NÃO podem ser zerados aqui: o drain do stream
+            # (FromServer pós-disable, antes do EndOfData) ainda precisa
+            # do data_display para parsear os eventos. Zero apenas o
+            # ctx (o disable_context já foi chamado/será chamado pela
+            # conexão de controle) e mantém os displays até o cleanup.
+            if handles is not None:
+                self._handles = XRecordHandles(
+                    ctl_display=None,
+                    data_display=handles.data_display,
+                    ctx=handles.ctx,
+                )
 
         if handles is not None:
             try:
@@ -301,7 +329,12 @@ class InputCapture:
             except Exception:  # noqa: BLE001 — display pode já ter caído
                 pass
 
-        self._stop_event.set()
+        # A parada do worker NUNCA é declarada aqui: só o callback com
+        # `EndOfData` (barrier do servidor) transita para `stopped` e
+        # dispara `stop_event` (drain completo). O join aqui é a espera
+        # pela barrier; o timeout é só garantia de não-esperança em
+        # cenários irreais (ex.: callback nunca entrega EndOfData —
+        # o protocolo real sempre entrega após disable).
         worker = self._worker
         if worker is not None:
             worker.join(timeout=2.0)
@@ -365,17 +398,12 @@ class InputCapture:
             self._fail("contexto não criado")
             return
         try:
-            # O handshake é declarado pronto IMEDIATAMENTE antes de
-            # `enable_context`: mesma thread, instrução seguinte — não
-            # existe janela em que a UI veja "recording" sem o listener
-            # a caminho. (Sinalizar depois de a chamada retornar é
-            # inviável: em produção `record_enable_context` bloqueia
-            # até a parada, e sinalizar apenas no retorno tornaria
-            # `start()` síncrono com toda a gravação.)
-            with self._lock:
-                if self._state == "starting":
-                    self._state = "recording"
-            self._ready.set()
+            # enable_context é bloqueante até a parada — o handshake
+            # de prontidão NÃO é declarado aqui: só no callback com
+            # categoria StartOfData o servidor confirma que o
+            # listener está ativo. Declarar antes seria uma
+            # suposição (events FromServer podem chegar antes e são
+            # descartados por estarem em estado "starting").
             self._backend.enable_context(
                 handles.ctx, handles.data_display, handles.ctl_display, self._dispatch
             )
@@ -383,10 +411,13 @@ class InputCapture:
             self._fail(f"erro ao habilitar contexto: {exc}")
             return
 
-        # Aguarda a parada (contexto desabilitado). O enable_context
-        # já voltou acima; a espera aqui cobre o intervalo entre
-        # ready e o stop_event (e é o ponto onde o worker termina).
+        # Aguarda a barrier EndOfData (o servidor encerrou o stream
+        # de verdade) ou falha. O enable_context já voltou acima;
+        # a espera aqui cobre o intervalo entre o handshake e o
+        # stop_event (e é o ponto onde o worker termina).
         self._stop_event.wait()
+        # Drain completo: o stop só conclui aqui, DEPOIS de todos os
+        # eventos pós-disable terem sido entregues pelo servidor.
 
     # ── Dispatch / handler ─────────────────────────────────────────
 
@@ -401,18 +432,49 @@ class InputCapture:
         None, None)` — a struct do evento é resolvida pelo type byte
         via `display.event_classes`.
 
-        A verificação de `recording` sob lock garante que nenhum evento
-        é entregue ao handler depois de `stop()` (o disable_context
-        para de chamar este callback, e o estado transita antes).
+        O dispatch segue o lifecycle REAL do protocolo RECORD:
+
+        * `StartOfData` (4): o servidor confirma o contexto habilitado
+          — só aqui o estado transita para `recording` (handshake
+          verdadeiro, não uma suposição antes do enable);
+        * `FromServer` (0): eventos de input; aceitos enquanto
+          `recording` **ou** `stopping` (buffer pós-disable até a
+          barrier `EndOfData`);
+        * `EndOfData` (5): barrier de parada — o servidor encerrou o
+          stream; transita de `stopping` para `stopped` e destrava o
+          worker (drain completo — todos os eventos pós-disable
+          foram processados antes de sair);
+        * `FromClient` (1): resposta à criação do próprio contexto
+          durante o enable — descartado como o protocolo espera.
         """
         # Verificação de estado SEM a property `self.recording` — a
         # property re-adquire `self._lock` (não reentrante) e este
         # método já pode estar dentro de um bloco `with self._lock`,
         # causando deadlock do worker (que segura o lock até o enable
         # bloqueante retornar).
-        if not (self._state == "recording"):
+        category = getattr(reply, "category", None)
+        if category == xrecord.StartOfData:
+            # Handshake verdadeiro: só vira recording quando o
+            # servidor confirma o contexto habilitado.
+            with self._lock:
+                if self._state == "starting":
+                    self._state = "recording"
+                    self._first_time_ms = 0
+            self._ready.set()
             return
-        if getattr(reply, "category", None) != xrecord.FromServer:
+        if category == xrecord.EndOfData:
+            # Barrier de parada: o stream terminou de verdade —
+            # nenhum evento mais será entregue pelo servidor.
+            with self._lock:
+                if self._state == "stopping":
+                    self._state = "stopped"
+            self._ready.set()
+            self._stop_event.set()
+            return
+        if category == xrecord.FromClient:
+            # Confirmação do próprio enable — descartado.
+            return
+        if category != xrecord.FromServer:
             return
         raw = getattr(reply, "data", None)
         if not isinstance(raw, (bytes, bytearray)) or not raw:
@@ -431,14 +493,6 @@ class InputCapture:
             return
         proto_display = getattr(data_display, "display", data_display)
 
-        local_start = self._start_mono
-        now = time.monotonic() - local_start
-        with self._lock:
-            if self._count == 0:
-                last_at = 0.0
-            else:
-                last_at = self._last_at
-
         while raw:
             try:
                 event, raw = rq.EventField(None).parse_binary_value(
@@ -449,17 +503,25 @@ class InputCapture:
             payload = self._classify(event)
             if payload is None:
                 continue
+            # Cada evento carrega seu timestamp do servidor X
+            # (bytes 4..7, ms desde boot — protocolo X). Deltas vêm
+            # do clock do SERVIDOR, não do monotonic do cliente —
+            # correto mesmo com múltiplos eventos num batch único.
+            evt_time_ms = int(getattr(event, "time", 0))
             with self._lock:
+                if self._state not in ("recording", "stopping"):
+                    break
                 if self._count >= MAX_EVENTS:
                     break
-                # estado direto (lock já segurado — não usar
-                # `self.recording`, ver comentário acima)
-                if self._state != "recording":
-                    break
-                delta_ms = 0.0 if self._count == 0 else (now - last_at) * 1000.0
-                self._last_at = now
+                if self._count == 0:
+                    self._first_time_ms = evt_time_ms
+                    delta_ms = 0.0
+                else:
+                    delta_ms = max(
+                        0.0, (evt_time_ms - self._first_time_ms) - self._last_at_ms
+                    )
+                self._last_at_ms = evt_time_ms - self._first_time_ms
                 self._count += 1
-                last_at = now
                 recorded = RecordedEvent(
                     kind=EventType(payload["kind"]),
                     button=int(payload.get("button", 0)),
