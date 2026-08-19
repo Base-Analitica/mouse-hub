@@ -531,14 +531,21 @@ class MacroEngine:
         return name if ok else None
 
     def play(self, name, repeat=1):
-        """Inicia reprodução no worker de playback."""
-        if not self._svc.play(name, repeat=repeat):
-            print(f"[MACRO] play rejeitado (em gravação ou macro ausente)")
-            return False
-        return True
+        """Inicia reprodução no worker de playback. Já em execução,
+        rejeita silenciosamente (o serviço nunca sobrescreve o worker
+        em curso) — a UI usa playback_state para o feedback."""
+        return self._svc.play(name, repeat=repeat)
 
     def cancel_playback(self):
         return self._svc.cancel_playback()
+
+    @property
+    def playback_state(self):
+        return self._svc.playback_state
+
+    @property
+    def playback_error(self):
+        return self._svc.playback_error
 
     def cancel_recording(self):
         self._svc.cancel_recording()
@@ -1486,6 +1493,20 @@ class MacrosPage(QWidget):
         self.record_status.setStyleSheet(f"color: {COLORS['danger']}; font-size: 12px; font-weight: 600; background: transparent;")
         rl.addWidget(self.record_status)
 
+        # Feedback do playback (estado real do worker, incl. FAILED):
+        # refresh leve a cada 500ms — sem polling de subprocesso,
+        # apenas leitura de estado em memória do serviço.
+        self.play_status = QLabel("")
+        self.play_status.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 12px; "
+            "font-weight: 600; background: transparent;"
+        )
+        rl.addWidget(self.play_status)
+
+        self._play_timer = QTimer()
+        self._play_timer.timeout.connect(self._update_play_status)
+        self._play_timer.start(500)
+
         layout.addWidget(rec_frame)
 
         # Macro list
@@ -1543,6 +1564,25 @@ class MacrosPage(QWidget):
                 self.record_status.setText(
                     f"❌ Não foi possível iniciar a gravação: {reason}")
 
+    def _update_play_status(self) -> None:
+        """Reflete o estado real do playback: em execução ou FAILED com
+        o motivo do último erro. Sincroniza também os botões Play —
+        durante a reprodução qualquer botão vira '❌ Cancel'."""
+        state = self.me.playback_state
+        running = state == "running"
+        if running:
+            self.play_status.setText("▶️  Reproduzindo...")
+        elif state == "failed":
+            reason = self.me.playback_error or "falha de emissão"
+            self.play_status.setText(f"❌ Playback falhou: {reason}")
+        else:
+            self.play_status.setText("")
+        for child in self.macro_list_widget.findChildren(QPushButton):
+            if child.text() in ("▶️ Play", "❌ Cancel") and child is not getattr(
+                self, "_last_del_btn", None
+            ):
+                child.setText("❌ Cancel" if running else "▶️ Play")
+
     def _refresh_list(self):
         # Clear
         while self.macro_list_layout.count():
@@ -1599,7 +1639,19 @@ class MacrosPage(QWidget):
                 }}
                 QPushButton:hover {{ background: {COLORS['accent_light']}; }}
             """)
-            play_btn.clicked.connect(lambda _, n=name: self.me.play(n))
+
+            def on_play(btn, n=name):
+                """Play/Cancel — o botão espelha o estado do playback:
+                durante a execução vira '❌ Cancel' e encerra a
+                emissão em curso (worker exato, sem criar substituto)."""
+                if self.me.playing:
+                    self.me.cancel_playback()
+                    btn.setText("▶️ Play")
+                else:
+                    if self.me.play(n):
+                        btn.setText("❌ Cancel")
+
+            play_btn.clicked.connect(lambda _, b=play_btn: on_play(b))
             il.addWidget(play_btn)
 
             del_btn = QPushButton("🗑️")
