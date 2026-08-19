@@ -15,6 +15,12 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+# Bootstrap: o launcher executa este script a partir de app/;
+# o pacote mouse_hub (automation) vive no repositório raiz.
+_repo_root = str(Path(__file__).resolve().parent.parent)
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
 from datetime import datetime
 
 from PyQt5.QtWidgets import (
