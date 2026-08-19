@@ -172,8 +172,18 @@ class MacroStore:
             self._dirty = False
             return 0
 
+        # O container v1 é empacotado (schema_version + macros) —
+        # iterar o objeto raiz direto carregaria os metadados como
+        # macros. O legado v0/web era o dicionário raiz.
+        container = data.get("macros") if "schema_version" in data else data
+        if not isinstance(container, dict):
+            self._archive_corrupt("container não é um objeto JSON")
+            self._macros = {}
+            self._dirty = False
+            return 0
+
         macros: Dict[str, List[RecordedEvent]] = {}
-        for name, entries in data.items():
+        for name, entries in container.items():
             if not isinstance(name, str) or not name:
                 continue
             if len(macros) >= MAX_MACROS:
