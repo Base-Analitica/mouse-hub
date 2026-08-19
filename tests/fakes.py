@@ -8,8 +8,9 @@ exatamente o que "aplicou" e sob quais condições falha.
 
 from __future__ import annotations
 
-from typing import List, Optional
-
+from typing import Any, Dict, List, Optional
+from mouse_hub.core.automation.io import AutomationIO, TitleSource
+from mouse_hub.core.automation.types import MouseButton
 from mouse_hub.core.operation import OperationResult, OperationStatus
 from mouse_hub.platform.protocol import HidAccess, MouseDevice, SystemInput
 
@@ -115,3 +116,59 @@ def fake_g403_device(hidraw: Optional[str] = "/dev/hidraw2") -> MouseDevice:
         pid=G403_PID,
         name="Logitech G403 HERO Gaming Mouse",
     )
+
+
+class FakeAutomationIO(AutomationIO):
+    """Emissor direto que acumula eventos em memória.
+
+    Simula o comportamento de produção (XTest via python-xlib) sem
+    tocar no X: cada chamada registra o evento e o instante, o que
+    permite medir latência de hot path e verificar ausência de
+    subprocessos — este fake não cria nada além de objetos Python.
+    """
+
+    def __init__(self) -> None:
+        self.events: List[Dict[str, Any]] = []
+        self.fail_on_next: bool = False
+        self.pressed: Dict[str, bool] = {}
+
+    def click(self, button: MouseButton) -> bool:
+        if self.fail_on_next:
+            self.fail_on_next = False
+            return False
+        self.events.append({"type": "click", "button": button.value})
+        return True
+
+    def press(self, button: MouseButton) -> bool:
+        self.events.append({"type": "press", "button": button.value})
+        self.pressed[button.value] = True
+        return True
+
+    def release(self, button: MouseButton) -> bool:
+        self.events.append({"type": "release", "button": button.value})
+        self.pressed.pop(button.value, None)
+        return True
+
+    def key_press(self, keycode: int) -> bool:
+        if keycode == 0:
+            return False
+        self.events.append({"type": "key_press", "keycode": keycode})
+        return True
+
+    def key_release(self, keycode: int) -> bool:
+        self.events.append({"type": "key_release", "keycode": keycode})
+        return True
+
+    def move(self, x: int, y: int) -> bool:
+        self.events.append({"type": "move", "x": x, "y": y})
+        return True
+
+
+class FakeFocusTitleSource(TitleSource):
+    """Fonte de título da janela ativa programável por teste."""
+
+    def __init__(self, title: Optional[str] = None) -> None:
+        self.title = title
+
+    def active_window_title(self) -> Optional[str]:
+        return self.title
