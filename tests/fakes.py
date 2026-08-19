@@ -488,18 +488,222 @@ def fake_g403_device(hidraw: Optional[str] = "/dev/hidraw2") -> MouseDevice:
         pid=G403_PID,
         name="Logitech G403 HERO Gaming Mouse",
     )
+
+# ---------------------------------------------------------------------------
+# Fakes de automação (PR #13) — wire-format XRecord real.
+# O hot path NÃO usa Display X real: o backend fake entrega bytes de
+# wire-format do protocolo X e valida identidade/tipo de ctx, record
+# display e control display.
+
+import time
+import types
+from typing import List, Optional, Tuple
+
+from Xlib.protocol import event as xevent
+from Xlib.ext import record as xrecord
+
+from mouse_hub.core.automation.io import AutomationIO
+from mouse_hub.core.automation.types import MouseButton
+from mouse_hub.platform.linux.capture import XRecordBackend
+from mouse_hub.platform.linux.automation import TitleSource
+
+
+# ══════════════════ Wire-format de eventos X (32 bytes) ════════════
+
+class _FakeDisplay:
+    """Display opaco mínimo para o parse de wire-format.
+
+    `rq.EventField(None).parse_binary_value` só consulta
+    `display.event_classes[type & 0x7f]` — para os eventos de device
+    que o XRecord entrega (Key/Button/Motion), mapeamos as structs
+    reais do python-xlib. Tipos não registrados caem no `AnyEvent`
+    (fallback da própria biblioteca).
+    """
+
+    def __init__(self):
+        self.event_classes = {
+            2: xevent.KeyPress,    # X.KeyPress
+            3: xevent.KeyRelease,  # X.KeyRelease
+            4: xevent.ButtonPress,     # X.ButtonPress
+            5: xevent.ButtonRelease,   # X.ButtonRelease
+            6: xevent.MotionNotify,    # X.MotionNotify
+        }
+
+    def get_resource_class(self, class_name, default=None):
+        """O parse de eventos resolve campos Window/Card32 por nome de
+        recurso — sem display real não há registro, então devolvemos o
+        default (campo fica com o valor cru)."""
+        return default
+
+
+def _wire_event(event_type: int, detail: int, root_x: int = 0, root_y: int = 0) -> bytes:
+    """Monta um evento X de 32 bytes no formato binário do protocolo.
+
+    Layout comum (Key/Button/Motion): type(1) | detail(1) | sequence(2)
+    | time(4) | root(4) | child(4) | root_x(2) | root_y(2) | x(2) |
+    y(2) | state(2) | same_screen(1) | pad(1).
+    KeyPress/KeyRelease: detail = keycode; ButtonPress/Release:
+    detail = botão; MotionNotify: root_x/root_y = posição global.
+    """
+    buf = bytearray(32)
+    buf[0] = event_type & 0xFF
+    buf[1] = detail & 0xFF
+    # Layout real do python-xlib (KeyButtonPointer): type(0)
+    # detail(1) | sequence(2) | time(4) | root(8) | window(12) |
+    # child(16) | root_x(20) | root_y(22) | event_x(24) | event_y(26)
+    buf[20:22] = (root_x & 0xFFFF).to_bytes(2, "little")
+    buf[22:24] = (root_y & 0xFFFF).to_bytes(2, "little")
+    return bytes(buf)
+
+
+def wire_key_press(keycode: int) -> bytes:
+    return _wire_event(2, keycode)  # X.KeyPress
+
+
+def wire_key_release(keycode: int) -> bytes:
+    return _wire_event(3, keycode)  # X.KeyRelease
+
+
+def wire_button_press(button: int) -> bytes:
+    return _wire_event(4, button)  # X.ButtonPress
+
+
+def wire_button_release(button: int) -> bytes:
+    return _wire_event(5, button)  # X.ButtonRelease
+
+
+def wire_motion(x: int, y: int) -> bytes:
+    return _wire_event(6, 0, root_x=x, root_y=y)  # X.MotionNotify
+
+
+class StrictFakeXRecordBackend(XRecordBackend):
+    """Backend fake estrito do XRecord com wire-format real.
+
+    * `create_context`/`enable_context`/`disable_context`/`free_context`
+      recebem a assinatura canônica (`ctx`, `data_display`,
+      `ctl_display`, `callback`) e VALIDAM a identidade dos objetos:
+      o data_display e o ctl_display usados em enable/disable/free
+      devem ser os MESMOS objetos passados na criação (e ctx inteiro);
+      divergência vira `ValueError`;
+    * `enable_context` é bloqueante até disable_context (como o XRecord
+      real) — o thread do worker só retorna quando a parada chega pela
+      conexão de controle;
+    * `events_to_inject` é uma sequência de BYTES de wire-format
+      (saída de `wire_*`), NÃO uma lista de objetos já parseados —
+      `_dispatch` recebe o reply cru com `reply.data` binário, como na
+      API real do python-xlib.
+    """
+
+    def __init__(self, events_to_inject: Optional[List[bytes]] = None) -> None:
+        self.events_to_inject: List[bytes] = list(events_to_inject or [])
+        self.create_count = 0
+        self.enable_count = 0
+        self.disable_count = 0
+        self.free_count = 0
+        self.order: List[str] = []
+        self.enable_context_raises: Optional[Exception] = None
+        # mapa de contextos vivos: ctx -> (data_display, ctl_display, callback)
+        self._ctx_map = {}
+        self._next_ctx = 1
+        self._enabled_ctx: Optional[int] = None
+        self._callback = None
+        self.data_display_used = None
+        self.ctl_display_used = None
+
+    def open_display(self):
+        """Display opaco com o mínimo que `EventField.parse_binary_value`
+        exige: `event_classes` mapeando type byte → struct de evento
+        (o fallback AnyEvent cobre tipo não registrado). Dois displays
+        retornados são objetos DISTINTOS para o fake validar identidade."""
+        return _FakeDisplay()
+
+    def create_context(self, ctx_spec, data_display, ctl_display, callback):
+        if not isinstance(ctx_spec, int):
+            raise TypeError("ctx_spec deve ser inteiro")
+        ctx = self._next_ctx
+        self._next_ctx += 1
+        self._ctx_map[ctx] = (data_display, ctl_display, callback)
+        self.create_count += 1
+        self.order.append("create_context")
+        return ctx
+
+    def enable_context(self, ctx, data_display, ctl_display, callback):
+        if ctx not in self._ctx_map:
+            raise ValueError(f"ctx {ctx} desconhecido em enable_context")
+        stored_data, stored_ctl, stored_cb = self._ctx_map[ctx]
+        if data_display is not stored_data:
+            raise ValueError(
+                "enable_context com data_display de identidade divergente"
+            )
+        if ctl_display is not stored_ctl:
+            raise ValueError(
+                "enable_context com ctl_display de identidade divergente"
+            )
+        self.enable_count += 1
+        self.order.append("enable_context")
+        self.data_display_used = data_display
+        self.ctl_display_used = ctl_display
+        if self.enable_context_raises is not None:
+            raise self.enable_context_raises
+        self._enabled_ctx = ctx
+        self._callback = callback
+        for blob in self.events_to_inject:
+            if callback is not None:
+                callback(self._make_reply(blob))
+        # bloqueante até disable_context — como o XRecord real
+        while self._enabled_ctx == ctx:
+            time.sleep(0.005)
+
+    def disable_context(self, ctx, ctl_display):
+        if ctx not in self._ctx_map:
+            raise ValueError(f"ctx {ctx} desconhecido em disable_context")
+        stored_data, stored_ctl, stored_cb = self._ctx_map[ctx]
+        if ctl_display is not stored_ctl:
+            raise ValueError(
+                "disable_context com ctl_display de identidade divergente"
+            )
+        self.disable_count += 1
+        self.order.append("disable_context")
+        if self._enabled_ctx == ctx:
+            self._enabled_ctx = None
+
+    def free_context(self, ctx, ctl_display):
+        if ctx not in self._ctx_map:
+            raise ValueError(f"ctx {ctx} desconhecido em free_context")
+        stored_data, stored_ctl, stored_cb = self._ctx_map[ctx]
+        if ctl_display is not stored_ctl:
+            raise ValueError(
+                "free_context com ctl_display de identidade divergente"
+            )
+        self.free_count += 1
+        self.order.append("free_context")
+        del self._ctx_map[ctx]
+
+    def close_display(self, display):
+        self.order.append("close_display")
+
+    @staticmethod
+    def _make_reply(data: bytes):
+        """Monta o reply `record.EnableContext` cru — data binário,
+        category FromServer (a única que o _dispatch processa)."""
+        reply = types.SimpleNamespace()
+        reply.category = xrecord.FromServer
+        reply.client_swapped = False
+        reply.data = data
+        return reply
+
+
 class FakeAutomationIO(AutomationIO):
     """AutomationIO fake que acumula eventos emitidos — usado para
     validar o hot path sem abrir Display X real."""
 
     def __init__(self) -> None:
-        self.events: List[Tuple[str, Any]] = []
+        self.events: List[Tuple[str, str]] = []
         self._fail = False
-        self._press: Set[str] = set()
+        self._press = set()
+        self.closed = False
 
     def set_fail(self, fail: bool) -> None:
-        """Força as próximas emissões a retornar False (simula XTest
-        indisponível)."""
         self._fail = fail
 
     @property
@@ -547,58 +751,18 @@ class FakeAutomationIO(AutomationIO):
         return True
 
     @property
-    def pressed(self) -> Set[str]:
+    def pressed(self) -> set:
         return set(self._press)
 
-
-class FakeXRecordBackend(XRecordBackend):
-    """XRecordBackend fake: o teste injeta eventos de forma determinística
-    (sem display X real). O callback é o InputCapture._dispatch."""
-
-    def __init__(self, **_kwargs) -> None:
-        self.events_to_inject: List[Any] = _kwargs.get("events_to_inject", [])
-        self.enable_context_raises: Optional[Exception] = _kwargs.get(
-            "enable_context_raises", None
-        )
-        self._callback = None
-        self._enabled = False
-        self.enable_count = 0
-        self.disable_count = 0
-        self.create_count = 0
-        self.free_count = 0
-        self.data_display_used: Optional[Any] = _kwargs.get("data_display", None)
-
-    # Assinatura canônica do backend XRecord — idêntica à de produção
-    # (`ctx_spec, data_display, ctl_display, callback`), permitindo aos
-    # testes validar qual display cada primitiva usa.
-    def create_context(self, ctx_spec, data_display, ctl_display, callback):
-        self.create_count += 1
-        return 1
-
-    def enable_context(self, ctx, data_display, ctl_display, callback):
-        self.enable_count += 1
-        self._callback = callback
-        self._enabled = True
-        if self.enable_context_raises is not None:
-            raise self.enable_context_raises
-        for event in self.events_to_inject:
-            if self._callback is not None:
-                self._callback(event)
-
-    def disable_context(self, ctx, ctl_display):
-        self.disable_count += 1
-        self._enabled = False
-
-    def free_context(self, ctx, ctl_display):
-        self.free_count += 1
-
-
-class FakeCaptureBackend(FakeXRecordBackend):
-    """CaptureBackend fake para o AutomationService — injeta eventos."""
+    def close(self) -> None:
+        self.closed = True
 
 
 class FakeFocusTitleSource(TitleSource):
-    """TitleSource fake: retorna sempre o mesmo título configurável."""
+    """TitleSource fake: retorna sempre o mesmo título configurável.
+
+    `closed` registra se o cleanup do serviço fechou o display da
+    fonte interna (ownership)."""
 
     def __init__(
         self,
@@ -610,6 +774,7 @@ class FakeFocusTitleSource(TitleSource):
         self._fail = fail
         self.call_count = 0
         self._call_times = call_times
+        self.closed = False
 
     @property
     def is_available(self) -> bool:
@@ -620,3 +785,7 @@ class FakeFocusTitleSource(TitleSource):
         if self._fail:
             raise OSError("título indisponível")
         return self.title
+
+    def close(self) -> None:
+        self.closed = True
+

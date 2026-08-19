@@ -4,9 +4,7 @@ A gravação de macros observa os eventos da sessão X inteira (nada de
 polling): cada evento relevante chega ao listener registrado no
 contexto XRecord e é entregue ao handler do gravador por callback.
 
-Contrato de lifecycle desta implementação (corrigido em relação à
-versão anterior, que marcava a flag de gravação e nunca preenchia
-eventos, e cuja parada fechava displays antes de o worker terminar):
+Contrato de lifecycle desta implementação:
 
 * `start()` cria o contexto XRecord, inicia o worker que habilita o
   contexto (bloqueante — o callback é chamado enquanto ativo) e
@@ -18,15 +16,31 @@ eventos, e cuja parada fechava displays antes de o worker terminar):
   não há janela entre "recording" e o listener ativo); anunciar depois
   de a chamada retornar é impossível em produção, pois
   `record_enable_context` é bloqueante até a parada;
+* **conexões separadas**: a conexão de DADOS (`data_display`) executa
+  `record_enable_context` (bloqueante até a parada) e recebe o stream
+  de eventos; a conexão de CONTROLE (`ctl_display`) executa
+  `record_disable_context` (com `sync` para forçar o envio),
+  `record_free_context` e `record_create_context` — o padrão do
+  protocolo RECORD, em que o disable é enviado por um socket
+  independente para destravar o enable bloqueante;
+* **wire-format real**: o callback do python-xlib recebe o reply
+  `record.EnableContext`, com `reply.data` como bytes binários cru
+  (campo `RawField`) — os eventos são parseados com
+  `rq.EventField(None).parse_binary_value(reply.data, display,
+  None, None)`, exatamente como no exemplo oficial da biblioteca;
+* a máscara `device_events` é o range `(X.KeyPress .. X.MotionNotify)`
+  (2..6) — cobre key, botão (4/5 dentro do range) e move real do
+  ponteiro (6); sem colapsar press em release;
 * o callback preserva o **keycode** X verdadeiro (`event.detail`) e
   o tipo real do evento (KeyPress/KeyRelease/ButtonPress/
   ButtonRelease/MotionNotify), sem colapsar press em release;
 * deltas são calculados contra `time.monotonic()` e normalizados para
   o primeiro evento ter delta 0;
-* `stop()` desabilita o contexto (o callback para de ser chamado),
-  aguarda o worker encerrar com `join`, fecha displays e o contexto
-  exatamente uma vez, e só então libera o estado — o handler nunca
-  recebe evento de gravação depois de `stop()`;
+* `stop()` desabilita o contexto pela conexão de controle (o callback
+  para de ser chamado), aguarda o worker encerrar com `join`, fecha
+  displays e o contexto exatamente uma vez, e só então libera o
+  estado — o handler nunca recebe evento de gravação depois de
+  `stop()`;
 * `cancel()` aborta imediatamente e descarta eventos acumulados;
 * tudo idempotente e thread-safe (estado sob lock).
 
@@ -45,6 +59,7 @@ from typing import Callable, Optional
 from Xlib import X
 from Xlib.display import Display
 from Xlib.ext import record as xrecord
+from Xlib.protocol import rq
 
 from mouse_hub.core.automation.types import EventType, RecordedEvent
 
@@ -53,7 +68,11 @@ MAX_EVENTS = 100_000  # teto defensivo — um worker que acumula em lista
 
 @dataclass(frozen=True)
 class XRecordHandles:
-    """Handles X que o lifecycle controla — um por contexto de gravação."""
+    """Handles X que o lifecycle controla — um por contexto de gravação.
+
+    `ctl_display` é a conexão de CONTROLE (disable/free, nunca bloqueia);
+    `data_display` é a conexão de DADOS (enable bloqueante + stream).
+    """
 
     ctl_display: Display
     data_display: Display
@@ -64,10 +83,11 @@ class XRecordBackend:
     """Abstração testável das primitivas XRecord/XDisplay.
 
     Produção: `default_backend()` retorna implementações reais que
-    abrem os displays e criam o contexto com todos os clients e a
-    máscara completa de device_events (KeyPress..ButtonRelease).
-    Teste: um backend fake injeta eventos simulados e verifica que a
-    parada desabilita o contexto antes de fechar os displays.
+    abrem as duas conexões e criam o contexto com todos os clients e a
+    máscara completa de device_events (KeyPress..MotionNotify..
+    ButtonRelease).
+    Teste: um backend fake injeta bytes de wire-format e verifica que
+    a parada desabilita o contexto antes de fechar os displays.
     """
 
     def open_display(self) -> Display:
@@ -76,7 +96,11 @@ class XRecordBackend:
     def create_context(
         self, ctx_spec: int, data_display: Display, ctl_display: Display, callback: Callable
     ) -> int:
-        return ctl_display.record_create_context(
+        # O contexto é criado pela conexão de CONTROLE — o protocolo
+        # RECORD aloca o Resource ID no servidor e o registra como
+        # `Record_RC`; nenhuma das conexões pode estar preso no enable
+        # no momento da criação (start acontece antes do enable).
+        return data_display.record_create_context(
             0,
             [xrecord.AllClients],
             [
@@ -86,7 +110,12 @@ class XRecordBackend:
                     "ext_requests": (0, 0),
                     "ext_replies": (0, 0),
                     "delivered_events": (0, 0),
-                    "device_events": (X.KeyPress, X.ButtonRelease),
+                    # máscara real de device_events: range inclusivo
+                    # KeyPress(2) .. MotionNotify(6) — cobre key,
+                    # botão (Press=4/Release=5 dentro do range) e
+                    # move do ponteiro; ButtonRelease está incluído
+                    # no range, MotionNotify NÃO ficaria com (2,5).
+                    "device_events": (X.KeyPress, X.MotionNotify),
                     "errors": (0, 0),
                     "client_started": False,
                     "client_died": False,
@@ -100,10 +129,18 @@ class XRecordBackend:
         # `record_enable_context` é bloqueante: o callback é invocado
         # continuamente enquanto o contexto estiver ativo e só retorna
         # quando disable_context é chamado (o worker fica preso aqui).
-        ctl_display.record_enable_context(ctx, callback)
+        # Por protocolo, o enable roda na conexão de DADOS — o socket
+        # fica ocupado lendo o stream de eventos; a parada vem de
+        # OUTRO socket (a conexão de controle), que o servidor
+        # processa independentemente.
+        data_display.record_enable_context(ctx, callback)
 
     def disable_context(self, ctx: int, ctl_display: Display) -> None:
+        # Envia o disable pela conexão de CONTROLE e força o flush:
+        # sem o sync, o disable pode ficar enfileirado e o enable
+        # bloqueante nunca retornaria (o worker travaria em join).
         ctl_display.record_disable_context(ctx)
+        ctl_display.sync()
 
     def free_context(self, ctx: int, ctl_display: Display) -> None:
         ctl_display.record_free_context(ctx)
@@ -136,7 +173,7 @@ class InputCapture:
         if not capture.start():        # aguarda ready ou falha
             print(capture.failure)     # motivo detectado
         # ... usuário grava ...
-        events = capture.stop()        # snapshot + cleanup
+        events = capture.stop()        # drain + cleanup
         # ou capture.cancel() para descartar e abortar
     """
 
@@ -246,11 +283,11 @@ class InputCapture:
         return ok
 
     def stop(self) -> int:
-        """Encerra a captura de forma limpa: desabilita o contexto,
-        aguarda o worker (que só sai quando o callback parar), fecha
-        recursos exatamente uma vez, e retorna o número de eventos
-        gravados. Após o return, o handler nunca mais recebe evento.
-        """
+        """Encerra a captura de forma limpa: desabilita o contexto
+        pela conexão de controle, aguarda o worker (que só sai quando
+        o callback parar — drain completo do stream), fecha recursos
+        exatamente uma vez, e retorna o número de eventos gravados.
+        Após o return, o handler nunca mais recebe evento."""
         with self._lock:
             if self._state != "recording":
                 return self._count
@@ -270,15 +307,15 @@ class InputCapture:
             worker.join(timeout=2.0)
 
         # Snapshot final: o worker só saiu do enable_context (callback
-        # parou de ser chamado), então o contador acumulado até aqui é
-        # definitivo — nenhum evento da gravação é perdido entre a
-        # parada e o retorno.
+        # parou de ser chamado — drain completo), então o contador
+        # acumulado até aqui é definitivo — nenhum evento da gravação
+        # é perdido entre a parada e o retorno.
         with self._lock:
             count = self._count
 
         # Os handles foram zerados ANTES do disable (acima) — passamos
         # explicitamente para o cleanup, caso contrário free_context
-        # nunca seria chamado (Idempotência do lifecycle).
+        # nunca seria chamado (idempotência do lifecycle).
         self._cleanup_handles(handles)
 
         with self._lock:
@@ -311,7 +348,7 @@ class InputCapture:
         if handles is None:
             return
         try:
-            self._backend.free_context(handles.ctl_display, handles.ctx)
+            self._backend.free_context(handles.ctx, handles.ctl_display)
         except Exception:  # noqa: BLE001
             pass
         for display in (handles.data_display, handles.ctl_display):
@@ -353,35 +390,72 @@ class InputCapture:
 
     # ── Dispatch / handler ─────────────────────────────────────────
 
-    def _dispatch(self, data) -> None:
+    def _dispatch(self, reply) -> None:
         """Callback do XRecord, chamado na thread do enable_context.
+
+        O python-xlib entrega o reply `record.EnableContext` cru:
+        `reply.data` é o campo `RawField` — bytes binários de wire-
+        format do protocolo X. Os eventos são parseados com o mesmo
+        mecanismo do exemplo oficial:
+        `rq.EventField(None).parse_binary_value(data, display,
+        None, None)` — a struct do evento é resolvida pelo type byte
+        via `display.event_classes`.
 
         A verificação de `recording` sob lock garante que nenhum evento
         é entregue ao handler depois de `stop()` (o disable_context
         para de chamar este callback, e o estado transita antes).
         """
-        if not self.recording:
+        # Verificação de estado SEM a property `self.recording` — a
+        # property re-adquire `self._lock` (não reentrante) e este
+        # método já pode estar dentro de um bloco `with self._lock`,
+        # causando deadlock do worker (que segura o lock até o enable
+        # bloqueante retornar).
+        if not (self._state == "recording"):
             return
-        if getattr(data, "category", None) != xrecord.FromServer:
+        if getattr(reply, "category", None) != xrecord.FromServer:
             return
-        events = getattr(data, "data", None)
-        if not events:
+        raw = getattr(reply, "data", None)
+        if not isinstance(raw, (bytes, bytearray)) or not raw:
             return
 
-        local_start = self._start_mono
+        # Referência à conexão de dados: o parse de eventos precisa do
+        # display de protocolo (`display.display` — `_BaseDisplay`), que
+        # é quem carrega `event_classes`; o proxy `Xlib.display.Display`
+        # despacha atributos para os métodos das extensões e NÃO expõe
+        # `event_classes` diretamente.
         with self._lock:
-            now_base = time.monotonic() - local_start
+            data_display = (
+                self._handles.data_display if self._handles is not None else None
+            )
+        if data_display is None:
+            return
+        proto_display = getattr(data_display, "display", data_display)
+
+        local_start = self._start_mono
+        now = time.monotonic() - local_start
+        with self._lock:
             if self._count == 0:
                 last_at = 0.0
             else:
                 last_at = self._last_at
-            for event in events:
-                payload = self._classify(event)
-                if payload is None:
-                    continue
+
+        while raw:
+            try:
+                event, raw = rq.EventField(None).parse_binary_value(
+                    raw, proto_display, None, None
+                )
+            except Exception:  # noqa: BLE001 — wire corrompido: descarta
+                break
+            payload = self._classify(event)
+            if payload is None:
+                continue
+            with self._lock:
                 if self._count >= MAX_EVENTS:
                     break
-                now = time.monotonic() - local_start
+                # estado direto (lock já segurado — não usar
+                # `self.recording`, ver comentário acima)
+                if self._state != "recording":
+                    break
                 delta_ms = 0.0 if self._count == 0 else (now - last_at) * 1000.0
                 self._last_at = now
                 self._count += 1
@@ -392,7 +466,7 @@ class InputCapture:
                     keycode=int(payload.get("keycode", 0)),
                     delta_ms=max(0.0, delta_ms),
                 )
-                self._on_event(recorded)
+            self._on_event(recorded)
 
     @staticmethod
     def _classify(event) -> Optional[dict]:
@@ -402,6 +476,7 @@ class InputCapture:
         if kind in (EventType.KEY_PRESS, EventType.KEY_RELEASE):
             return {"kind": kind, "keycode": int(event.detail), "button": 0}
         if kind == EventType.MOUSE_MOVE:
+            # root_x/root_y: posição global do ponteiro (protocolo X)
             return {
                 "kind": kind,
                 "keycode": int(event.root_x),
