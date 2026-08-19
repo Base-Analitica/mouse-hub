@@ -24,9 +24,11 @@ compatível com o `macros.json` do produto.
 
 from __future__ import annotations
 
+import contextlib
 import json
-import time
 import threading
+import time
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -35,6 +37,23 @@ from mouse_hub.core.automation.scheduler import AutomationScheduler
 from mouse_hub.core.automation.types import EventType, MouseButton, RecordedEvent
 
 MAX_EVENTS = 100_000  # teto defensivo: 100k eventos ~ poucos MB
+
+
+class PlaybackState(str, Enum):
+    """Estado do reprodutor de macros.
+
+    * STOPPED — nenhum playback ativo (nunca iniciado ou concluído);
+    * RUNNING — thread de playback ativa;
+    * FAILED — emissão falhou (backend/XTest retornou False); o último
+      erro fica em `last_error`.
+
+    A UI lê este estado para reportar sucesso/erro sem mentir sobre
+    o que o XTest realmente emitiu.
+    """
+
+    STOPPED = "stopped"
+    RUNNING = "running"
+    FAILED = "failed"
 
 
 class MacroRecorder:
@@ -176,40 +195,72 @@ class MacroPlayer:
 
     def __init__(self, io: AutomationIO) -> None:
         self._io = io
-        self._playing = False
+        self._lock = threading.Lock()
+        self._state = PlaybackState.STOPPED
+        self._last_error: Optional[str] = None
         self._worker: Optional[threading.Thread] = None
         self._cancel_event = threading.Event()
 
     @property
     def playing(self) -> bool:
-        return self._playing
+        """Playback ativo em execução (RUNNING) — a UI usa este nome
+        por compatibilidade com o contrato existente."""
+        return self._state == PlaybackState.RUNNING
 
-    def play(self, events: List[RecordedEvent], repeat: int = 1) -> None:
-        if self._playing or repeat < 1 or not events:
-            return
-        # Teto defensivo: macros gigantes não devem virar travamento.
-        events = events[:MAX_EVENTS]
-        self._playing = True
-        self._cancel_event.clear()
-        self._worker = threading.Thread(
-            target=self._run,
-            args=(events, repeat),
-            name="mouse-hub-macro-player",
-            daemon=True,
-        )
-        self._worker.start()
+    @property
+    def state(self) -> PlaybackState:
+        with self._lock:
+            return self._state
+
+    @property
+    def last_error(self) -> Optional[str]:
+        """Última falha de emissão observada (somente em FAILED)."""
+        with self._lock:
+            return self._last_error
+
+    def play(self, events: List[RecordedEvent], repeat: int = 1) -> bool:
+        """Inicia o playback. Retorna False quando já houver um
+        playback ativo (mutex por player), repeat inválido ou lista
+        vazia — nunca sobrescreve o worker de um playback em curso."""
+        with self._lock:
+            if self._state == PlaybackState.RUNNING:
+                return False
+            if repeat < 1 or not events:
+                return False
+            # Teto defensivo: macros gigantes não devem virar travamento.
+            events = events[:MAX_EVENTS]
+            self._state = PlaybackState.RUNNING
+            self._last_error = None
+            self._cancel_event.clear()
+            worker = threading.Thread(
+                target=self._run,
+                args=(events, repeat),
+                name="mouse-hub-macro-player",
+                daemon=True,
+            )
+            self._worker = worker
+        worker.start()
+        return True
 
     def cancel(self) -> None:
-        """Acorda e encerra o worker imediatamente."""
+        """Acorda e encerra o worker exato; release defensivo de teclas
+        e botões pendentes acontece dentro do worker (finally)."""
         self._cancel_event.set()
-        if self._worker is not None:
-            self._worker.join(timeout=2.0)
-            self._worker = None
+        with self._lock:
+            worker = self._worker
+        if worker is not None:
+            worker.join(timeout=2.0)
 
     # ── Loop ───────────────────────────────────────────────────────
 
     def _run(self, events: List[RecordedEvent], repeat: int) -> None:
+        """Loop de reprodução com release defensivo: em qualquer saída
+        (cancel, falha de backend, exceção, encerramento antecipado) os
+        teclas e botões que receberam press sem release são liberados
+        — o jogador nunca fica com um botão lógico "preso"."""
         scheduler = AutomationScheduler(0.01)
+        pending_keys: List[int] = []
+        pending_buttons: List[int] = []
         try:
             for _ in range(repeat):
                 for event in events:
@@ -219,19 +270,68 @@ class MacroPlayer:
                         scheduler.interval = min(event.delta_ms / 1000.0, 30.0)
                         if not scheduler.wait_next():
                             return
-                    self._emit(event)
+                    if not self._emit(event, pending_keys, pending_buttons):
+                        self._fail("emissão falhou (backend/XTest)")
+                        return
+        except Exception as exc:  # noqa: BLE001
+            self._fail(f"exceção no playback: {exc}")
         finally:
-            self._playing = False
+            # Release defensivo: soltar TUDO que ficou pressionado,
+            # mesmo quando o IO já está em pane — a tentativa é a
+            # melhor recuperação disponível e falhas aqui não levantam.
+            for keycode in list(pending_keys):
+                with contextlib.suppress(Exception):
+                    self._io.key_release(keycode)
+            for button in list(pending_buttons):
+                try:
+                    self._io.release(MouseButton.from_id(button))
+                except (KeyError, ValueError):
+                    pass
+            pending_keys.clear()
+            pending_buttons.clear()
+            with self._lock:
+                # RUNNING → STOPPED (sucesso) ou FAILED (falha já
+                # registrada pelo _fail).
+                if self._state != PlaybackState.FAILED:
+                    self._state = PlaybackState.STOPPED
+                self._worker = None
 
-    def _emit(self, event: RecordedEvent) -> None:
-        """Emissão direta (hot path sem subprocesso)."""
+    def _fail(self, reason: str) -> None:
+        with self._lock:
+            if self._state != PlaybackState.FAILED:
+                self._state = PlaybackState.FAILED
+                self._last_error = reason
+
+    def _emit(
+        self,
+        event: RecordedEvent,
+        pending_keys: List[int],
+        pending_buttons: List[int],
+    ) -> bool:
+        """Emissão direta (hot path sem subprocesso). Retorna False
+        quando o backend falha — o loop converte em FAILED."""
         if event.kind == EventType.MOUSE_PRESS:
-            self._io.press(MouseButton.from_id(event.button))
-        elif event.kind == EventType.MOUSE_RELEASE:
-            self._io.release(MouseButton.from_id(event.button))
-        elif event.kind == EventType.MOUSE_MOVE:
-            self._io.move(event.button, event.keycode)  # x,y em button/keycode
-        elif event.kind == EventType.KEY_PRESS:
-            self._io.key_press(event.keycode)
-        elif event.kind == EventType.KEY_RELEASE:
-            self._io.key_release(event.keycode)
+            if not self._io.press(MouseButton.from_id(event.button)):
+                return False
+            pending_buttons.append(event.button)
+            return True
+        if event.kind == EventType.MOUSE_RELEASE:
+            ok = self._io.release(MouseButton.from_id(event.button))
+            if event.button in pending_buttons:
+                pending_buttons.remove(event.button)
+            return ok
+        if event.kind == EventType.MOUSE_MOVE:
+            return self._io.move(event.button, event.keycode)  # x,y em button/keycode
+        if event.kind == EventType.KEY_PRESS:
+            if not self._io.key_press(event.keycode):
+                return False
+            pending_keys.append(event.keycode)
+            return True
+        if event.kind == EventType.KEY_RELEASE:
+            ok = self._io.key_release(event.keycode)
+            try:
+                pending_keys.remove(event.keycode)
+            except ValueError:
+                pass
+            return ok
+        return True

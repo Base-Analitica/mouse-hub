@@ -39,10 +39,11 @@ MAX_MACROS = 500  # teto defensivo para o container
 # Mapeamento de tipos legados (v0 do app nativo e da UI web) para os
 # tipos canônicos do schema v1. Usado exclusivamente no carregador.
 LEGACY_TYPE_MAP = {
-    # Formato web (PRs anteriores): eventos separados em lists
+    # Formato web (PRs anteriores): eventos separados em lists.
+    # "mouse_click" NÃO está aqui — é tratado em separado pelo
+    # _convert_legacy (vira press+release, pois era clique completo).
     "key_press": EventType.KEY_PRESS,
     "key_release": EventType.KEY_RELEASE,
-    "mouse_click": EventType.MOUSE_PRESS,  # click legado = press
     "mouse_down": EventType.MOUSE_PRESS,
     "mouse_up": EventType.MOUSE_RELEASE,
     # Formato canônico v1
@@ -99,12 +100,18 @@ def _convert_legacy(entries: List[Any]) -> List[RecordedEvent]:
         kind_raw = entry.get("type") or entry.get("kind")
         if not isinstance(kind_raw, str):
             continue
-        kind = LEGACY_TYPE_MAP.get(kind_raw)
-        if kind is None:
-            try:
-                kind = EventType(kind_raw)
-            except ValueError:
-                continue
+        # "mouse_click" legado é tratado à parte (clique completo vira
+        # press+release) — o tipo canônico é irrelevante para ele, e
+        # a resolução genérica abaixo o descartaria como desconhecido.
+        if kind_raw == "mouse_click":
+            kind = EventType.MOUSE_PRESS
+        else:
+            kind = LEGACY_TYPE_MAP.get(kind_raw)
+            if kind is None:
+                try:
+                    kind = EventType(kind_raw)
+                except ValueError:
+                    continue
         try:
             t = float(entry.get("t", 0))
             button = int(entry.get("button", 0))
@@ -113,9 +120,21 @@ def _convert_legacy(entries: List[Any]) -> List[RecordedEvent]:
             continue
         delta_ms = max(0.0, t - prev_t) if events else 0.0
         prev_t = t
-        events.append(
-            RecordedEvent(kind=kind, button=button, keycode=keycode, delta_ms=delta_ms)
-        )
+        if kind_raw == "mouse_click":
+            # Formato legado: mouse_click era um clique COMPLETO
+            # (xdotool click, press+release atômico). Na reprodução
+            # nativa vira press imediatamente seguido de release com o
+            # mesmo delta para não alterar o timing geral.
+            events.append(
+                RecordedEvent(kind=EventType.MOUSE_PRESS, button=button, keycode=keycode, delta_ms=delta_ms)
+            )
+            events.append(
+                RecordedEvent(kind=EventType.MOUSE_RELEASE, button=button, keycode=keycode, delta_ms=0.0)
+            )
+        else:
+            events.append(
+                RecordedEvent(kind=kind, button=button, keycode=keycode, delta_ms=delta_ms)
+            )
     return events
 
 
@@ -157,17 +176,36 @@ class MacroStore:
             self._dirty = False
             return 0
 
-        raw = self._path.read_text(encoding="utf-8")
+        raw: str
+        try:
+            raw = self._path.read_text(encoding="utf-8")
+        except OSError as exc:
+            # Arquivo ilegível e sem chance de backup: estado vazio,
+            # original intacto — o app nunca deve travar no load.
+            self._macros = {}
+            self._dirty = False
+            self._read_error = str(exc)
+            return 0
         try:
             data = json.loads(raw)
         except (OSError, json.JSONDecodeError) as exc:
-            self._archive_corrupt(exc)
+            try:
+                self._archive_corrupt(exc)
+            except MacroStoreError:
+                # Backup impossível: original preservado, estado vazio.
+                self._read_error = str(exc)
+            else:
+                self._read_error = None
             self._macros = {}
             self._dirty = False
             return 0
-
         if not isinstance(data, dict):
-            self._archive_corrupt("container não é um objeto JSON")
+            try:
+                self._archive_corrupt("container não é um objeto JSON")
+            except MacroStoreError:
+                self._read_error = "container não é um objeto JSON"
+            else:
+                self._read_error = None
             self._macros = {}
             self._dirty = False
             return 0
@@ -206,16 +244,24 @@ class MacroStore:
         return _convert_legacy(entries) or None
 
     def _archive_corrupt(self, exc) -> None:
-        """Move o arquivo corrompido para .bak.N como evidência."""
+        """Move o arquivo corrompido para .bak.N como evidência.
+
+        A perda deliberada do original é inaceitável — se o backup não
+        puder ser criado (permissões, disco cheio), o arquivo original
+        fica intacto e a exceção é levantada para o caller decidir,
+        em vez de deletar silenciosamente a única cópia dos dados."""
+        suffix = int(time.time())
+        backup = self._path.with_name(f"{self._path.name}.bak.{suffix}")
         try:
-            suffix = int(time.time())
-            backup = self._path.with_name(f"{self._path.name}.bak.{suffix}")
             os.replace(self._path, backup)
         except OSError:
-            try:
-                self._path.unlink()
-            except OSError:
-                pass
+            # NÃO deletar o original: sem backup válido, a evidência
+            # corrompida é a única cópia. O caller (load) sabe que a
+            # leitura falhou e pode reportar à UI.
+            raise MacroStoreError(
+                f"backup do arquivo corrompido impossível ({exc}); "
+                "o original foi preservado"
+            )
 
     # ── Escrita ────────────────────────────────────────────────────
 
@@ -262,13 +308,18 @@ class MacroStore:
         return True
 
     def flush(self) -> None:
-        """Persiste o container de forma transacional.
+        """Persiste o container de forma transacional com rollback real.
 
-        Escreve no arquivo temporário do MESMO diretório (mesmo
-        filesystem) e renomeia atomicamente com `os.replace` — uma
-        interrupção no meio nunca deixa o arquivo original pela
-        metade. O backup de rollback é o arquivo original até o
-        replace concluir."""
+        1. snapshot do estado atual (_macros) — o ponto de retorno;
+        2. serializa no arquivo temporário do MESMO diretório (mesmo
+           filesystem) — se falhar, o original não foi tocado;
+        3. renomeia atomicamente com `os.replace` — se falhar, o tmp é
+           descartado e o original continua íntegro;
+        4. só então o snapshot vira o estado publicado.
+
+        Em qualquer falha de escrita, o estado em memória retorna ao
+        snapshot e a exceção é levantada — a próxima flush reescreve
+        o conteúdo garantidamente completo (nada fica pela metade)."""
         if not self._dirty:
             return
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -289,7 +340,14 @@ class MacroStore:
             },
         }
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        try:
+            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        except OSError as exc:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise MacroStoreError(f"falha ao escrever o arquivo temporário: {exc}")
         try:
             os.replace(tmp, self._path)
         except OSError:

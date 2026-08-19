@@ -34,6 +34,76 @@ from typing import Optional, Tuple
 from Xlib import X
 from Xlib.display import Display
 from Xlib.ext import xtest
+from Xlib import XK
+
+
+def keycode_from_name(name: str, display: Optional[Display] = None) -> int:
+    """Converte um nome de tecla legado (ex.: \"space\", \"a\") para o
+    keycode X11. Tenta na ordem:
+
+    1. nome numérico direto (\"38\" → keycode 38) — macros gravadas já
+       gravam keycode numérico;
+    2. keysym da biblioteca padrão (keysym_from_string), que cobre os
+       nomes de tecla comuns do xdotool (\"space\", \"Return\", \"a\")
+       com fallback maiúsculo;
+    3. caractere único → keycode pelo primeiro matches do display
+       (abre um Display sob demanda quando nenhum é fornecido).
+
+    Retorna 0 quando não há correspondência — o IO trata keycode 0 como
+    falha de emissão, nunca como evento vazio. O display é injetável
+    para testes determinísticos (sem conexão X real)."""
+    if not name:
+        return 0
+    name = str(name).strip()
+    if not name:
+        return 0
+    # Nome numérico direto.
+    if name.isdigit():
+        code = int(name)
+        return code if 0 < code < 256 else 0
+    # Keysym por nome textual.
+    keysym = 0
+    # Xlib.XK.string_to_keysym cobre os nomes de tecla comuns do
+    # xdotool ("space", "Return", "a") e retorna o keysym inteiro.
+    try:
+        XK.load_keysym_group("xf86")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        keysym = int(XK.string_to_keysym(name))
+        if keysym == 0:
+            keysym = int(XK.string_to_keysym(name.title()))
+    except Exception:  # noqa: BLE001
+        keysym = 0
+    if keysym != 0:
+        # Keysym ASCII simples (letras minúsculas) mapeia direto para o
+        # keycode XFree86 (offset 24) — sem consulta ao display.
+        if 0x0020 <= keysym <= 0x007E:
+            code = keysym - 0x0020 + 24
+            if 0 < code < 256:
+                return code
+        dpy = display
+        if dpy is None:
+            try:
+                dpy = Display()
+            except Exception:  # noqa: BLE001
+                return 0
+        try:
+            matches = dpy.keysym_to_keycodes(keysym)
+            if matches:
+                return int(matches[0][0])
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            if display is None and dpy is not None:
+                with contextlib.suppress(Exception):
+                    dpy.close()
+    # Caracter único: tentar o keysym direto.
+    if len(name) == 1:
+        code = ord(name) - 0x0020 + 24
+        if 0 < code < 256:
+            return code
+    return 0
 
 from mouse_hub.core.automation.io import AutomationIO, TitleSource
 from mouse_hub.core.automation.types import MouseButton

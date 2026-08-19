@@ -12,6 +12,12 @@ eventos, e cuja parada fechava displays antes de o worker terminar):
   contexto (bloqueante — o callback é chamado enquanto ativo) e
   aguarda o handshake `_ready` (pronto ou falha) — a UI sabe exatamente
   quando a gravação está ativa;
+* o handshake só é declarado pronto quando o worker já determinou
+  chamar `enable_context` — o sinal de prontidão é disparado
+  imediatamente ANTES da chamada (mesma thread, instrução seguinte:
+  não há janela entre "recording" e o listener ativo); anunciar depois
+  de a chamada retornar é impossível em produção, pois
+  `record_enable_context` é bloqueante até a parada;
 * o callback preserva o **keycode** X verdadeiro (`event.detail`) e
   o tipo real do evento (KeyPress/KeyRelease/ButtonPress/
   ButtonRelease/MotionNotify), sem colapsar press em release;
@@ -67,8 +73,10 @@ class XRecordBackend:
     def open_display(self) -> Display:
         return Display()
 
-    def create_context(self, ctl: Display, callback: Callable) -> int:
-        return ctl.record_create_context(
+    def create_context(
+        self, ctx_spec: int, data_display: Display, ctl_display: Display, callback: Callable
+    ) -> int:
+        return ctl_display.record_create_context(
             0,
             [xrecord.AllClients],
             [
@@ -86,14 +94,19 @@ class XRecordBackend:
             ],
         )
 
-    def enable_context(self, ctl: Display, ctx: int, callback: Callable) -> None:
-        ctl.record_enable_context(ctx, callback)
+    def enable_context(
+        self, ctx: int, data_display: Display, ctl_display: Display, callback: Callable
+    ) -> None:
+        # `record_enable_context` é bloqueante: o callback é invocado
+        # continuamente enquanto o contexto estiver ativo e só retorna
+        # quando disable_context é chamado (o worker fica preso aqui).
+        ctl_display.record_enable_context(ctx, callback)
 
-    def disable_context(self, ctl: Display, ctx: int) -> None:
-        ctl.record_disable_context(ctx)
+    def disable_context(self, ctx: int, ctl_display: Display) -> None:
+        ctl_display.record_disable_context(ctx)
 
-    def free_context(self, ctl: Display, ctx: int) -> None:
-        ctl.record_free_context(ctx)
+    def free_context(self, ctx: int, ctl_display: Display) -> None:
+        ctl_display.record_free_context(ctx)
 
     def close_display(self, display: Display) -> None:
         display.close()
@@ -197,7 +210,7 @@ class InputCapture:
             return False
 
         try:
-            ctx = self._backend.create_context(ctl, self._dispatch)
+            ctx = self._backend.create_context(0, data, ctl, self._dispatch)
         except Exception as exc:  # noqa: BLE001
             for display in (data, ctl):
                 try:
@@ -247,7 +260,7 @@ class InputCapture:
 
         if handles is not None:
             try:
-                self._backend.disable_context(handles.ctl_display, handles.ctx)
+                self._backend.disable_context(handles.ctx, handles.ctl_display)
             except Exception:  # noqa: BLE001 — display pode já ter caído
                 pass
 
@@ -255,6 +268,13 @@ class InputCapture:
         worker = self._worker
         if worker is not None:
             worker.join(timeout=2.0)
+
+        # Snapshot final: o worker só saiu do enable_context (callback
+        # parou de ser chamado), então o contador acumulado até aqui é
+        # definitivo — nenhum evento da gravação é perdido entre a
+        # parada e o retorno.
+        with self._lock:
+            count = self._count
 
         # Os handles foram zerados ANTES do disable (acima) — passamos
         # explicitamente para o cleanup, caso contrário free_context
@@ -264,7 +284,7 @@ class InputCapture:
         with self._lock:
             self._state = "stopped"
             self._worker = None
-            return self._count
+        return count
 
     def cancel(self) -> None:
         """Aborta imediatamente e descarta tudo o que foi gravado."""
@@ -308,18 +328,19 @@ class InputCapture:
             self._fail("contexto não criado")
             return
         try:
+            # O handshake é declarado pronto IMEDIATAMENTE antes de
+            # `enable_context`: mesma thread, instrução seguinte — não
+            # existe janela em que a UI veja "recording" sem o listener
+            # a caminho. (Sinalizar depois de a chamada retornar é
+            # inviável: em produção `record_enable_context` bloqueia
+            # até a parada, e sinalizar apenas no retorno tornaria
+            # `start()` síncrono com toda a gravação.)
             with self._lock:
                 if self._state == "starting":
                     self._state = "recording"
             self._ready.set()
-            # record_enable_context é bloqueante: o callback é invocado
-            # continuamente enquanto o contexto estiver habilitado e
-            # retorna quando disable_context é chamado. O "pronto" é
-            # anunciado ANTES do enable — o enable já está em curso e
-            # qualquer exceção aqui vira FAILED com o motivo em
-            # `.failure` (a UI lê e decide, sem exceção estourada).
             self._backend.enable_context(
-                handles.ctl_display, handles.ctx, self._dispatch
+                handles.ctx, handles.data_display, handles.ctl_display, self._dispatch
             )
         except Exception as exc:  # noqa: BLE001
             self._fail(f"erro ao habilitar contexto: {exc}")

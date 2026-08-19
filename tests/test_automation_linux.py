@@ -204,11 +204,11 @@ class FakeXRecordBackend(XRecordBackend):
         self.displays_opened += 1
         return mock.MagicMock(name="display")
 
-    def create_context(self, ctl, callback):
+    def create_context(self, ctx_spec, data_display, ctl_display, callback):
         self.order.append("create_context")
         return 1
 
-    def enable_context(self, ctl, ctx, callback):
+    def enable_context(self, ctx, data_display, ctl_display, callback):
         self.order.append("enable_context")
         self._callback = callback
         if self.enable_context_raises is not None:
@@ -223,11 +223,11 @@ class FakeXRecordBackend(XRecordBackend):
         while self._enabled:
             time.sleep(0.005)
 
-    def disable_context(self, ctl, ctx):
+    def disable_context(self, ctx, ctl_display):
         self.order.append("disable_context")
         self._enabled = False
 
-    def free_context(self, ctl, ctx):
+    def free_context(self, ctx, ctl_display):
         self.order.append("free_context")
 
     def close_display(self, display):
@@ -455,11 +455,16 @@ def test_store_legacy_web_format_converted(tmp_macros):
     store = MacroStore(tmp_macros)
     assert store.load() == 1
     evs = store.get("web-macro")
-    assert len(evs) == 2
+    # mouse_click legado era um clique COMPLETO (xdotool click,
+    # press+release atômico) — vira press+release em sequência,
+    # mantendo o delta original no press e 0 no release.
+    assert len(evs) == 3
     assert evs[0].kind == EventType.KEY_PRESS
     assert evs[0].keycode == 38
-    assert evs[1].kind == EventType.MOUSE_PRESS  # mouse_click legado -> press
+    assert evs[1].kind == EventType.MOUSE_PRESS
     assert evs[1].delta_ms == pytest.approx(120.0, abs=1.0)
+    assert evs[2].kind == EventType.MOUSE_RELEASE
+    assert evs[2].delta_ms == 0.0
 
 
 def test_store_legacy_app_v0_format_converted(tmp_macros):
