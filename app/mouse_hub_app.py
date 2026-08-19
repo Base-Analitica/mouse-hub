@@ -376,159 +376,161 @@ class MouseController:
 
 
 class AutoClickerEngine:
-    """Motor do auto-clicker"""
+    """Motor do auto-clicker — delega ao engine nativo compartilhado
+    (mouse_hub.automation.autoclicker), que mantém o estado real
+    (stopped/running/blocked_by_focus/failed) e a regra atual de foco.
 
-    MINECRAFT_KEYWORDS = [
-        "minecraft", "lunar client", "lunar", "badlion",
-        "feather", "hypixel", "mina launcher", "prismarine",
-        "salwyrr", "vanilla"
-    ]
+    Esta classe permanece como fachada mínima para não quebrar as páginas
+    existentes que acessam self.ac.cps / .button / .running.
+    """
 
     def __init__(self, mouse_controller):
-        self.mc = mouse_controller
-        self.running = False
-        self.cps = 10
-        self.button = 1
-        self.jitter_ms = 0
-        self._thread = None
+        from mouse_hub.automation import (
+            AutoClickerEngine as _NativeEngine,
+            XdotoolFocusDetector,
+        )
+        # Mantém o detector atual do produto (xdotool, janela permitida
+        # em foco) via componente injetável e testável.
+        self._native = _NativeEngine(focus_detector=XdotoolFocusDetector())
+        self._mc = mouse_controller
 
-    def start(self):
-        if self.running:
-            return
-        self.running = True
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        self.running = False
-        if self._thread:
-            self._thread.join(timeout=2)
-
-    def _loop(self):
-        import random
-        while self.running:
-            if self.mc.is_minecraft_focused():
-                try:
-                    subprocess.run(["xdotool", "click", str(self.button)],
-                                   capture_output=True, timeout=2)
-                except Exception:
-                    pass
-                delay = 1.0 / max(1, self.cps)
-                if self.jitter_ms > 0:
-                    delay += random.uniform(-self.jitter_ms, self.jitter_ms) / 1000.0
-                    delay = max(0.001, delay)
-                time.sleep(delay)
-            else:
-                time.sleep(0.3)
+    # ── compatibilidade com a UI existente ──
+    @property
+    def running(self):
+        """Fonte de verdade: estado real do motor, não o botão da UI."""
+        from mouse_hub.automation import AutoClickerState
+        return self._native.state in (
+            AutoClickerState.RUNNING,
+            AutoClickerState.BLOCKED_BY_FOCUS,
+        )
 
     @property
-    def is_minecraft_active(self):
-        return self.mc.is_minecraft_focused()
+    def state(self):
+        return self._native.state
+
+    @property
+    def error(self):
+        return self._native.error
+
+    @property
+    def cps(self):
+        return self._native.cps
+
+    @cps.setter
+    def cps(self, value):
+        self._native.set_cps(value)
+
+    @property
+    def button(self):
+        return self._native.button
+
+    @button.setter
+    def button(self, value):
+        self._native.set_button(value)
+
+    def start(self):
+        return self._native.start()
+
+    def stop(self):
+        return self._native.stop()
+
+    def cleanup(self):
+        self._native.cleanup()
 
 
 class MacroEngine:
-    """Motor de macros"""
+    """Motor de macros — delega ao pacote nativo compartilhado
+    (mouse_hub.automation): modelo versionável, captura real via XRecord,
+    playback com relógio monotônico e persistência validada.
+
+    A interface pública mantém o formato usado pelas páginas PyQt
+    (recording, start_recording, stop_recording, play, delete, list_all),
+    adicionando o capturador real e o controller de playback.
+    """
 
     def __init__(self):
-        self.macros = self._load()
-        self.recording = False
-        self.current_name = ""
-        self.record_start = 0
-        self.events = []
+        from mouse_hub.automation import (
+            MacroStore,
+            PlaybackController,
+            InputCapture,
+        )
+        self._store = MacroStore(MACROS_PATH)
+        self._player = PlaybackController(self._store)
+        self._capture = InputCapture(sink=self._on_captured_event)
+        self._events = []
 
-    def _load(self):
-        if MACROS_PATH.exists():
-            try:
-                return json.loads(MACROS_PATH.read_text())
-            except Exception:
-                pass
-        return {}
+        if self._store.load_warnings:
+            for w in self._store.load_warnings:
+                print(f"[MACRO] {w}")
 
-    def _save(self):
-        try:
-            MACROS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            MACROS_PATH.write_text(json.dumps(self.macros, indent=2))
-        except Exception:
-            pass
+    @property
+    def recording(self):
+        return self._capture.state.value == "active"
+
+    @property
+    def capture_failed(self):
+        return self._capture.failed_reason
+
+    @property
+    def macros(self):
+        """Compat: dict {nome: info} usado por MacrosPage."""
+        return self._store.list_all()
+
+    @property
+    def player(self):
+        return self._player
+
+    @property
+    def store(self):
+        return self._store
 
     def start_recording(self, name):
-        self.recording = True
-        self.current_name = name
-        self.record_start = time.time()
-        self.events = []
+        """Inicia gravação real. Se o capturador não conseguir abrir o
+        display X, gravação não inicia e o motivo fica acessível em
+        self.capture_failed."""
+        if self.recording:
+            return
+        self._events = []
+        # limpa estado de falha anterior para nova tentativa
+        if self._capture.state.value == "failed":
+            self._capture = InputCapture(sink=self._on_captured_event)
+        self._capture.start()
+        self._capture_name = name
+        self._capture_start = time.monotonic()
+
+    def _on_captured_event(self, event):
+        """Sink do capturador: acumula eventos com timing monotônico."""
+        self._events.append(event)
 
     def stop_recording(self):
         if not self.recording:
             return None
-        self.recording = False
-        name = self.current_name
-        self.macros[name] = {
-            "name": name,
-            "events": self.events,
-            "created": datetime.now().isoformat(),
-            "count": len(self.events),
-        }
-        self._save()
-        return name
-
-    def add_event(self, etype, **kwargs):
-        if not self.recording:
-            return
-        elapsed = time.time() - self.record_start
-        event = {"time": round(elapsed, 4), "type": etype}
-        event.update(kwargs)
-        self.events.append(event)
+        self._capture.stop()
+        name = getattr(self, "_capture_name", "macro")
+        ok, result = self._store.upsert_events(name, self._events)
+        self._capture.cleanup()
+        if not ok:
+            print(f"[MACRO] gravação descartada: {result}")
+            return None
+        return result
 
     def play(self, name, repeat=1):
-        if name not in self.macros:
+        """Inicia reprodução no worker de playback; valida antes."""
+        if not self._player.start(name, repeat=repeat):
+            print(f"[MACRO] play rejeitado: {self._player.error}")
             return False
-        events = self.macros[name]["events"]
-        if not events:
-            return False
-
-        def _run():
-            for _ in range(repeat):
-                prev = 0
-                for ev in events:
-                    delay = ev["time"] - prev
-                    if delay > 0:
-                        time.sleep(delay)
-                    prev = ev["time"]
-                    etype = ev["type"]
-                    if etype == "key":
-                        try:
-                            subprocess.run(["xdotool", "key", ev["key"]],
-                                           capture_output=True, timeout=2)
-                        except Exception:
-                            pass
-                    elif etype == "click":
-                        try:
-                            subprocess.run(["xdotool", "click", str(ev.get("button", 1))],
-                                           capture_output=True, timeout=2)
-                        except Exception:
-                            pass
-                    elif etype == "move":
-                        try:
-                            subprocess.run(["xdotool", "mousemove",
-                                            str(ev.get("x", 0)), str(ev.get("y", 0))],
-                                           capture_output=True, timeout=2)
-                        except Exception:
-                            pass
-
-        threading.Thread(target=_run, daemon=True).start()
         return True
 
     def delete(self, name):
-        if name in self.macros:
-            del self.macros[name]
-            self._save()
-            return True
-        return False
+        return self._store.delete(name)
 
     def list_all(self):
-        return {k: {"name": v["name"], "count": v["count"],
-                     "created": v["created"]}
-                for k, v in self.macros.items()}
+        return self._store.list_all()
+
+    def cleanup(self):
+        """Encerramento completo: para captura e playback."""
+        self._capture.cleanup()
+        self._player.cleanup()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -823,7 +825,8 @@ class DashboardPage(QWidget):
             font-size: 24px; font-weight: 900; background: transparent;
         """)
 
-        clicker_on = self.ac.running
+        # Estado real do motor (running | blocked_by_focus contam como ON)
+        clicker_on = self.ac.state.value in ("running", "blocked_by_focus")
         self.clicker_card.set_value("ON" if clicker_on else "OFF")
         self.clicker_card.value_label.setStyleSheet(f"""
             color: {COLORS['danger'] if clicker_on else COLORS['text_muted']};
@@ -1360,9 +1363,31 @@ class AutoClickerPage(QWidget):
                 font-weight: 600;
             """)
 
-        if self.ac.running:
-            btn_name = {1: "esquerdo", 2: "meio", 3: "direito"}.get(self.ac.button, "?")
+        # Estado real do motor como fonte de verdade (não o botão da UI)
+        state = self.ac.state
+        if state.value == "running":
+            btn_name = {1: "esquerdo", 2: "meio", 3: "direito"}.get(
+                self.ac.button, "?")
+            self.status_title.setText("Auto-Clicker Ativo!")
             self.status_sub.setText(f"{self.ac.cps} CPS — Botão {btn_name}")
+            self.status_icon.setText("🔥")
+            self.toggle_btn.setText("⏹️  Parar Auto-Clicker")
+        elif state.value == "blocked_by_focus":
+            self.status_title.setText("Aguardando jogo em foco...")
+            self.status_sub.setText(
+                "Ligado, mas só clica com Minecraft/Lunar Client ativo")
+            self.status_icon.setText("⏳")
+            self.toggle_btn.setText("⏹️  Parar Auto-Clicker")
+        elif state.value == "failed":
+            self.status_title.setText("Auto-Clicker com erro")
+            self.status_sub.setText(f"Falha: {self.ac.error or 'desconhecida'}")
+            self.status_icon.setText("⚠️")
+            self.toggle_btn.setText("▶️  Iniciar Auto-Clicker")
+        else:
+            self.status_title.setText("Auto-Clicker Desligado")
+            self.status_sub.setText("Clique em iniciar para começar")
+            self.status_icon.setText("🖱️")
+            self.toggle_btn.setText("▶️  Iniciar Auto-Clicker")
 
 
 class MacrosPage(QWidget):
@@ -1429,13 +1454,28 @@ class MacrosPage(QWidget):
         if self.me.recording:
             name = self.me.stop_recording()
             self.record_btn.setText("⏺️  Gravar Macro")
-            self.record_status.setText(f"✅ Macro '{name}' salva! ({len(self.me.macros.get(name, {}).get('events', []))} eventos)")
+            if name is None:
+                self.record_status.setText(
+                    "⚠️  Gravação descartada (sem eventos ou nome inválido)")
+            else:
+                count = self.me.macros.get(name, {}).get("count", 0)
+                self.record_status.setText(
+                    f"✅ Macro '{name}' salva! ({count} eventos)")
             self._refresh_list()
         else:
-            name = self.name_input.text() or f"macro_{int(time.time())}"
+            name = self.name_input.text().strip() or \
+                f"macro_{int(time.time())}"
             self.me.start_recording(name)
-            self.record_btn.setText("⏹️  Parar Gravação")
-            self.record_status.setText(f"🔴 Gravando '{name}'... pressione parar quando terminar.")
+            if self.me.recording:
+                self.record_btn.setText("⏹️  Parar Gravação")
+                self.record_status.setText(
+                    f"🔴 Gravando '{name}'... pressione parar quando "
+                    "terminar. Teclas e cliques são capturados em "
+                    "qualquer janela.")
+            else:
+                reason = self.me.capture_failed or "capturador indisponível"
+                self.record_status.setText(
+                    f"❌ Não foi possível iniciar a gravação: {reason}")
 
     def _refresh_list(self):
         # Clear
@@ -1838,7 +1878,9 @@ class MouseHubApp(QMainWindow):
             btn.set_active(i == index)
 
     def closeEvent(self, event):
-        self.ac.stop()
+        # Encerramento completo: captura, playback e worker do clicker
+        self.me.cleanup()
+        self.ac.cleanup()
         event.accept()
 
 
