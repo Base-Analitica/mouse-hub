@@ -26,6 +26,9 @@ jobs:
       - name: Rodar suíte de testes determinísticos (sem hardware)
         run: QT_QPA_PLATFORM=offscreen python3 -m pytest tests/
 
+      - name: Benchmark mínimo (startup, idle, CPS) — versão encurtada do CI
+        run: QT_QPA_PLATFORM=offscreen BENCH_IDLE_SECONDS=10 BENCH_ACTIVE_SECONDS=5 python3 -m unittest tests.bench_perf -v
+
   ui_smoke:
     name: Smoke da UI (Xvfb)
     runs-on: ubuntu-latest
@@ -40,4 +43,4 @@ jobs:
         run: python3 -m pip install --user -e ".[dev]" PyQt5==5.15.11
 
       - name: Smoke da janela principal com display virtual
-        run: xvfb-run -a python3 -m unittest tests.smoke_ui_init
+        run: QT_QPA_PLATFORM=offscreen xvfb-run -a python3 -m unittest tests.smoke_ui_init
