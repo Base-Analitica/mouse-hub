@@ -66,7 +66,12 @@ class AutomationService:
     ) -> None:
         self._macros_path = macros_path
         self._capture_backend = capture_backend
+        # Ownership explícito: quando o IO/TitleSource é injetado, o
+        # serviço NÃO o fecha no cleanup — a responsabilidade é do
+        # injetor. Só fecha o que ele mesmo criou.
         self._io = io
+        self._io_owned = io is None
+        self._title_source_owned = title_source is None
 
         self._lock = threading.Lock()
 
@@ -164,11 +169,15 @@ class AutomationService:
             capture = self._capture
             self._capture = None
             name = self._record_name or "macro"
-            events = self._events
-            self._events = []
             self._record_name = None
 
-        count = capture.stop()
+        # DRAIN PRIMEIRO: stop() para o worker da captura e devolve o
+        # contador final — o snapshot de self._events só é seguro
+        # DEPOIS, quando nenhum evento da gravação pode mais chegar.
+        capture.stop()
+        with self._lock:
+            events = self._events
+            self._events = []
         if not events:
             capture.cancel() if False else None  # resources já fechados
             return False
@@ -282,7 +291,15 @@ class AutomationService:
     @property
     def clicker(self) -> AutoClickerEngine:
         if self._clicker is None:
-            io = self._io or LinuxAutomationIO()
+            with self._lock:
+                io = self._io
+                if io is None:
+                    # Clicker-first: o IO criado aqui vira o IO
+                    # oficial do serviço — o playback posterior
+                    # reutiliza EXATAMENTE a mesma instância (mesmo
+                    # display X, um open por processo de vida).
+                    io = LinuxAutomationIO()
+                    self._io = io
             self._clicker = AutoClickerEngine(
                 io=io,
                 focus=self.window_service,
@@ -292,25 +309,34 @@ class AutomationService:
 
     def cleanup(self) -> None:
         """Encerramento completo e seguro: gravação cancelada, playback
-        e clicker parados (join), e IO compartilhado fechado quando
-        foi instanciado pelo próprio serviço (injetado de fora =
-        responsabilidade do injetor). Idempotente."""
+        e clicker parados (join), e TODO recurso owned fechado — IO e
+        TitleSource criados pelo próprio serviço. O que foi injetado
+        de fora fica com o injetor. Idempotente."""
         self.cancel_recording()
         player = None
         clicker = None
-        io_owned = self._io is None
         with self._lock:
+            io_owned = self._io_owned
+            title_source_owned = self._title_source_owned
             player = self._player
             clicker = self._clicker
             self._player = None
             self._clicker = None
             # O IO compartilhado vive enquanto o serviço vive; no
-            # cleanup ele é encerrado para liberar o display X.
+            # cleanup ele é encerrado para liberar o display X — mas
+            # APENAS se o próprio serviço o criou.
             if io_owned:
                 io = self._io
                 self._io = None
             else:
                 io = None
+            # Mesmo princípio para o TitleSource: o serviço só fecha
+            # o display X que ele mesmo criou (injetado = injetor).
+            if title_source_owned:
+                title_source = self._title_source
+                self._title_source = None
+            else:
+                title_source = None
         if player is not None:
             try:
                 player.cancel()
@@ -325,5 +351,13 @@ class AutomationService:
         if io is not None:
             try:
                 io.close()
+            except Exception:  # noqa: BLE001
+                pass
+        # Fecha o TitleSource owned (idempotente: se nunca foi
+        # usado, _cached_title está vazio e não há display a fechar).
+        if title_source is not None:
+            try:
+                if getattr(title_source, "close", None) is not None:
+                    title_source.close()
             except Exception:  # noqa: BLE001
                 pass
