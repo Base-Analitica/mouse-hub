@@ -23,14 +23,121 @@ Requisitos que a escrita ingênua (PR #14 `save`/`load`) não cobria:
 """
 
 from __future__ import annotations
-
 import json
 import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
 from mouse_hub.core.automation.types import EventType, MouseButton, RecordedEvent
+
+# Conversão de nome textual de tecla ("w", "space", "Return") para
+# keycode real — o main legado gravava key como nome xdotool/XK,
+# nunca como int. Sem display X disponível (testes/sem servidor),
+# a varredura keysym→keycode não é possível: retorna None.
+_XK = None
+_display_for_keycode = None
+
+# Fallback determinístico sem display X: mapeamento keysym→keycode do
+# layout US padrão (o layout de referência do X). Só é usado quando
+# não há servidor para consultar — no runtime real, display
+# #keysym_to_keycode resolve pelo servidor.
+_FALLBACK_KEYCODES: Dict[int, int] = {
+    # Latin-1 a-z (keysyms 0x61..0x7a) → keycodes 38..63
+    **{0x61 + i: 38 + i for i in range(26)},
+    # dígitos 0-9 (0x30..0x39) → keycodes 10..19 (linha numérica)
+    **{0x30 + i: 10 + i for i in range(10)},
+    0x020: 65,   # space
+    0xff0d: 36,  # Return
+    0xff09: 23,  # Tab
+    0xff1b: 9,   # Escape
+    0xff50: 110, # Home
+    0xff51: 113, # Left
+    0xff52: 98,  # Up
+    0xff53: 114, # Right
+    0xff54: 116, # Down
+    0xffe1: 50,  # Shift_L
+    0xffe2: 62,  # Shift_R
+    0xffe3: 37,  # Control_L
+    0xffe4: 105, # Control_R
+    0xffe9: 64,  # Alt_L (0xffe9 resolve Meta_L/Alt_L pelo servidor)
+    0xffea: 108, # Alt_R
+    0xffe5: 66,  # Caps_Lock
+    0xff55: 119, # Prior/PageUp
+    0xff56: 121, # Next/PageDown
+    0xff57: 115, # End
+    0xffff: 119, # Delete
+    0xff08: 22,  # BackSpace
+    0xff13: 77,  # Num_Lock
+    0xff14: 78,  # Scroll_Lock
+    0xffbe: 95,  # F1
+    **{0xffbe + i: 95 + i for i in range(12)},  # F1..F12 = 95..106
+    0xffad: 106, # KP_Divide
+    0xffaa: 63,  # KP_Multiply
+    0xffaf: 82,  # KP_Subtract
+    0xffab: 86,  # KP_Add
+    0xff8d: 104, # KP_Enter
+    0xff9e: 90,  # KP_0
+    **{0xffb0 + i: 91 + i for i in range(9)},  # KP_1..KP_9 = 87..95
+    0xffae: 83,  # KP_Decimal
+    0xff95: 79,  # KP_7
+    0xff96: 80,  # KP_8
+    0xff97: 81,  # KP_9
+    0xff98: 83,  # KP_4
+    0xff99: 84,  # KP_5
+    0xff9a: 85,  # KP_6
+    0xff9b: 87,  # KP_1
+    0xff9c: 88,  # KP_2
+    0xff9d: 89,  # KP_3
+}
+
+
+def _xk_module():
+    global _XK
+    if _XK is None:
+        try:
+            from Xlib import XK as _m
+            # Carrega os grupos de keysyms usados pelos jogos
+            # (latin1 cobre a-z, dígitos, space, Return etc.).
+            for _g in ("latin1", "xf86"):
+                try:
+                    _m.load_keysym_group(_g)
+                except Exception:
+                    pass
+            _XK = _m
+        except ImportError:
+            _XK = False
+    return _XK if _XK else None
+
+
+def textual_key_to_keycode(key: str, display=None) -> int:
+    """Nome textual ("w", "space", "Return") → keycode real via keysym.
+
+    `int("w")` é rejeitado explicitamente — nome que não é decimal
+    nunca vira keycode inteiro; quando um display real está disponível
+    (runtime), o keysym é traduzido pelo servidor; sem display,
+    retorna 0 (evento de tecla inválido — o player ignora keycode 0)."""
+    if not isinstance(key, str) or not key:
+        return 0
+    # Nome decimal? Rejeitado — o main grava nome textual.
+    try:
+        int(key)
+    except ValueError:
+        pass
+    else:
+        return 0
+    xk = _xk_module()
+    if xk is None:
+        return 0
+    keysym = xk.string_to_keysym(key)
+    if keysym == 0:
+        return 0
+    if display is not None and hasattr(display, "keysym_to_keycode"):
+        code = display.keysym_to_keycode(keysym)
+        if code:
+            return code
+    # Sem display (testes headless): consulta o mapa determinístico do
+    # layout US — nunca inventa keycode a partir de string.
+    return _FALLBACK_KEYCODES.get(keysym, 0)
 
 SCHEMA_VERSION = 1
 MAX_EVENTS_PER_MACRO = 100_000
@@ -52,6 +159,11 @@ LEGACY_TYPE_MAP = {
     "mouse_move": EventType.MOUSE_MOVE,
     "key_press_v1": EventType.KEY_PRESS,
     "key_release_v1": EventType.KEY_RELEASE,
+    # Formato web compacto do main: type="key" com `key` textual,
+    # type="click" com `button`, type="move" com `x`/`y`.
+    "key": EventType.KEY_PRESS,
+    "click": EventType.MOUSE_PRESS,
+    "move": EventType.MOUSE_MOVE,
 }
 
 
@@ -93,6 +205,9 @@ def _convert_legacy(entries: List[Any]) -> List[RecordedEvent]:
     player.
     """
     events: List[RecordedEvent] = []
+    # prev_t em SEGUNDOS: o main real grava time=time.time()-start,
+    # ou seja, float de segundos — converter para ms na hora do delta
+    # evita perda de resolução e erros de ordem de grandeza.
     prev_t = 0.0
     for entry in entries:
         if not isinstance(entry, dict):
@@ -113,19 +228,39 @@ def _convert_legacy(entries: List[Any]) -> List[RecordedEvent]:
                 except ValueError:
                     continue
         try:
-            # O formato REAL do main legado usa `time` (ms), `key`
-            # (keycode), `click` (botão) e `move` ([x, y]) — o v0/web
-            # usava `t`/`keycode`/`button`. Ambos coexistem aqui.
+            # O formato REAL do main legado: `time` em SEGUNDOS
+            # (time.time() - record_start), `key` textual ("w",
+            # "space", "Return"), `button` no mouse_click, `x`/`y`
+            # no mouse_move. O v0/web usava `t`/`keycode`/`button`.
+            # Ambos coexistem aqui — segundos viram ms no delta.
             t_raw = entry.get("t")
-            t = float(t_raw if t_raw is not None else entry.get("time", 0))
+            if t_raw is not None:
+                t_sec = float(t_raw) / 1000.0  # v0/web era ms
+            else:
+                t_sec = float(entry.get("time", 0))  # main real: segundos
             key_raw = entry.get("keycode")
-            keycode = int(key_raw if key_raw is not None else entry.get("key", 0))
+            key_textual = entry.get("key")
+            if isinstance(key_raw, int):
+                keycode = int(key_raw)
+            elif isinstance(key_textual, str):
+                keycode = textual_key_to_keycode(key_textual)
+            else:
+                keycode = 0
             button = int(entry.get("button", entry.get("click", 0)))
             move_xy = entry.get("move")
         except (TypeError, ValueError):
             continue
-        delta_ms = max(0.0, t - prev_t) if events else 0.0
-        prev_t = t
+        delta_ms = max(0.0, (t_sec - prev_t) * 1000.0) if events else 0.0
+        prev_t = t_sec
+        # Formato web compacto: `type="move"` guarda as coordenadas em
+        # `x`/`y` (não no array `move`) — normalizar para o array que o
+        # branch de MOUSE_MOVE espera.
+        if kind_raw in ("move", "mouse_move") and move_xy is None:
+            # Tanto o formato web (`type="move"`) quanto o main puro
+            # (`type="mouse_move"`) guardam as coordenadas em `x`/`y`.
+            mx_raw, my_raw = entry.get("x"), entry.get("y")
+            if mx_raw is not None and my_raw is not None:
+                move_xy = [mx_raw, my_raw]
         if kind_raw == "mouse_click":
             # Formato legado: mouse_click era um clique COMPLETO
             # (xdotool click, press+release atômico). Na reprodução
@@ -150,6 +285,26 @@ def _convert_legacy(entries: List[Any]) -> List[RecordedEvent]:
             # do formato canônico (v1).
             events.append(
                 RecordedEvent(kind=EventType.MOUSE_MOVE, button=mx, keycode=my, delta_ms=delta_ms)
+            )
+        elif kind_raw in ("key", "click") and kind_raw == "key":
+            # Formato web compacto: type="key" é um pressionamento
+            # completo (press + release), como xdotool key — press
+            # carrega o delta real; release fecha com delta 0.
+            events.append(
+                RecordedEvent(kind=EventType.KEY_PRESS, button=button, keycode=keycode, delta_ms=delta_ms)
+            )
+            events.append(
+                RecordedEvent(kind=EventType.KEY_RELEASE, button=button, keycode=keycode, delta_ms=0.0)
+            )
+        elif kind_raw == "click":
+            # type="click" = clique completo (xdotool click): press +
+            # release imediato com delta 0 — mesmo tratamento do
+            # mouse_click do formato main puro.
+            events.append(
+                RecordedEvent(kind=EventType.MOUSE_PRESS, button=button, keycode=keycode, delta_ms=delta_ms)
+            )
+            events.append(
+                RecordedEvent(kind=EventType.MOUSE_RELEASE, button=button, keycode=keycode, delta_ms=0.0)
             )
         else:
             events.append(

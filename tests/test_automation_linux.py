@@ -745,19 +745,30 @@ def test_capture_lifecycle_order_strict():
 # ══════════════════ Migração do formato REAL do main ════════════════
 MAIN_FORMAT_LITERAL = (
     # Fixture literal do formato REAL do main.py legado: o container
-    # raiz é {nome_macro: {name, events, created, count}} e cada
-    # evento usa time (ms), type e os campos key/click/move — sem
-    # schema_version e sem wrapper de metadados.
+    # raiz é {nome_macro: {name, events, created, count}}; cada evento
+    # tem time=time.time()-record_start (SEGUNDOS float), type textual
+    # ("key"/"click"/"move") com os campos `key` (nome XK), `button`,
+    # `x`/`y` — sem schema_version e sem wrapper de metadados.
     '{'
-    '"click-teste": {'
-        '"name": "click-teste", '
+    '"macro-real": {'
+        '"name": "macro-real", '
         '"events": ['
-            '{"time": 0.0, "type": "key_press", "key": 38}, '
-            '{"time": 50.0, "type": "key_release", "key": 38}, '
-            '{"time": 120.0, "type": "mouse_click", "click": 1}, '
-            '{"time": 200.0, "type": "mouse_move", "move": [100, 250]}'
+            '{"time": 0.0, "type": "key", "key": "a"}, '
+            '{"time": 0.05, "type": "click", "button": 1}, '
+            '{"time": 0.12, "type": "move", "x": 100, "y": 250}'
         '], '
         '"created": "2026-08-19T12:00:00", '
+        '"count": 3'
+    '}, '
+    '"macro-main-puro": {'
+        '"name": "macro-main-puro", '
+        '"events": ['
+            '{"time": 0.0, "type": "key_press", "key": "space"}, '
+            '{"time": 0.025, "type": "key_release", "key": "space"}, '
+            '{"time": 0.1, "type": "mouse_click", "button": 3}, '
+            '{"time": 0.18, "type": "mouse_move", "x": 10, "y": 20}'
+        '], '
+        '"created": "2026-08-19T12:00:01", '
         '"count": 4'
     '}, '
     '"vazia-invisivel": {"name": "vazia", "events": [], "created": "", "count": 0}'
@@ -766,31 +777,51 @@ MAIN_FORMAT_LITERAL = (
 
 def test_store_main_format_literal_migrated(tmp_macros):
     """O formato REAL do main ({nome: {name, events, created, count}}
-    com eventos time/type/key/click/move) é carregado e convertido
-    para eventos canônicos — sem schema_version e sem wrapper de
-    metadados. O fixture é literal, copiado do arquivo real."""
+    com time em SEGUNDOS, type textual key/click/move, key como nome
+    XK "a"/"space"/"Return") é carregado e convertido para eventos
+    canônicos — sem schema_version e sem wrapper de metadados. O
+    fixture é literal, coerente com add_event/playback do main."""
     tmp_macros.write_text(MAIN_FORMAT_LITERAL, encoding="utf-8")
     store = MacroStore(tmp_macros)
-    assert store.load() == 1
-    evs = store.get("click-teste")
-    assert len(evs) == 5  # key_press + key_release + press+release + move
-    assert evs[0].kind == EventType.KEY_PRESS and evs[0].keycode == 38
+    assert store.load() == 2
+    # ── macro-real: time(seg) + key/click/move ─────────────────────
+    evs = store.get("macro-real")
+    assert evs is not None
+    # "key": "a" → keycode real 38 (XK_a via keysym), press+release.
+    assert evs[0].kind == EventType.KEY_PRESS
+    assert evs[0].keycode == 38
     assert evs[1].kind == EventType.KEY_RELEASE
-    # mouse_click legado vira press+release (press carrega o delta
-    # até o clique; release com delta 0).
+    assert evs[1].delta_ms == 0.0
+    # "click": button=1 → press+release; delta 0.05s→50ms desde key.
     assert evs[2].kind == EventType.MOUSE_PRESS
     assert evs[2].button == 1
+    assert evs[2].delta_ms == pytest.approx(50.0, abs=1.0)
     assert evs[3].kind == EventType.MOUSE_RELEASE and evs[3].button == 1
     assert evs[3].delta_ms == 0.0
-    # mouse_move: x=100 → button? não — x→button, y→keycode? O player
-    # lê io.move(x=event.button, y=event.keycode): x=100→button,
-    # y=250→keycode.
+    # "move": x=100, y=250 → io.move(x=event.button, y=event.keycode).
     assert evs[4].kind == EventType.MOUSE_MOVE
     assert evs[4].button == 100 and evs[4].keycode == 250
-    # Delta reconstruído do time absoluto (200-120=80ms).
-    assert evs[4].delta_ms == pytest.approx(80.0, abs=1.0)
-    # Macros vazias do wrapper são descartadas (mesma regra v1).
-    assert store.get("vazia-invisivel") is None
+    assert evs[4].delta_ms == pytest.approx(70.0, abs=1.0)
+    # ── macro-main-puro: key_press/key_release textual + mouse_click/mouse_move ──
+    evs2 = store.get("macro-main-puro")
+    assert evs2 is not None
+    # "key": "space" → keycode 65 (XK_space); key_release é evento
+    # legado separado com delta real (0.025s → 25ms desde o press).
+    assert evs2[0].kind == EventType.KEY_PRESS and evs2[0].keycode == 65
+    assert evs2[1].kind == EventType.KEY_RELEASE
+    assert evs2[1].delta_ms == pytest.approx(25.0, abs=1.0)
+    # "mouse_click": button=3; delta desde o key_release (0.1-0.025)
+    # = 75ms — vira press+release (release com delta 0).
+    assert evs2[2].kind == EventType.MOUSE_PRESS and evs2[2].button == 3
+    assert evs2[2].delta_ms == pytest.approx(75.0, abs=1.0)
+    assert evs2[3].kind == EventType.MOUSE_RELEASE and evs2[3].button == 3
+    assert evs2[3].delta_ms == 0.0
+    # "mouse_move": x=10, y=20 — delta 0.08s→80ms.
+    assert evs2[4].kind == EventType.MOUSE_MOVE
+    assert evs2[4].button == 10 and evs2[4].keycode == 20
+    assert evs2[4].delta_ms == pytest.approx(80.0, abs=1.0)
+    # ── regressão: int("w") nunca deve virar keycode ────────────────
+    assert store.get("vazia-invisivel") is None  # macro vazia descartada
 
 def test_store_flush_rollback_in_memory_post_exception(tmp_macros):
     """Quando a escrita falha (os.replace morto), o estado em memória
