@@ -135,23 +135,27 @@ class PlaybackController:
                 if self._stop_event.is_set():
                     break
                 t_prev = 0.0
-                t_start = time.monotonic()
+                t0 = time.monotonic()  # origem do tempo deste passe
+                interrupted = False
                 for ev in macro.events:
                     if self._stop_event.is_set():
+                        interrupted = True
                         break
-                    delay = ev.t - t_prev
-                    if delay > 0:
-                        # barreira interrompível a cada 50ms
-                        remaining = delay
-                        while remaining > 0:
-                            if self._stop_event.wait(min(0.05, remaining)):
-                                break
-                            remaining = delay - (time.monotonic() - t_start - t_prev)
-                            if remaining <= 0:
-                                break
-                            time.sleep(min(0.05, remaining))
+                    target = ev.t  # tempo alvo desde o início do passe
+                    deadline = t0 + target
+                    while time.monotonic() < deadline:
+                        if self._stop_event.wait(
+                                min(0.05, max(0.0, deadline - time.monotonic()))):
+                            interrupted = True
+                            break
+                        if time.monotonic() >= deadline:
+                            break
+                    if interrupted:
+                        break
                     t_prev = ev.t
                     self._backend.send_event(ev)
+                if interrupted:
+                    break
         except PlaybackError as exc:
             self._error = str(exc)
             with self._lock:
@@ -162,6 +166,8 @@ class PlaybackController:
             with self._lock:
                 self._state = PlaybackState.FAILED
             return
+        # parada solicitada por stop() ou repetições concluídas — sempre
+        # deixa o estado consistente (o worker nunca sai sem marcar)
         with self._lock:
             if self._state == PlaybackState.RUNNING:
                 self._state = PlaybackState.STOPPED

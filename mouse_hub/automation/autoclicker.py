@@ -148,8 +148,7 @@ class AutoClickerEngine:
                         with self._state_lock:
                             self._error = str(exc)
                             self._state = AutoClickerState.FAILED
-                        return
-
+                        return  # erro: sai já com FAILED marcado
                     delay = 1.0 / self._cps
                     if self._jitter_ms > 0:
                         jitter = random.uniform(
@@ -161,9 +160,16 @@ class AutoClickerEngine:
                     while time.monotonic() < deadline:
                         if self._stop_event.wait(
                                 min(0.05, max(0.0, deadline - time.monotonic()))):
-                            return
+                            # parada solicitada: final block normaliza estado
+                            break
                         if time.monotonic() >= deadline:
                             break
+                    else:
+                        # inner while não saiu por break/stop (não deveria
+                        # acontecer): reinicia a iteração
+                        continue
+                    if self._stop_event.is_set():
+                        break
 
                     # atualiza estado entre cliques quando em foco
                     with self._state_lock:
@@ -176,7 +182,7 @@ class AutoClickerEngine:
                     # poll mais lento quando fora do jogo; evita subprocessos
                     # em alta frequência (comportamento atual do produto)
                     if self._stop_event.wait(0.2):
-                        return
+                        break
         except Exception:
             # loop nunca deve morrer silenciosamente sem marcar estado
             with self._state_lock:
@@ -184,6 +190,9 @@ class AutoClickerEngine:
                                        AutoClickerState.STOPPED):
                     self._state = AutoClickerState.FAILED
 
+        # worker saiu do loop (stop() ou erro). Se ainda não marcou
+        # FAILED, o destino é STOPPED — inclusive quando estava
+        # BLOCKED_BY_FOCUS, pois o usuário pediu parada.
         with self._state_lock:
-            if self._state == AutoClickerState.RUNNING:
+            if self._state != AutoClickerState.FAILED:
                 self._state = AutoClickerState.STOPPED

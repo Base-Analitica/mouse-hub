@@ -131,7 +131,11 @@ class InputCapture:
             self._thread.join(timeout=3)
         self._thread = None
         with self._lock:
-            if self._state == CaptureState.ACTIVE:
+            # ACTIVE -> IDLE: thread encerrada normalmente (stop antes de
+            # falha); FAILED -> IDLE: falha já registrada em failed_reason,
+            # e cleanup completo libera para nova tentativa (o app cria um
+            # capturador novo ao reiniciar gravação)
+            if self._state in (CaptureState.ACTIVE, CaptureState.FAILED):
                 self._state = CaptureState.IDLE
 
     def _run(self):

@@ -33,7 +33,11 @@ CANONICAL_TYPES = {"key_down", "key_up", "mouse_down", "mouse_up", "mouse_move"}
 
 # Mapas de compatibilidade: formatos antigos (web e app nativo v0) para o
 # canônico. Mapeia type -> (tipo_canônico, kwargs_fixos).
+# Tipos canônicos entram no mapa como identidade (sem mapeamento),
+# garantindo roundtrip: evento canônico serializado -> desserializado.
 _LEGACY_TYPE_MAP = {
+    "key_down": ("key_down", {}),
+    "key_up": ("key_up", {}),
     "key_press": ("key_down", {}),
     "key_release": ("key_up", {}),
     "key": ("key_down", {}),
