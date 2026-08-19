@@ -74,9 +74,28 @@ class ProfileStore:
         sem arquivo no disco) → defaults confirmados do módulo.
         """
         outcome = load_config_outcome(self._paths)
-        if outcome.kind == LoadKind.DEFAULT and not self._paths.config_file.exists():
-            return outcome.config
-        return self._read_for_mutation(permit_default=False).config
+        if outcome.kind == LoadKind.DEFAULT:
+            # Apenas arquivo realmente ausente pode usar defaults;
+            # ilegível/corrompido NÃO retorna defaults (read seguro
+            # nunca silenciar dados reais).
+            if not self._paths.config_file.exists():
+                return outcome.config
+            raise ConfigError(
+                "Arquivo de configuração existente mas ilegível; leitura "
+                "recusada para não trabalhar com dados não confirmados"
+            )
+        if outcome.kind == LoadKind.IO_ERROR:
+            raise ConfigError(
+                "Arquivo de configuração existente mas ilegível (erro de "
+                "I/O); leitura recusada para não trabalhar com dados não "
+                "confirmados"
+            )
+        if outcome.kind == LoadKind.CORRUPTED:
+            raise ConfigError(
+                "Arquivo de configuração corrompido; leitura recusada para "
+                "não trabalhar com dados não confirmados"
+            )
+        return outcome.config
 
     def _read_for_mutation(self, *, permit_default: bool = False):
         """Carrega a configuração com o kind explícito, para uso em
@@ -89,7 +108,9 @@ class ProfileStore:
         * LoadKind.DEFAULT por arquivo ILEGÍVEL → erro explícito: o
           arquivo existe e não pode ser confirmado, sobrescrevê-lo com
           default destruiria dados;
-        * LoadKind.CORRUPTED → erro explícito: nunca escrever.
+        * LoadKind.CORRUPTED → erro explícito: nunca escrever;
+        * LoadKind.IO_ERROR → erro explícito: o arquivo existe, é ilegível
+          e sobrescrevê-lo destruiria bytes que não conseguimos ler.
         """
         outcome = load_config_outcome(self._paths)
         if outcome.kind == LoadKind.FILE:
@@ -99,17 +120,23 @@ class ProfileStore:
                 "Arquivo de configuração corrompido; mutação bloqueada "
                 "para não sobrescrever dados existentes"
             )
+        if outcome.kind == LoadKind.IO_ERROR:
+            raise ConfigError(
+                "Arquivo de configuração existente mas ilegível (erro de "
+                "I/O); mutação bloqueada para não sobrescrever dados "
+                "existentes"
+            )
         if outcome.kind == LoadKind.DEFAULT:
-            # DEFAULT sozinho não diz se o arquivo existe: checar. I/O
-            # no arquivo existente (ilegível) também bloqueia mutação.
+            # DEFAULT: arquivo ausente (primeira execução); mutações só
+            # prosseguem com permit_default=True — criação inicial
+            # confirmada pelos presets do módulo.
             if self._paths.config_file.exists():
-                try:
-                    self._paths.config_file.read_bytes()
-                except OSError as exc:
-                    raise ConfigError(
-                        f"Arquivo de configuração existente mas ilegível "
-                        f"({exc}); mutação bloqueada para não sobrescrever"
-                    ) from exc
+                # File existe mas o load não o leu (inacessível ao load
+                # por outra razão): não confiar nele.
+                raise ConfigError(
+                    "Arquivo de configuração existente mas não confirmado "
+                    "no carregamento; mutação bloqueada"
+                )
             if permit_default:
                 return outcome
             raise ConfigError(

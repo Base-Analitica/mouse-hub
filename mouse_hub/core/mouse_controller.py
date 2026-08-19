@@ -9,9 +9,15 @@ DPI físico é FAIL CLOSED com confirmação de resposta:
 * o comando só é considerado aplicado quando o dispositivo DEVOLVE a
   resposta esperada dentro do timeout (ACK da feature, conforme o
   protocolo HID++ 2.0);
-* escrita aceita mas sem resposta (timeout) ou resposta de erro
-  (sub-report 0x8F / erro de protocolo 0xFF) termina em FAILED —
+* escrita aceita mas sem resposta (TIMEOUT) ou erro de protocolo
+  correlacionado (report longo com feature_index 0xFF e function do
+  request ecoada) termina em FAILED com o error code real —
   `applied_dpi` nunca é atualizado e a sensibilidade nunca é tocada;
+* todos os comandos FAP via o controller saem em LONG report 0x11 de
+  20 bytes, conforme o driver upstream do kernel ("FAP only uses
+  HIDPP_LONG messages") — nunca em short report;
+* o device index 0xFF é o valor HID++ para o dispositivo conectado
+  diretamente (G403 cabeado, sem receiver);
 * o endpoint só participa de comandos de efeito depois de confirmado no
   protocolo (HydppEndpointSelection), com o feature index da feature
   Adjustable DPI (0x2201) descoberto dinamicamente via IRoot.GetFeature;
@@ -40,6 +46,7 @@ from __future__ import annotations
 from typing import Optional
 
 from mouse_hub.core.capabilities import CapabilityModel
+from mouse_hub.core.config import ConfigPaths
 from mouse_hub.core.constants import G403_NAME, G403_PID, G403_VID
 from mouse_hub.core.dpi import clamp_dpi, normalize_dpi
 from mouse_hub.core.operation import OperationResult, OperationStatus
@@ -49,13 +56,19 @@ from mouse_hub.core.sensitivity import (
     percent_to_accel,
 )
 from mouse_hub.platform.hidpp import (
-    DIRECT_USB_DEVICE_INDEX,
+    AckResult,
+    AckResultKind,
+    DEVICE_INDEX_DIRECT,
+    FAP_REPORT_LENGTH,
     FeatureId,
-    SHORT_REPORT_LENGTH,
-    SoftwareId,
-    RootFeature,
     matches_ack,
-    build_short_report,
+    matches_protocol_error,
+    parse_protocol_error,
+    RequestKey,
+    RootFeature,
+    SET_SENSOR_DPI_FUNCTION,
+    SoftwareId,
+    build_long_report,
 )
 from mouse_hub.platform.linux.device_discovery import (
     HydppEndpointSelection,
@@ -63,13 +76,10 @@ from mouse_hub.platform.linux.device_discovery import (
 )
 from mouse_hub.platform.protocol import HidAccess, MouseDevice, SystemInput
 
-# Report de comando SetSensorDPI (relatório curto 0x10):
-#   [report_id] [device_index] [feature_index descoberto] [fn+sw_id]
-#   [sensor_idx] [dpi_hi] [dpi_lo]
-_DPI_SET_FUNCTION = 0x03  # nibble da fn SetSensorDPI (spec oficial)
+# Comando SetSensorDPI (FAP, fn 0x03) — params: [sensor_idx] [dpi_hi]
+# [dpi_lo]. O report FAP é sempre LONG (0x11, 20 bytes), conforme o
+# driver upstream do kernel.
 _DPI_SENSOR_INDEX = 0x00
-_DPI_COMMAND_REPORT_LENGTH = 7
-_DEFAULT_PERSISTENCE = None  # injetável em teste
 
 
 class MouseController:
@@ -90,6 +100,8 @@ class MouseController:
         self._vid = vid
         self._pid = pid
         self._device: Optional[MouseDevice] = None
+        # Device index 0xFF: valor HID++ do dispositivo conectado
+        # diretamente (kernel upstream __hidpp_send_report).
         # Estado físico REAL não é conhecido até leitura/probe confirmados.
         self._applied_dpi: Optional[int] = None
         self._applied_sensitivity: Optional[int] = None
@@ -179,7 +191,8 @@ class MouseController:
         self._dpi_feature_index = outcome.feature_index
         return OperationResult.applied(
             f"Endpoint confirmado: Adjustable DPI (0x2201) no feature "
-            f"index {outcome.feature_index:#04x}"
+            f"index {outcome.feature_index:#04x} (device index "
+            f"{DEVICE_INDEX_DIRECT:#04x})"
         )
 
     @property
@@ -241,41 +254,46 @@ class MouseController:
                     return open_result
                 opened = True
 
-            request = build_short_report(
+            request = build_long_report(
                 self._dpi_feature_index,
-                _DPI_SET_FUNCTION,
+                SET_SENSOR_DPI_FUNCTION,
                 params=bytes([
                     _DPI_SENSOR_INDEX,
                     (effective >> 8) & 0xFF,
                     effective & 0xFF,
                 ]),
             )
+            request_key = RequestKey.from_long_request(
+                self._dpi_feature_index,
+                SET_SENSOR_DPI_FUNCTION,
+                device_index=DEVICE_INDEX_DIRECT,
+                software_id=SoftwareId.MOUSE_HUB,
+            )
             try:
                 write_result = self._hid.write(request)
                 if not write_result.status.ok:
                     return write_result
 
-                response = _wait_for_ack(
-                    self._hid,
-                    RequestKeyFrom(self._dpi_feature_index, _DPI_SET_FUNCTION),
-                )
+                ack_result = _wait_for_ack(self._hid, request_key)
             except OSError:
                 # Falha de transporte no descritor (fd sumiu, I/O no OS):
                 # o comando NÃO pode ser considerado aplicado — fail closed.
                 return OperationResult.failed(
                     "Falha de transporte no descritor hidraw ao aplicar DPI"
                 )
-            if response is None:
+            if ack_result.kind == AckResultKind.TIMEOUT:
                 return OperationResult.failed(
                     "Comando de DPI enviado sem ACK do dispositivo "
                     "(nenhuma resposta dentro da janela de espera)"
                 )
-            error_code = _protocol_error(response)
-
-            if error_code is not None:
+            if ack_result.kind == AckResultKind.PROTOCOL_ERROR:
+                # Erro FAP correlacionado: report longo com feature_index
+                # 0xFF e function do request ecoada — pertence a ESTE
+                # request, não a evento assíncrono de outro cliente.
                 return OperationResult.failed(
                     f"Comando de DPI rejeitado pelo dispositivo "
-                    f"(erro HID++ 2.0 {error_code:#04x})"
+                    f"(erro HID++ 2.0 {ack_result.error_code:#04x})",
+                    hidpp_error=ack_result.error_code,
                 )
         finally:
             if opened:
@@ -457,44 +475,37 @@ class MouseController:
 
 # ── Helpers de correlação e persistência ────────────────────────────
 
-def _wait_for_ack(
-    hid: HidAccess, request_key: RequestKey
-) -> Optional[bytes]:
-    """Aguarda o ACK correlacionado do request, descartando reports que
-    não o confirmam (events assíncronos de outros clientes).
+def _wait_for_ack(hid: HidAccess, request_key: RequestKey) -> AckResult:
+    """Classifica a resposta do request em resultado tipado: ACK, erro
+    de protocolo correlacionado ou TIMEOUT.
 
-    O HID pode entregar events de outro software (report de report
-    rate, eventos de botões, notifications) entre o request e a
-    resposta — todos são descartados até chegar o ACK exato ou o
-    tempo acabar. Máximo de 3 janelas de leitura para não esperar
+    Reports que não casam com o request (event assíncrono de outro
+    software, outra feature, outro report type) são descartados como
+    noise. O erro FAP pertence ao request original quando o report
+    longo tem feature_index 0xFF e ecoa o byte function+sw do request
+    (params[0]) — sem isso, erro assíncrono de outro request nunca é
+    aceito. Máximo de 3 janelas de leitura para não esperar
     indefinidamente em endpoint mudo."""
+    import time
+
+    deadline = time.monotonic() + 1.5
     for _ in range(3):
-        response = hid.read(SHORT_REPORT_LENGTH, timeout=0.5)
-        if response is None:
-            return None
-        if matches_ack(response, request_key):
-            return response
-    return None
-
-def RequestKeyFrom(feature_index: int, function: int):
-    """Chave de correlação para o ACK de um comando de efeito:
-    short report, device index USB direto, software ID próprio."""
-    from mouse_hub.platform.hidpp import RequestKey
-
-    return RequestKey.from_short_request(
-        feature_index,
-        function,
-        device_index=DIRECT_USB_DEVICE_INDEX,
-        software_id=SoftwareId.MOUSE_HUB,
-    )
-
-
-def _protocol_error(raw: bytes) -> Optional[int]:
-    """Código de erro de protocolo HID++ 2.0 (feature_index 0xFF em
-    report longo) ou None se o report não é um erro."""
-    from mouse_hub.platform.hidpp import is_protocol_error
-
-    return is_protocol_error(raw)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return AckResult(AckResultKind.TIMEOUT, timed_out=True)
+        raw = hid.read(FAP_REPORT_LENGTH, timeout=min(0.5, remaining))
+        if raw is None:
+            continue
+        if matches_ack(raw, request_key):
+            return AckResult(AckResultKind.ACK, response=raw)
+        if matches_protocol_error(raw, request_key):
+            return AckResult(
+                AckResultKind.PROTOCOL_ERROR,
+                response=raw,
+                error_code=parse_protocol_error(raw),
+            )
+        # Report que não pertence ao request = noise: descartar.
+    return AckResult(AckResultKind.TIMEOUT, timed_out=True)
 
 
 def _persist_applied_dpi(
@@ -502,11 +513,17 @@ def _persist_applied_dpi(
     device: Optional[MouseDevice],
     persister=None,
 ) -> Optional[bool]:
-    """Persiste o DPI confirmado. `persister(effective) -> bool | None`:
-    True = persistido, False = falha (o hardware confirmou, mas a
-    persistência não — os dois estados ficam explícitos), None = sem
-    persister configurado. Retornamos None para "não aplicável" e
-    booleano para "aplicado/falhou"."""
+    """Persiste o DPI confirmado SOMENTE após ACK físico válido.
+
+    `persister(effective) -> bool | None`:
+    * True  → persistido (applied_dpi salvo em config.json);
+    * False → hardware confirmou mas persistência falhou — os dois
+      estados ficam explícitos no resultado da operação;
+    * None  → persister ausente (aplicado, não persistido).
+    Timeout/rejeição nunca chega aqui — o chamador só invoca após ACK.
+    A persistência nunca destrói arquivo corrompido: o persister padrão
+    (DpiConfigPersister, ligado à ConfigStore) escreve sobre a config
+    já carregada/validada."""
     if persister is None:
         return None
     try:

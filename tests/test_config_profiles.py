@@ -104,6 +104,66 @@ def test_invalid_json_raises_config_error_with_backup(tmp_path):
         load_config(paths, strict=True)
 
 
+def test_default_config_applied_state_starts_unknown(tmp_path):
+    """O estado aplicado começa desconhecido (None) — a janela só ganha
+    applied_dpi/applied_sensitivity depois de confirmação real; o
+    default nunca inventa valores aplicados."""
+    config = default_config()
+    assert config["applied_dpi"] is None
+    assert config["applied_sensitivity"] is None
+
+
+def test_load_config_migration_preserves_int_applied_state(tmp_path):
+    """Config antiga com applied_dpi como int é preservada (migração
+    compatível); int não é perdido nem reinterpretado como unknown."""
+    paths = ConfigPaths(tmp_path / "config", tmp_path / "data")
+    paths.config_dir.mkdir(parents=True)
+    paths.config_file.write_text(json.dumps({"dpi": 1600, "applied_dpi": 800}))
+    config = load_config(paths)
+    assert config["applied_dpi"] == 800
+
+
+def test_load_io_error_kind(tmp_path):
+    """Arquivo existente mas ilegível por I/O: kind IO_ERROR (não
+    CORRUPTED, não DEFAULT) — o caller distingue a causa."""
+    import os
+    paths = ConfigPaths(tmp_path / "config", tmp_path / "data")
+    paths.config_dir.mkdir(parents=True)
+    paths.config_file.write_text('{"dpi": 1200}')
+    os.chmod(str(paths.config_file), 0o000)
+    try:
+        outcome = load_config_outcome(paths)
+        assert outcome.kind == LoadKind.IO_ERROR
+        with pytest.raises(ConfigError):
+            load_config(paths, strict=True)
+    finally:
+        os.chmod(str(paths.config_file), 0o644)
+
+
+def test_io_error_blocks_mutations(tmp_path):
+    """Arquivo existente mas ilegível: nenhuma mutação pode prosseguir
+    — salvar/renomear/deletar perfis falha explicitamente sem tocar no
+    arquivo."""
+    import os
+    paths = ConfigPaths(tmp_path / "config", tmp_path / "data")
+    paths.config_dir.mkdir(parents=True)
+    paths.config_file.write_text('{"dpi": 1200, "profiles": {"csgo": {"dpi": 800, "sensitivity": 50}}}')
+    os.chmod(str(paths.config_file), 0o000)
+    try:
+        store = ProfileStore(paths)
+        assert not store.save_profile("new", 1600, 60).success
+        assert not store.delete_profile("csgo").success
+        assert not store.rename_profile("csgo", "other").success
+    finally:
+        os.chmod(str(paths.config_file), 0o644)
+    # As mutações bloquearam sem tocar no arquivo: o conteúdo original
+    # segue byte a byte no disco.
+    assert paths.config_file.read_text() == (
+        '{"dpi": 1200, "profiles": {"csgo": {"dpi": 800, '
+        '"sensitivity": 50}}}'
+    )
+
+
 def test_non_object_json_raises_config_error(tmp_path):
     paths = ConfigPaths(tmp_path / "config", tmp_path / "data")
     paths.config_dir.mkdir(parents=True)

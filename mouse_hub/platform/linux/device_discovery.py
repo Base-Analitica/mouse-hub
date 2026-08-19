@@ -10,13 +10,21 @@ VID/PID no uevent é condição necessária mas não suficiente:
 1. Identidade: o parser de `HID_ID` é defensivo — entradas malformadas
    são ignoradas, jamais lançam exceção.
 2. Protocolo: cada candidato é sondado de verdade via feature IRoot
-   (0x0000) do HID++ 2.0 — GET_FEATURE_TABLE_COUNT de report curto
-   (feature 0x00, fn 0) para confirmar IRoot (eco de 3 bytes de params,
-   validando device index e software ID), e depois IRoot.GetFeature
-   (fn 0) com o FEATURE ID 0x2201 (Adjustable DPI) para confirmar que o
-   endpoint suporta a feature de DPI e descobrir o feature index que o
-   dispositivo usará para endereçá-la. Só o endpoint que passa nas duas
-   etapas é elegível para escritas de efeito.
+   (0x0000) do HID++ 2.0 — todos os comandos FAP são emitidos em
+   LONG report 0x11 de 20 bytes, conforme o driver upstream do kernel
+   ("FAP only uses HIDPP_LONG messages"). O device index 0xFF é o
+   valor HID++ para o dispositivo conectado diretamente (G403 cabo USB,
+   sem receiver). Sequência:
+
+   a) IRoot.GetProtocolVersion (fn 1) confirma o protocolo HID++ 2.0
+      (eco de header + ping echo em params[2]);
+   b) IRoot.GetFeature(fn 0) com o FEATURE ID 0x2201 (Adjustable DPI)
+      confirma a feature e descobre o feature index real — a única
+      garantia de index da especificação é a de IRoot (index 0), o
+      resto é sempre descoberto, nunca deduzido de Feature ID.
+
+   Só o endpoint que passa nas duas etapas é elegível para escritas de
+efeito.
 
 Quando vários endpoints do mesmo G403 respondem ao protocolo, a
 seleção é ambígua e o produto não decide por conta própria: nada é
@@ -34,11 +42,15 @@ from typing import List, Optional
 
 from mouse_hub.core.constants import G403_PID, G403_VID
 from mouse_hub.platform.hidpp import (
-    DIRECT_USB_DEVICE_INDEX,
+    AckResultKind,
+    DEVICE_INDEX_DIRECT,
+    FAP_REPORT_LENGTH,
     FeatureId,
-    SHORT_REPORT_LENGTH,
-    SoftwareId,
+    matches_ack,
+    matches_protocol_error,
+    parse_protocol_error,
     RootFeature,
+    SoftwareId,
 )
 from mouse_hub.platform.protocol import HidAccess, MouseDevice
 
@@ -171,8 +183,8 @@ class HydppEndpointSelection:
     """Segunda etapa da descoberta: confirma qual candidato realmente
     suporta o protocolo HID++ 2.0.
 
-    Envolve o `HidAccess` (abre, sonda com GET_FEATURE_TABLE_COUNT via
-    long packet e fecha) para decidir entre os candidatos. A seleção é
+    Envolve o `HidAccess` (abre, sonda com IRoot em FAP LONG e fecha)
+    para decidir entre os candidatos. A seleção é
     fail closed: se nenhum candidato responder, se um responder com
     erro, ou se mais de um responder sem como decidir com segurança, a
     seleção falha e nenhum endpoint é retornado — nada é escrito em
@@ -182,17 +194,40 @@ class HydppEndpointSelection:
     def __init__(self, hid: HidAccess) -> None:
         self._hid = hid
 
-    def _probe_one(self, device: MouseDevice) -> ProbeOutcome:
-        """Probe de protocolo completo em duas etapas, conforme a
-        especificação HID++ 2.0:
+    @staticmethod
+    def _read_typed(hid: HidAccess, request_key, timeout: float):
+        """Lê respostas até encontrar uma classificável como ACK, erro
+        correlacionado ou esgotar o tempo — reports que não casam com o
+        request (noise) são descartados sem efeito."""
+        import time
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return AckResultKind.TIMEOUT, None, None
+            raw = hid.read(FAP_REPORT_LENGTH, timeout=min(0.5, remaining))
+            if raw is None:
+                continue
+            if matches_ack(raw, request_key):
+                return AckResultKind.ACK, raw, None
+            if matches_protocol_error(raw, request_key):
+                return AckResultKind.PROTOCOL_ERROR, raw, parse_protocol_error(raw)
+            # Report que não pertence ao request = noise: descartar e
+            # continuar tentando.
 
-        1. GET_FEATURE_TABLE_COUNT via report curto (feature index 0 =
-           IRoot, fn 0): confirma que o endpoint responde ao protocolo
-           e que o report ecoa o device index usado.
+    def _probe_one(self, device: MouseDevice) -> ProbeOutcome:
+        """Probe de protocolo completo em duas etapas, conforme o
+        driver upstream e a especificação HID++ 2.0:
+
+        1. IRoot.GetProtocolVersion (fn 1) em FAP LONG — confirma que o
+           endpoint responde ao protocolo (ACK correlacionado, eco do
+           ping).
         2. IRoot.GetFeature(0x2201 — Adjustable DPI): confirma a
            presença da feature e descobre o feature index real que o
            dispositivo usará para endereçar a feature.
 
+        Nenhum index é deduzido de Feature ID: a única garantia da
+        especificação é IRoot no index 0; todo o resto é descoberto.
         Abre o descritor temporariamente e o fecha em qualquer caminho
         (inclusive exceção). Nenhum estado fica para trás.
         """
@@ -212,28 +247,21 @@ class HydppEndpointSelection:
                 return ProbeOutcome(valid=False, accessible=accessible)
             opened = True
 
-            root = RootFeature(DIRECT_USB_DEVICE_INDEX, SoftwareId.MOUSE_HUB)
+            root = RootFeature(DEVICE_INDEX_DIRECT, SoftwareId.MOUSE_HUB)
 
-            # Etapa 1: GET_FEATURE_TABLE_COUNT (feature set 0x0001, fn 0).
-            # O dispositivo ecoa o header completo no report de resposta,
-            # então validamos device_index, feature_index (0x01) e
-            # function+software_id antes de aceitar qualquer dado.
-            request = root.get_feature_table_count_request()
+            # Etapa 1: GetProtocolVersion confirma HID++ 2.0.
+            request = root.protocol_version_request()
             write_result = self._hid.write(request)
             if not write_result.status.ok:
                 return ProbeOutcome(valid=False, accessible=True)
-            response = self._hid.read(SHORT_REPORT_LENGTH, timeout=0.5)
-            if response is None or len(response) < SHORT_REPORT_LENGTH:
+            kind, response, error_code = self._read_typed(
+                self._hid, root.protocol_version_request_key(), 0.5,
+            )
+            if kind != AckResultKind.ACK:
+                # Device mudo (TIMEOUT) ou rejeitou o ping
+                # (PROTOCOL_ERROR): endpoint não validável.
                 return ProbeOutcome(valid=False, accessible=True)
-            # Header ecoado: device index e software ID do request.
-            expected_fn_sw = (0x00 << 4) | SoftwareId.MOUSE_HUB
-            if (
-                response[1] != DIRECT_USB_DEVICE_INDEX
-                or response[2] != 0x01
-                or response[3] != expected_fn_sw
-            ):
-                return ProbeOutcome(valid=False, accessible=True)
-            if root.parse_feature_table_count_response(response) is None:
+            if root.parse_protocol_version_response(response) is None:
                 return ProbeOutcome(valid=False, accessible=True)
 
             # Etapa 2: IRoot.GetFeature(0x2201) — presença de DPI.
@@ -241,34 +269,28 @@ class HydppEndpointSelection:
             write_result = self._hid.write(request)
             if not write_result.status.ok:
                 return ProbeOutcome(valid=False, accessible=True)
-            response = self._hid.read(SHORT_REPORT_LENGTH, timeout=0.5)
-            if response is None or len(response) < SHORT_REPORT_LENGTH:
+            kind, response, error_code = self._read_typed(
+                self._hid, root.get_feature_request_key(), 0.5,
+            )
+            if kind == AckResultKind.TIMEOUT:
                 return ProbeOutcome(valid=False, accessible=True)
-            expected_fn_sw = (root.FN_GET_FEATURE << 4) | SoftwareId.MOUSE_HUB
-            if response[1] != DIRECT_USB_DEVICE_INDEX \
-                    or response[3] != expected_fn_sw:
-                # Header não espelha o request — pode ser report
-                # assíncrono de outro software ou de outra feature.
-                return ProbeOutcome(valid=False, accessible=True)
-            if response[2] == 0x8F:
-                # Erro RAP ecoado com o header correto: o dispositivo
-                # rejeitou a consulta (HID++ válido, sem o que
-                # consultamos) — endpoint válido, feature ausente.
+            if kind == AckResultKind.PROTOCOL_ERROR:
+                # Erro FAP correlacionado (feature_index 0xFF, function
+                # ecoada): GetFeature válido para IRoot — erro aqui
+                # significa que a feature NÃO é suportada, mas o
+                # protocolo é real. Endpoint válido sem DPI.
                 return ProbeOutcome(valid=True, feature_index=None,
                                     accessible=True)
-            # Qualquer outro valor de byte2 que não seja o feature index
-            # esperado nem 0x8F não cabe em uma resposta legítima do
-            # GetFeature — endpoint não validável.
-            if response[2] != root.FEATURE_INDEX:
+            parsed = root.parse_get_feature_response(response)
+            if parsed is None:
                 return ProbeOutcome(valid=False, accessible=True)
-            feature_index = int(response[4])
+            feature_index, _flags, _version = parsed
             if feature_index == 0xFF:
-                # Erro de protocolo HID++ 2.0: o dispositivo rejeitou o
-                # GetFeature com INVALID_FEATURE_INDEX ou similar.
+                # Resposta com feature index 0xFF não é um GetFeature
+                # legítimo — endpoint não validável.
                 return ProbeOutcome(valid=False, accessible=True)
-            # GetFeature devolve (feature_index, flags, version); index
-            # 0 significa que a feature NÃO é suportada — o endpoint
-            # ainda é HID++ 2.0 válido, só sem Adjustable DPI.
+            # index 0 = feature não suportada (endpoint HID++ válido,
+            # sem Adjustable DPI).
             return ProbeOutcome(
                 valid=True,
                 feature_index=feature_index if feature_index != 0 else None,

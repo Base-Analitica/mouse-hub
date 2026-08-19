@@ -252,10 +252,13 @@ def test_endpoint_selection_probe_queries_0x2201_dynamically(tmp_path):
     selection.select(find_g403_hidraw_devices(G403_VID, G403_PID, root))
     get_feature_request = [
         r for r in hid.written_reports
-        if len(r) == 7 and r[2] == 0x00 and ((r[3] >> 4) & 0x0F) == 0
+        if len(r) == 20 and r[2] == 0x00 and ((r[3] >> 4) & 0x0F) == 0
         and ((r[4] << 8) | r[5]) == 0x2201
     ]
     assert len(get_feature_request) == 1
+    # Todos os reports de probe são FAP long (0x11), device index 0xFF
+    # — nunca short report.
+    assert all(r[0] == 0x11 and r[1] == 0xFF for r in hid.written_reports)
 
 
 def test_endpoint_selection_rejects_non_responsive(tmp_path):
@@ -269,20 +272,22 @@ def test_endpoint_selection_rejects_non_responsive(tmp_path):
 
 
 def test_endpoint_selection_rejects_stage1_error(tmp_path):
-    """Endpoint que rejeita o feature set count (0x8F) não valida."""
+    """Endpoint que responde IRoot mas rejeita GetFeature(0x2201) com
+    erro FAP 2.0 não valida para DPI — o erro é correlacionado com o
+    request (eco do header), não um sub-report genérico."""
     root = make_sysfs_root(tmp_path, {"hidraw2": G403_UEVENT})
     hid = FakeHidAccess()
-    hid.probe_stage1_error = True
+    hid.probe_stage2_error = True
     selection = HydppEndpointSelection(hid)
     assert selection.select(find_g403_hidraw_devices(G403_VID, G403_PID, root)) is None
 
 
 def test_endpoint_selection_rejects_stage2_error(tmp_path):
-    """Endpoint que rejeita o GetFeature(0x2201) com 0x8F é HID++
+    """GetFeature(0x2201) devolvendo feature ausente (index 0): HID++
     válido, mas sem a feature ajustável — não seleciona."""
     root = make_sysfs_root(tmp_path, {"hidraw2": G403_UEVENT})
     hid = FakeHidAccess()
-    hid.probe_stage2_error = True
+    hid.dpi_feature_index = 0
     selection = HydppEndpointSelection(hid)
     assert selection.select(find_g403_hidraw_devices(G403_VID, G403_PID, root)) is None
 
@@ -380,9 +385,14 @@ def test_hid_write_succeeds_on_confirmed_device():
     device = fake_g403_device()
     open_result = hid.open(device)
     assert open_result.status.ok
-    write_result = hid.write(b"\x10\x00\x01\x34\x00\x06\x40")
+    # FAP long 0x11, device index 0xFF: SetSensorDPI (fn 0x03) com
+    # sensor 0 e DPI 1600 big endian.
+    report = b"\x11\xff\x01\x34\x00\x06\x40" + b"\x00" * 13
+    write_result = hid.write(report)
     assert write_result.status.ok
-    assert hid.written_reports == [b"\x10\x00\x01\x34\x00\x06\x40"]
+    assert hid.written_reports == [report]
+    # Short report (0x10) não é aceito para FAP: o fake não responde
+    # ao request (eco pendente limpo no close).
 
 
 def test_hid_write_failure_is_reported():
@@ -391,14 +401,16 @@ def test_hid_write_failure_is_reported():
     hid = FakeHidAccess()
     hid.write_succeeds = False
     hid.open(fake_g403_device())
+    report = b"\x11\xff\x01\x34\x00\x06\x40" + b"\x00" * 13
     with pytest.raises(OSError):
-        hid.write(b"\x10\x00\x01\x34\x00\x06\x40")
+        hid.write(report)
     assert hid.written_reports == []  # nada foi escrito de fato
 
 
 def test_hid_never_writes_before_opening():
     hid = FakeHidAccess()
-    hid.write(b"\x10\x00\x01\x34\x00\x06\x40")
+    report = b"\x11\xff\x01\x34\x00\x06\x40" + b"\x00" * 13
+    hid.write(report)
     assert hid.written_reports == []
 
 
@@ -436,12 +448,14 @@ def test_hid_readback_acks_set_dpi():
     ecoando o header — a confirmação que o core exige."""
     hid = FakeHidAccess()
     hid.open(fake_g403_device())
-    # SetSensorDPI: feature index 1, fn 0x03 + sw, sensor 0, 1600 big endian.
-    hid.write(b"\x10\x00\x01\x34\x00\x06\x40")
+    # SetSensorDPI em FAP long: device index 0xFF, feature index 1
+    # (descoberto), fn 0x03 + sw 0x04, sensor 0, 1600 big endian.
+    hid.write(b"\x11\xff\x01\x34\x00\x06\x40" + b"\x00" * 13)
     response = hid.read(20)
     assert response is not None
-    # Eco do header.
-    assert response[0] == 0x10
+    # Eco do header em long report.
+    assert response[0] == 0x11
+    assert response[1] == 0xFF
     assert response[2] == 0x01
     assert (response[3] >> 4) & 0x0F == 0x03
     # Payload: DPI aplicado confirmado pelo dispositivo.

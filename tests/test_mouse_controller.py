@@ -83,10 +83,10 @@ def test_public_lifecycle_end_to_end(controller):
 
 
 def test_probe_closes_descriptor_on_read_error(controller):
-    """Probe com endpoint mudo: descritor fecha em qualquer caminho,
-    inclusive falha."""
+    """Probe com endpoint mudo (IRoot.GetFeature sem resposta): o
+    descritor fecha em qualquer caminho, inclusive falha."""
     ctrl, hid, _ = controller
-    hid.probe_stage1_error = True
+    hid.ack_timeout = True
     assert not ctrl.probe_endpoint().status.ok
     assert not hid.is_open()
 
@@ -110,10 +110,18 @@ def test_probe_discovers_feature_index_dynamically(controller):
     after_probe = len(hid.written_reports)
     get_feature_request = [
         r for r in hid.written_reports[before_probe:after_probe]
-        if len(r) == 7 and r[2] == 0x00 and ((r[3] >> 4) & 0x0F) == 0
+        if len(r) == 20 and r[2] == 0x00 and ((r[3] >> 4) & 0x0F) == 0
         and ((r[4] << 8) | r[5]) == 0x2201
     ]
     assert len(get_feature_request) == 1
+    # O index da IFeatureSet NÃO é deduzido do Feature ID (o fake expõe
+    # 0x05 — quem assume 0x01 falha aqui).
+    featureset_requests = [
+        r for r in hid.written_reports[before_probe:after_probe]
+        if len(r) == 20 and ((r[3] >> 4) & 0x0F) == 0 and ((r[4] << 8) | r[5]) == 0x0001
+    ]
+    if featureset_requests:
+        assert featureset_requests[0][2] == hid.ifeatureset_index
     # E o comando de DPI usa o índice descoberto (não hardcoded).
     before_set = len(hid.written_reports)
     assert ctrl.set_hardware_dpi(800).status.ok
@@ -146,16 +154,9 @@ def test_probe_feature_index_negative_is_error(controller):
 
 
 def test_probe_stage1_error(controller):
-    ctrl, hid, _ = controller
-    hid.probe_stage1_error = True
-    ctrl.refresh_device(fake_g403_device())
-    assert not ctrl.probe_endpoint().status.ok
-    assert ctrl._dpi_feature_index is None
-
-
-def test_probe_stage2_error(controller):
-    """GetFeature(0x2201) rejeitado com 0x8F: endpoint HID++ válido
-    mas sem DPI (feature ausente), probe termina unsupported."""
+    """GetFeature(0x2201) rejeitado com erro FAP 2.0: endpoint HID++ 2.0
+    válido mas sem a feature Adjustable DPI — probe termina unsupported.
+    O erro devolvido pelo device é correlacionado com o request."""
     ctrl, hid, _ = controller
     hid.probe_stage2_error = True
     ctrl.refresh_device(fake_g403_device())
@@ -205,9 +206,10 @@ def test_set_hardware_dpi_applies_to_hid(controller):
     # O report carrega o DPI em big endian no payload (sensor, hi, lo)
     # e o feature index descoberto dinamicamente.
     report = hid.written_reports[-1]
-    assert report[0] == 0x10
+    assert report[0] == 0x11  # FAP long, nunca short
+    assert report[1] == 0xFF  # device index direto (USB cabado)
     assert report[2] == ctrl._dpi_feature_index
-    assert len(report) == 7
+    assert len(report) == 20
     assert (report[5] << 8 | report[6]) == 800
     assert result.details.get("confirmation") is True
 
@@ -326,7 +328,8 @@ def test_dpi_with_async_noise_is_discarded(controller):
     só avança quando chega o ACK real do request dele."""
     ctrl, hid, _ = controller
     hid.async_noise = [
-        bytes([0x10, 0x00, 0x05, (0x03 << 4) | 0x01, 0x00, 0x00, 0x00]),
+        bytes([0x11, 0xFF, 0x05, (0x03 << 4) | 0x01, 0x00, 0x00, 0x00])
+        + b"\x00" * 13,
     ]
     result = ctrl.set_hardware_dpi(1600)
     # O noise foi descartado; o ACK real chegou depois e confirmou.
@@ -339,7 +342,8 @@ def test_dpi_with_only_async_noise_is_failed(controller):
     ctrl, hid, _ = controller
     # Noise eterno: cada read consome um event sem nunca chegar ACK.
     hid.async_noise = [
-        bytes([0x10, 0x00, 0x05, (0x03 << 4) | 0x01, 0x00, 0x00, 0x00])
+        bytes([0x11, 0xFF, 0x05, (0x03 << 4) | 0x01, 0x00, 0x00, 0x00])
+        + b"\x00" * 13
     ] * 32
     result = ctrl.set_hardware_dpi(1600)
     assert result.status.value == "failed"
@@ -592,4 +596,6 @@ def test_capability_evaluation_is_read_only(controller):
 
 
 def report_is_dpi(report: bytes) -> bool:
-    return report[0] == 0x10 and ((report[3] >> 4) & 0x0F) == 0x03
+    # FAP long: 0x11, device 0xFF, fn 0x03 (SetSensorDPI)
+    return (report[0] == 0x11 and report[1] == 0xFF
+            and ((report[3] >> 4) & 0x0F) == 0x03)

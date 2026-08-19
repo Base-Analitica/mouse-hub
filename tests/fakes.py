@@ -6,53 +6,67 @@ subprocess. Não há nenhum sucesso falso possível: cada fake registra
 exatamente o que "aplicou" e sob quais condições falha.
 
 O FakeHidAccess implementa uma máquina de protocolo HID++ 2.0 mínima
-porém correta: as respostas são COMPUTADAS a partir do request,
-espelhando o header (device_index, feature_index, function+software_id)
-e validando o software ID do próprio cliente, conforme a convenção
-publicada (report curto 0x10 com device index 0x00 para conexão USB
-direta). O fakes não dita o protocolo — a especificação dita, o fake só
-a executa.
+porém correta, conforme o driver upstream do kernel:
+
+* FAP SEMPRE em LONG report 0x11 de 20 bytes (o kernel não usa short
+  para FAP);
+* device index 0xFF para dispositivo conectado diretamente (G403
+  cabeado);
+* as respostas são COMPUTADAS a partir do request, espelhando o header
+  (device_index, feature_index, function+software_id) — o core valida o
+  eco do header como manda o protocolo;
+* erros FAP saem em report longo com feature_index 0xFF, params[0] =
+  function+sw do request rejeitado e params[1] = error code (o fake
+  correlaciona o erro ao request, como o dispositivo real faz).
 
 Cenários configuráveis:
 
 * open_permission_denied / open_raises → desfecho real de abertura;
 * dpi_feature_index → feature index que IRoot.GetFeature(0x2201)
-  devolve (None/0 = feature ausente; índice dinâmico ≠ hardcoded);
+  devolve (0 = feature ausente; erro configurado → report FAP error);
+* ifeatureset_index → o index real da IFeatureSet devolvido por
+  GetFeature(0x0001) — NÃO é 0x01 hardcoded, como o core não deve
+  assumir;
 * sw_id_wrong / async_noise → reports de terceiros e eventos assíncronos
   que NÃO confirmam request (o core deve rejeitá-los);
-* probe_stage1_error / probe_stage2_error → o endpoint rejeita uma das
-  etapas do probe (0x8F);
 * ack_timeout → o endpoint silencia na resposta;
-* readback_mode → "echo" devolve o eco do SetSensorDPI (fn 0x10) e o
-  valor aplicado, "none" devolve None (sem readback).
+* readback_mode → "echo" devolve o eco do SetSensorDPI com o valor
+  aplicado, "none" devolve None (sem readback).
 """
 
 from __future__ import annotations
 
-from typing import Callable, List, Optional
+from typing import List, Optional
 
 from mouse_hub.core.operation import OperationResult
 from mouse_hub.platform.hidpp import (
-    SHORT_REPORT_LENGTH,
+    FAP_REPORT_LENGTH,
+    LONG_REPORT_ID,
+    PROTOCOL_ERROR_FEATURE_INDEX,
+    RootFeature,
     SoftwareId,
 )
 from mouse_hub.platform.protocol import HidAccess, MouseDevice, SystemInput
 
-# IDs de referência — a máquina de protocolo usa o que o core escreve,
-# não hardcoded de um lado só.
+# Feature IDs — os indexes reais são descobertos via GetFeature, nunca
+# deduzidos do Feature ID.
 ROOT_FEATURE_INDEX = 0x00
-FEATURE_SET_INDEX = 0x01
 ROOT_FN_GET_FEATURE = 0x00
+ROOT_FN_GET_PROTOCOL_VERSION = 0x01
 DPI_FN_SET = 0x03
+GET_SENSOR_DPI_FN = 0x00
+ADJUSTABLE_DPI_FEATURE_ID = 0x2201
+FEATURE_SET_FEATURE_ID = 0x0001
 
 
 class FakeHidAccess(HidAccess):
     """HidAccess controlável em teste, com máquina de protocolo HID++ 2.0.
 
-    Requests e responses usam report CURTO (0x10) com device index 0x00
-    (USB direto) — o fake responde a qualquer report_id, preservando
-    nas respostas o que o request trouxe, para que o core valide o eco
-    do header como manda o protocolo.
+    Requests e responses usam FAP em LONG report 0x11 (20 bytes) com
+    device index 0xFF (USB direto), conforme o driver upstream — o fake
+    responde ao que o core escreve, preservando nas respostas o que o
+    request trouxe (eco de header), para que o core valide o eco como
+    manda o protocolo.
     """
 
     def __init__(self) -> None:
@@ -60,31 +74,38 @@ class FakeHidAccess(HidAccess):
         self.open_permission_denied: bool = False
         self.open_raises: Optional[BaseException] = None
         # Feature Adjustable DPI: feature index devolvido por
-        # IRoot.GetFeature(0x2201). 0 (ou None) = feature ausente;
-        # -1 = erro de protocolo (index 0xFF, FAP error).
-        self.dpi_feature_index: Optional[int] = 1
-        # Rejeição das etapas do probe com sub-report de erro 0x8F:
-        # stage1 = feature set count; stage2 = GetFeature(0x2201).
-        self.probe_stage1_error: bool = False
+        # IRoot.GetFeature(0x2201). 0 = feature ausente; -1 = o
+        # dispositivo rejeita o GetFeature com erro de protocolo.
+        self.dpi_feature_index: int = 1
+        # O index real da IFeatureSet (GetFeature 0x0001) — o core não
+        # pode assumir 0x01; o fake expõe qualquer valor.
+        self.ifeatureset_index: int = 0x05
+        # IFeatureSet.GetFeatureCount (fn 1): quantas features o device
+        # anuncia. -1 = não implementado (device devolve erro NOT_ALLOWED).
+        self.ifeatureset_count: int = 6
+        # Rejeição do probe em GetFeature(0x2201) com erro FAP
+        # correlacionado (INVALID_FEATURE_INDEX 0x06).
         self.probe_stage2_error: bool = False
         # Software ID errado nas respostas: o header ecoa um sw_id de
         # outro cliente — o core deve tratar como não-ACK.
         self.sw_id_wrong: bool = False
         self.wrong_sw_id: int = 0x01
         # Eventos assíncronos de outro software injetados na fila de
-        # respostas (ex.: event de report de outro aplicativo Logitech)
+        # respostas (ex.: event de report rate de outro aplicativo)
         # antes de qualquer resposta esperada.
         self.async_noise: List[bytes] = []
-        # Confirmação
+        # Confirmação: endpoint mudo até o fim da janela.
         self.ack_timeout: bool = False
         # Falha de transporte na escrita (fd sumiu, write falhou no OS):
         # o controller deve tratar como FAILED antes de assumir sucesso.
         self.write_succeeds: bool = True
         # DPI aplicado
         self.dpi_set_rejected: bool = False
-        self.dpi_fn_error: bool = False  # GetSensorDPI fn 0x20 com erro 0x8F
-        # Readback: "echo" devolve o eco do último SetSensorDPI (fn 0x10)
-        # com o valor aplicado; "none" devolve None.
+        # Rejeita o SetSensorDPI com erro FAP 0x09 (UNSUPPORTED) em
+        # vez de erro RAP curto — para cobrir a correlação de erros FAP.
+        self.dpi_set_fap_error: bool = False
+        # Readback: "echo" devolve o eco do último SetSensorDPI com o
+        # valor aplicado; "none" devolve None.
         self.readback_mode: str = "echo"
         self.query_count: int = 0
         self._opened: List[MouseDevice] = []
@@ -94,9 +115,10 @@ class FakeHidAccess(HidAccess):
         # Fila FIFO de responses pré-programadas (para cenários que a
         # computação não cobre). Cada read consome uma entrada.
         self.probe_responses: List[bytes] = []
-        # Últimos requests por par (report_id, feature_index) para o
-        # eco de header — não usa fila, preserva contexto.
-        self._last_request_header: Optional[bytes] = None
+        # Contexto do último request do handle aberto (eco de header):
+        # descartado no close — read de outro handle não responde a
+        # request antigo.
+        self._last_request: Optional[dict] = None
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
@@ -119,17 +141,17 @@ class FakeHidAccess(HidAccess):
 
     def close(self) -> None:
         self._device = None
-        # Abertura nova = contexto novo: descartar o request pendente do
-        # contexto anterior (o read do novo contexto não pode responder
-        # a um request de um handle que já fechou).
-        self._last_request_header = None
+        # Contexto novo: descartar o request pendente do handle que
+        # fechou — o read do novo handle não pode responder a request
+        # de um descritor que já fechou.
+        self._last_request = None
         self._last_set_dpi = None
 
     # ── Protocolo ─────────────────────────────────────────────────
 
     def _parse_request(self, report: bytes) -> Optional[dict]:
-        """Header de request: [report_id][device_index][feature_index]
-        [fn+sw_id][params...]. Retorna os campos decodificados."""
+        """Header de request FAP: [report_id][device_index]
+        [feature_index][fn+sw_id][params...]. Retorna os campos."""
         if len(report) < 4:
             return None
         return {
@@ -144,36 +166,34 @@ class FakeHidAccess(HidAccess):
     def _echo_response(self, req: dict, params: bytes) -> bytes:
         """Resposta espelhando o header do request, conforme o
         protocolo: mesmos report_id, device_index, feature_index e
-        function+software_id (o próprio ID ou sw_id de outro cliente,
-        se configurado)."""
+        function+software_id (o próprio sw_id ou o de outro cliente,
+        se configurado). Report LONG de 20 bytes."""
         if self.sw_id_wrong:
             fn_sw = (req["function"] << 4) | self.wrong_sw_id
         else:
             fn_sw = (req["function"] << 4) | req["software_id"]
         payload = (
-            bytes([req["report_id"]])
-            + bytes([req["device_index"]])
-            + bytes([req["feature_index"]])
-            + bytes([fn_sw])
+            bytes([req["report_id"], req["device_index"],
+                   req["feature_index"], fn_sw])
             + params
         )
-        # Report curto = 7 bytes total; preenche com zeros.
-        return (payload + b"\x00" * (SHORT_REPORT_LENGTH - len(payload)))[:SHORT_REPORT_LENGTH]
+        return (payload + b"\x00" * (FAP_REPORT_LENGTH - len(payload)))[:FAP_REPORT_LENGTH]
 
-    def _error_response(self, req: dict) -> bytes:
-        """Sub-report de erro HID++ (RAP 0x8F): report curto com
-        sub_id 0x8F, device index do request, function, error code
-        (INVALID_ARGS 0x02)."""
+    def _fap_error(self, req: dict, error_code: int) -> bytes:
+        """Erro FAP 2.0: report LONG com feature_index 0xFF, params[0]
+        = function+sw do request rejeitado (eco do header que o
+        protocolo garante), params[1] = error code. Pertence AO MESMO
+        request — matches_protocol_error exige o eco."""
         fn_sw = (req["function"] << 4) | req["software_id"]
-        return bytes([
+        payload = bytes([
             req["report_id"],
             req["device_index"],
-            0x8F,
+            PROTOCOL_ERROR_FEATURE_INDEX,
             fn_sw,
-            req["function"],
-            0x02,
-            0x00,
+            fn_sw,
+            error_code,
         ])
+        return (payload + b"\x00" * (FAP_REPORT_LENGTH - len(payload)))[:FAP_REPORT_LENGTH]
 
     def write(self, report: bytes) -> OperationResult:
         if not self.is_open():
@@ -184,7 +204,11 @@ class FakeHidAccess(HidAccess):
         req = self._parse_request(report)
         if req is None:
             return OperationResult.failed("report sem cabeçalho HID++")
-        self._last_request_header = report
+        if req["report_id"] != LONG_REPORT_ID:
+            # FAP só usa long report; o fake não responde a short
+            # report (mudo, como o device real faria).
+            return OperationResult.applied("request aceito pelo endpoint")
+        self._last_request = req
         return OperationResult.applied("request aceito pelo endpoint")
 
     def read(self, length: int, timeout: float = 0.5) -> Optional[bytes]:
@@ -204,49 +228,74 @@ class FakeHidAccess(HidAccess):
             return self.probe_responses.pop(0)
 
         # Sem header de request válido: endpoint mudo.
-        if self._last_request_header is None:
+        if self._last_request is None:
             return None
-        req = self._parse_request(self._last_request_header)
-        if req is None:
-            return None
+        req = dict(self._last_request)
 
-        # Erro RAP 0x8F (rejeição pelo dispositivo).
-        if self.probe_stage1_error and req["feature_index"] == FEATURE_SET_INDEX:
-            return self._error_response(req)
-        if self.probe_stage2_error and req["feature_index"] == ROOT_FEATURE_INDEX:
-            return self._error_response(req)
-
-        # IRoot.GetFeature(id_hi, id_lo, 0) → (feature_index, flags,
-        # version). Feature index 0 = não suportada; configurável.
+        # ── IRoot (feature index 0x00) ──────────────────────────────
         if req["feature_index"] == ROOT_FEATURE_INDEX:
+            if req["function"] == ROOT_FN_GET_PROTOCOL_VERSION:
+                # [major 0x02, target_sw 0x02, ping_echo]
+                ping_echo = req["params"][2] if len(req["params"]) >= 3 else 0x5A
+                return self._echo_response(req, bytes([0x02, 0x02, ping_echo]))
             if req["function"] == ROOT_FN_GET_FEATURE:
+                if len(req["params"]) < 3:
+                    return None
                 feature_id = (req["params"][0] << 8) | req["params"][1]
-                if feature_id == 0x2201:
-                    index = self.dpi_feature_index
-                    if index is None:
-                        index = 0  # feature ausente
-                    return self._echo_response(req, bytes([index, 0x00, 0x03]))
-                # Feature inexistente de teste → não suportada.
+                # GetFeature(ADJUSTABLE_DPI) rejeitado pelo device?
+                if (
+                    feature_id == ADJUSTABLE_DPI_FEATURE_ID
+                    and self.probe_stage2_error
+                ):
+                    # INVALID_FEATURE_INDEX 0x06 — erro FAP correlacionado.
+                    return self._fap_error(req, 0x06)
+                if feature_id == ADJUSTABLE_DPI_FEATURE_ID:
+                    return self._echo_response(
+                        req, bytes([self.dpi_feature_index, 0x00, 0x03]),
+                    )
+                if feature_id == FEATURE_SET_FEATURE_ID:
+                    # Index real da IFeatureSet: o core NUNCA assume 0x01.
+                    return self._echo_response(
+                        req, bytes([self.ifeatureset_index, 0x00, 0x03]),
+                    )
+                # Feature ID desconhecida → não suportada (index 0).
                 return self._echo_response(req, bytes([0x00, 0x00, 0x00]))
             return self._echo_response(req, bytes([0x00, 0x00, 0x00]))
 
-        # Feature set GET_FEATURE_TABLE_COUNT (feature 0x01, fn 0).
-        if req["feature_index"] == FEATURE_SET_INDEX and req["function"] == 0x00:
-            return self._echo_response(req, bytes([0x08, 0x00, 0x00]))
+        # ── IFeatureSet ─────────────────────────────────────────────
+        if req["feature_index"] == self.ifeatureset_index \
+                and self.ifeatureset_count >= 0:
+            if req["function"] == 0x01:  # GetFeatureCount
+                return self._echo_response(req, bytes([self.ifeatureset_count, 0x00, 0x00]))
+            if req["function"] == 0x00:  # GetFeatureId(index)
+                idx = req["params"][0] if req["params"] else 0
+                ids = {0: ROOT_FEATURE_INDEX, self.ifeatureset_count - 1: 0x2201}
+                fid = ids.get(idx, 0x0000)
+                return self._echo_response(req, bytes([(fid >> 8) & 0xFF, fid & 0xFF, 0x03]))
 
-        # SetSensorDPI (fn 0x10, no feature index configurado):
-        # params [sensor_idx, dpi_hi, dpi_lo].
+        # ── Adjustable DPI (feature index descoberto) ───────────────
         if (
             req["feature_index"] == self.dpi_feature_index
-            and req["function"] == DPI_FN_SET
             and self.dpi_feature_index not in (None, 0)
         ):
-            if self.dpi_set_rejected:
-                return self._error_response(req)
-            dpi = (req["params"][1] << 8) | req["params"][2]
-            self._last_set_dpi = dpi
-            # ACK ecoa o request sem params alterados (conferência).
-            return self._echo_response(req, b"")
+            if req["function"] == GET_SENSOR_DPI_FN:  # GetSensorDPI
+                return self._echo_response(
+                    req, bytes([
+                        0x00,  # sensor index
+                        ((self._last_set_dpi or 0) >> 8) & 0xFF,
+                        (self._last_set_dpi or 0) & 0xFF,
+                        0x00,  # reserved
+                    ]),
+                )
+            if req["function"] == DPI_FN_SET:  # SetSensorDPI
+                if self.dpi_set_fap_error:
+                    return self._fap_error(req, 0x09)  # UNSUPPORTED
+                if self.dpi_set_rejected:
+                    return self._fap_error(req, 0x02)  # INVALID_ARGS
+                dpi = (req["params"][1] << 8) | req["params"][2]
+                self._last_set_dpi = dpi
+                # ACK ecoa o header com params zerados (conferência).
+                return self._echo_response(req, b"")
 
         # Qualquer outro request: eco simples (funcionalidade extra).
         return self._echo_response(req, req["params"][:3])

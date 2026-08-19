@@ -65,8 +65,12 @@ def default_config() -> Dict[str, Any]:
     return {
         "dpi": DPI_DEFAULT,
         "sensitivity": SENSITIVITY_DEFAULT,
-        "applied_dpi": DPI_DEFAULT,
-        "applied_sensitivity": SENSITIVITY_DEFAULT,
+        # Estado físico REAL só é conhecido após probe/leitura confirma
+        # dos: nunca assumimos DPI aplicado de fábrica (pode ser 400, 800
+        # ou qualquer valor deixado pelo firmware/usuário). None =
+        # desconhecido; o campo só ganha valor quando o hardware confirma.
+        "applied_dpi": None,
+        "applied_sensitivity": None,
         "polling_rate": 1000,
         "lighting": dict(LIGHTING_DEFAULT),
         "profiles": {k: dict(v) for k, v in PROFILES_DEFAULT.items()},
@@ -101,6 +105,7 @@ class LoadKind(Enum):
     FILE = "file"              # arquivo existente, válido e validado
     DEFAULT = "default"        # arquivo inexistente: primeira execução/migração
     CORRUPTED = "corrupted"    # arquivo existia mas o conteúdo é inválido
+    IO_ERROR = "io_error"      # arquivo existia mas o I/O falhou (ilegível)
 
 
 @dataclass(frozen=True)
@@ -319,7 +324,11 @@ def load_config_outcome(
     except OSError as exc:
         if strict:
             raise ConfigError(f"Erro de leitura em {paths.config_file}: {exc}") from exc
-        return LoadOutcome(default_config(), LoadKind.DEFAULT, [f"arquivo ilegível: {exc}"])
+        return LoadOutcome(
+            default_config(),
+            LoadKind.IO_ERROR,
+            [f"arquivo ilegível: {exc}"],
+        )
 
     if raw is None:
         migrate_legacy_config(paths)
@@ -329,7 +338,11 @@ def load_config_outcome(
         except OSError as exc:
             if strict:
                 raise ConfigError(f"Erro de leitura em {paths.config_file}: {exc}") from exc
-            return LoadOutcome(default_config(), LoadKind.DEFAULT, [f"arquivo ilegível: {exc}"])
+            return LoadOutcome(
+                default_config(),
+                LoadKind.IO_ERROR,
+                [f"arquivo ilegível: {exc}"],
+            )
 
     if raw is None:
         return LoadOutcome(default_config(), LoadKind.DEFAULT, notes)
