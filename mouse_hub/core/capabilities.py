@@ -59,8 +59,31 @@ class CapabilityState:
     def __getitem__(self, name: str) -> bool:
         return self.is_available(name)
 
+    def reason_for(self, name: str) -> str:
+        """Causa da indisponibilidade de uma capacidade, ou vazio se
+        disponível (ou se a capacidade não existe no estado)."""
+        capability = self.capabilities.get(name)
+        if capability is None:
+            return ""
+        return capability.reason
 
-Detector = Callable[[], bool]
+    def __contains__(self, name: str) -> bool:
+        return name in self.capabilities
+
+
+# Um detector pode retornar:
+# * bool ...................... disponível/indisponível, sem causa;
+# * tuple[bool, str] .......... disponível/indisponível com a CAUSA real
+#   (ex.: "permission_denied", "endpoint sem resposta HID++"). A causa
+#   aparece no Capability.reason, permitindo que a UI explique o
+#   estado em vez de exibir apenas "indisponível".
+Detector = Callable[[], object]
+
+
+def _resolve(detector_result: object) -> tuple[bool, str]:
+    if isinstance(detector_result, tuple) and len(detector_result) == 2:
+        return bool(detector_result[0]), str(detector_result[1])
+    return bool(detector_result), ""
 
 
 @dataclass
@@ -102,12 +125,10 @@ class CapabilityModel:
             if detector is None:
                 continue
             try:
-                available = bool(detector())
+                available, reason = _resolve(detector())
             except Exception as exc:  # detector nunca quebra a avaliação
                 available = False
                 reason = f"erro no detector: {exc}"
-            else:
-                reason = ""
             capabilities[name] = Capability(name=name, available=available, reason=reason)
         return CapabilityState(capabilities=capabilities)
 

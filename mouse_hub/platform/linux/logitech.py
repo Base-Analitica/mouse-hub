@@ -1,14 +1,25 @@
 """Acesso real ao Logitech G403 HERO via dispositivo hidraw validado.
 
 Este módulo implementa `HidAccess` abrindo a interface hidraw que
-`device_discovery` confirmou pertencer ao G403 (pelo VID/PID no uevent).
+`device_discovery` confirmou pertencer ao G403 (VID/PID no uevent).
 O `os.open` recebe a confirmação de identidade junto com o caminho, e a
-identidade é re-verificada antes de qualquer escrita.
+identidade é re-verificada antes de aceitar o descritor.
 
-Protocolo: os reports brutos do HID++ 2.0 (curto, ID 0x10) continuam
-responsabilidade de quem constrói os bytes; este módulo garante apenas
-que o canal é o dispositivo certo e reporta falhas reais em vez de
-sucesso fingido.
+Responsabilidades deste módulo:
+* canal correto (identidade verificada antes de abrir e antes de
+  aceitar o descritor);
+* confirmação de protocolo por READBACK: o `verify_response` usa o
+  `os.read` com timeout para esperar a resposta do dispositivo a um
+  comando, sem interpretar bytes do protocolo (a construção dos reports
+  e a interpretação do ACK são do domínio, em `core`).
+* reportar falhas reais (permission_denied, device desconectado,
+  timeout) em vez de sucesso fingido.
+
+Nada aqui escreve um comando de efeito sem que o descritor tenha sido
+verificado — mas a decisão de que o endpoint suporta a feature
+específica pertence à seleção de protocolo em
+`device_discovery.HydppEndpointSelection`, usada pelo serviço de
+domínio antes de `set_hardware_dpi`.
 """
 
 from __future__ import annotations
@@ -16,9 +27,10 @@ from __future__ import annotations
 import errno
 import os
 import select
+from pathlib import Path
 from typing import Optional
 
-from mouse_hub.core.operation import OperationResult, OperationStatus
+from mouse_hub.core.operation import OperationResult
 from mouse_hub.platform.protocol import HidAccess, MouseDevice
 
 
@@ -72,6 +84,9 @@ class LinuxHidAccess(HidAccess):
         return self._fd is not None
 
     def read(self, length: int, timeout: float = 0.5) -> Optional[bytes]:
+        """Lê até `length` bytes, aguardando com timeout. None =
+        timeout/erro — o chamador deve tratar ausência de resposta como
+        não-confirmação, nunca como sucesso."""
         if self._fd is None:
             return None
         try:
@@ -96,6 +111,15 @@ class LinuxHidAccess(HidAccess):
             return OperationResult.failed(f"OSError durante escrita: {exc}")
         return OperationResult.applied()
 
+    def verify_response(self, timeout: float = 0.5, read_length: int = 20) -> Optional[bytes]:
+        """Aguarda a resposta do dispositivo a um comando já escrito.
+
+        Retorna os bytes lidos se o dispositivo respondeu dentro do
+        timeout, ou None se não respondeu. O tempo de espera é limitado
+        por `select` com timeout, nunca gira em loop ocupado.
+        """
+        return self.read(read_length, timeout=timeout)
+
     def close(self) -> None:
         if self._fd is not None:
             try:
@@ -115,7 +139,6 @@ def _verify_identity(fd: int, expected_vid: int, expected_pid: int) -> bool:
     evitando escrita em dispositivo incerto.
     """
     from mouse_hub.platform.linux.device_discovery import read_uevent_identity
-    from pathlib import Path
 
     try:
         dev_link = Path(f"/proc/self/fd/{fd}").resolve()

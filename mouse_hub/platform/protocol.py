@@ -87,3 +87,11 @@ class SystemInput(ABC):
     @abstractmethod
     def active_window_title(self) -> Optional[str]:
         """Título da janela ativa, ou None se indisponível."""
+
+    @abstractmethod
+    def window_title_backend_available(self) -> bool:
+        """True se o mecanismo de leitura de título da janela existe no
+        sistema (ex.: xdotool instalado). SEM efeito colateral: não
+        lê nenhum título, não abre nada — é o critério correto para a
+        capacidade active_window_detection_available, que existe ou não
+        independentemente de alguma janela ter título agora."""

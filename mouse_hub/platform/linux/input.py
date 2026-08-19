@@ -100,7 +100,7 @@ class LinuxSystemInput(SystemInput):
 
     def active_window_title(self) -> Optional[str]:
         """Título da janela ativa via xdotool, ou None se indisponível."""
-        if shutil.which("xdotool") is None:
+        if not self.window_title_backend_available():
             return None
         try:
             wid = subprocess.run(
@@ -118,3 +118,8 @@ class LinuxSystemInput(SystemInput):
             return name.stdout.strip() or None
         except (OSError, subprocess.TimeoutExpired):
             return None
+
+    def window_title_backend_available(self) -> bool:
+        """True se o xdotool está instalado (mecanismo de leitura de
+        título disponível), sem executar nada nem ler título."""
+        return shutil.which("xdotool") is not None

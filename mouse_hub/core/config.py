@@ -11,11 +11,19 @@ caminho fixo e não padrão. Esta implementação:
 * usa escrita segura (temporário + rename atômico dentro do mesmo
   diretório) para evitar corrupção por interrupção;
 * trata JSON inválido de forma previsível: ignora o conteúdo corrompido,
-  preserva-o em `.corrupted.<ts>` para diagnóstico e parte do default.
+  preserva-o em `.corrupted.<ts>` para diagnóstico e parte do default;
+* distingue os casos de ausência com precisão: arquivo inexistente
+  (primeira execução, migra legacy ou parte do default) não é o mesmo
+  que arquivo EXISTENTE mas ilegível (corrupção/I/O) — neste último caso
+  nada é sobrescrito silenciosamente e o erro é propagável;
+* valida o schema antes de usar dados existentes: perfis com campos
+  não numéricos ou não-dicionários não são aceitos como estão; o
+  problema é reportado (para diagnóstico) e o valor volta ao default,
+  sem destruir o restante do arquivo.
 
-Nenhuma exceção de I/O escapa para a UI: operações devolvem o desfecho
-real através de `ConfigError` quando a falha importa, e defaults quando
-não importa.
+Nenhuma exceção de I/O escapa para a UI por padrão: operações devolvem
+o desfecho real através de `ConfigError` quando a falha importa, e
+defaults quando não importa.
 """
 
 from __future__ import annotations
@@ -25,13 +33,13 @@ import os
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from mouse_hub.core.constants import (
     DPI_DEFAULT,
-    POLLING_RATES,
     SENSITIVITY_DEFAULT,
 )
 
@@ -45,8 +53,10 @@ LIGHTING_DEFAULT = {
 }
 
 PROFILES_DEFAULT: Dict[str, Dict[str, int]] = {
+    # Presets oficiais do produto (mantidos em sincronia com a UI):
     "minecraft": {"dpi": 1200, "sensitivity": 60},
     "csgo": {"dpi": 400, "sensitivity": 30},
+    "fortnite": {"dpi": 1600, "sensitivity": 70},
     "default": {"dpi": DPI_DEFAULT, "sensitivity": SENSITIVITY_DEFAULT},
 }
 
@@ -85,6 +95,23 @@ class ConfigPaths:
         return self.data_dir / "macros.json"
 
 
+class LoadKind(Enum):
+    """De onde veio a configuração carregada."""
+
+    FILE = "file"              # arquivo existente, válido e validado
+    DEFAULT = "default"        # arquivo inexistente: primeira execução/migração
+    CORRUPTED = "corrupted"    # arquivo existia mas o conteúdo é inválido
+
+
+@dataclass(frozen=True)
+class LoadOutcome:
+    """Resultado completo de um carregamento de configuração."""
+
+    config: Dict[str, Any]
+    kind: LoadKind
+    notes: List[str] = field(default_factory=list)
+
+
 class ConfigError(Exception):
     """Falha previsível de configuração (JSON inválido, I/O, etc.)."""
 
@@ -107,34 +134,83 @@ def _safe_write(path: Path, data: Dict[str, Any]) -> None:
         raise
 
 
-def _load_json_safe(path: Path) -> Optional[Dict[str, Any]]:
-    """Carrega JSON de `path`; em caso de conteúdo inválido, preserva o
-    arquivo original como `.corrupted.<ts>` e retorna None."""
+def _read_file(path: Path) -> Optional[str]:
+    """Lê o texto do arquivo; None = não existe; OSError propagado —
+    o chamador decide o tratamento (nunca silenciar I/O aqui)."""
     if not path.exists():
         return None
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
+    return path.read_text(encoding="utf-8")
 
-    try:
-        data = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        corrupted = path.parent / f".corrupted.{int(time.time())}"
-        try:
-            shutil.copy2(path, corrupted)
-        except OSError:
-            pass
-        raise ConfigError(f"JSON inválido em {path}; backup em {corrupted}")
 
+def _validate_config(data: Any, notes: List[str]) -> Dict[str, Any]:
+    """Valida o schema da configuração, devolvendo uma cópia limpa.
+
+    * raiz não-dicionário é rejeitada (raise ConfigError);
+    * perfis que não são dicionários ou com dpi/sensitivity não
+      numéricos são substituídos pelos defaults do produto (nota);
+    * campos desconhecidos na raiz e valores de iluminação são
+      preservados — nunca destruímos dados que não entendemos;
+    * perfis deletados pelo usuário NÃO voltam do default: o mapa de
+      perfis do usuário tem precedência sobre os presets.
+    """
     if not isinstance(data, dict):
-        raise ConfigError(f"Conteúdo de {path} não é um objeto JSON")
-    return data
+        raise ConfigError("Conteúdo do arquivo não é um objeto JSON")
+
+    config: Dict[str, Any] = {}
+    for key, value in data.items():
+        if key == "profiles":
+            continue
+        config[key] = value
+
+    profiles_in: Any = data.get("profiles")
+    if not isinstance(profiles_in, dict):
+        if profiles_in is not None:
+            notes.append(
+                f"'profiles' não é um objeto ({type(profiles_in).__name__}); "
+                "reconstruído a partir dos defaults"
+            )
+        profiles_in = {}
+
+    profiles: Dict[str, Any] = {}
+    for name, profile in profiles_in.items():
+        if not isinstance(profile, dict):
+            notes.append(
+                f"perfil '{name}' ignorado (não é um objeto); "
+                "valores de default aplicados"
+            )
+            profiles[name] = dict(PROFILES_DEFAULT.get("default", {}))
+            continue
+        dpi = profile.get("dpi")
+        sens = profile.get("sensitivity")
+        fixed: Dict[str, Any] = {}
+        if isinstance(dpi, int):
+            fixed["dpi"] = dpi
+        elif isinstance(dpi, float) and float(int(dpi)) == dpi:
+            fixed["dpi"] = int(dpi)
+        else:
+            notes.append(
+                f"perfil '{name}': dpi inválido ({dpi!r}); valor de default aplicado"
+            )
+        if isinstance(sens, int):
+            fixed["sensitivity"] = sens
+        elif isinstance(sens, float) and float(int(sens)) == sens:
+            fixed["sensitivity"] = int(sens)
+        else:
+            notes.append(
+                f"perfil '{name}': sensitivity inválida ({sens!r}); valor de default aplicado"
+            )
+        default_profile = PROFILES_DEFAULT.get(name, PROFILES_DEFAULT["default"])
+        fixed.setdefault("dpi", default_profile.get("dpi", DPI_DEFAULT))
+        fixed.setdefault("sensitivity", default_profile.get("sensitivity", SENSITIVITY_DEFAULT))
+        profiles[name] = fixed
+    config["profiles"] = profiles
+    return config
 
 
 def _merge_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Completa chaves ausentes com os defaults do produto, preservando
-    todo valor existente (compatível com versões antigas do arquivo).
+    """Completa chaves estruturais ausentes com os defaults do produto,
+    preservando todo valor existente (compatível com versões antigas do
+    arquivo).
 
     O dicionário `profiles` é tratado separadamente: ele é um mapa
     definido pelo usuário, e perfis deletados não devem voltar do
@@ -155,8 +231,10 @@ def _merge_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
         default_profiles = base["profiles"]
         for name, profile in config["profiles"].items():
             if isinstance(profile, dict):
-                for sub_key, sub_default in default_profiles.get("default", {}).items():
-                    profile.setdefault(sub_key, sub_default)
+                default_profile = default_profiles.get(name, default_profiles["default"])
+                if isinstance(default_profile, dict):
+                    for sub_key, sub_default in default_profile.items():
+                        profile.setdefault(sub_key, sub_default)
     return config
 
 
@@ -171,14 +249,24 @@ def migrate_legacy_config(paths: ConfigPaths, legacy_dir: Path = DEFAULT_LEGACY_
     legacy_config = legacy_dir / "config.json"
     if legacy_config.exists() and not paths.config_file.exists():
         try:
-            data = _load_json_safe(legacy_config)
-            if data is not None:
-                _safe_write(paths.config_file, _merge_defaults(data))
-                migrated = True
-        except (ConfigError, OSError):
-            # Config antiga corrompida: parte do default, sem propagar erro.
-            _safe_write(paths.config_file, default_config())
-            migrated = True
+            text = _read_file(legacy_config)
+            if text is not None:
+                try:
+                    data = json.loads(text)
+                except (json.JSONDecodeError, ValueError):
+                    data = None
+                if isinstance(data, dict):
+                    _safe_write(paths.config_file, _merge_defaults(data))
+                    migrated = True
+                else:
+                    # Legacy corrompido: parte do default no novo local,
+                    # sem tocar no arquivo antigo (ele fica legível lá).
+                    _safe_write(paths.config_file, default_config())
+                    migrated = True
+        except (OSError, ConfigError):
+            # Falha de I/O no legacy: nada é forçado; o usuário migra
+            # manualmente se precisar.
+            pass
 
     legacy_macros = legacy_dir / "macros.json"
     if legacy_macros.exists() and not paths.macros_file.exists():
@@ -205,33 +293,78 @@ def load_config(
     default. Com `strict=True`, `ConfigError` é propagado para quem
     precisa diagnosticar o conteúdo corrompido.
     """
+    outcome = load_config_outcome(paths, strict=strict)
+    return outcome.config
+
+
+def load_config_outcome(
+    paths: Optional[ConfigPaths] = None,
+    *,
+    strict: bool = False,
+) -> LoadOutcome:
+    """Carrega a configuração com status explícito de origem.
+
+    Casos:
+    * arquivo inexistente → LoadKind.DEFAULT (após migração legacy, se
+      houver); primeira execução sempre parte de defaults conhecidos;
+    * arquivo existente e válido → LoadKind.FILE;
+    * arquivo existente mas inválido → backup `.corrupted.<ts>` e
+      LoadKind.CORRUPTED (strict=True propaga ConfigError).
+    """
     paths = paths or ConfigPaths.xdg()
+    notes: List[str] = []
 
     try:
-        data = _load_json_safe(paths.config_file)
+        raw = _read_file(paths.config_file)
+    except OSError as exc:
+        if strict:
+            raise ConfigError(f"Erro de leitura em {paths.config_file}: {exc}") from exc
+        return LoadOutcome(default_config(), LoadKind.DEFAULT, [f"arquivo ilegível: {exc}"])
+
+    if raw is None:
+        migrate_legacy_config(paths)
+        # A migração (ou outra instância) pode ter criado o arquivo.
+        try:
+            raw = _read_file(paths.config_file)
+        except OSError as exc:
+            if strict:
+                raise ConfigError(f"Erro de leitura em {paths.config_file}: {exc}") from exc
+            return LoadOutcome(default_config(), LoadKind.DEFAULT, [f"arquivo ilegível: {exc}"])
+
+    if raw is None:
+        return LoadOutcome(default_config(), LoadKind.DEFAULT, notes)
+
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        corrupted = paths.config_file.parent / f".corrupted.{int(time.time())}"
+        try:
+            shutil.copy2(paths.config_file, corrupted)
+        except OSError:
+            pass
+        if strict:
+            raise ConfigError(f"JSON inválido em {paths.config_file}; backup em {corrupted}")
+        notes.append(f"JSON inválido; conteúdo preservado em {corrupted.name}")
+        return LoadOutcome(default_config(), LoadKind.CORRUPTED, notes)
+
+    try:
+        validated = _validate_config(data, notes)
     except ConfigError:
         if strict:
             raise
-        data = None
+        notes.append("Schema inválido; partindo do default")
+        return LoadOutcome(default_config(), LoadKind.CORRUPTED, notes)
 
-    if data is None:
-        migrate_legacy_config(paths)
-        try:
-            data = _load_json_safe(paths.config_file)
-        except ConfigError:
-            if strict:
-                raise
-            data = None
-
-    if data is None:
-        data = default_config()
-    else:
-        data = _merge_defaults(data)
-    return data
+    return LoadOutcome(_merge_defaults(validated), LoadKind.FILE, notes)
 
 
 def save_config(config: Dict[str, Any], paths: Optional[ConfigPaths] = None) -> None:
-    """Persiste a configuração com escrita atômica."""
+    """Persiste a configuração com escrita atômica.
+
+    SOMENTE persiste dados confirmados: quem chama é responsável por
+    gravar applied_dpi/applied_sensitivity apenas após a operação
+    correspondente retornar APPLIED/APPLIED_PARTIAL confirmado.
+    """
     paths = paths or ConfigPaths.xdg()
     _safe_write(paths.config_file, config)
 
@@ -239,8 +372,17 @@ def save_config(config: Dict[str, Any], paths: Optional[ConfigPaths] = None) -> 
 def load_json_file(path: Path) -> Dict[str, Any]:
     """Carrega um arquivo de dados genérico (ex.: macros.json) com o
     mesmo tratamento previsível de JSON inválido."""
-    data = _load_json_safe(path)
-    if data is None:
+    try:
+        raw = _read_file(path)
+    except OSError:
+        return {}
+    if raw is None:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
         return {}
     return data
 
