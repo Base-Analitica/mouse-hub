@@ -51,31 +51,44 @@ class WindowFocusChecker(FocusChecker):
         """Consulta cache; só lê a janela ativa quando expirado.
 
         A tupla de substrings não afeta o custo: a comparação é
-        `in` sobre strings em memória.
+        `in` sobre strings em memória, case-insensitive (o X devolve
+        títulos com capitalização variável — "minecraft" não casava
+        com "Minecraft").
+
+        Fail-closed: título indisponível (`None` do adapter ou "")
+        nunca satisfaz o conjunto de jogos — clique sem janela
+        confirmada é inaceitável.
         """
         now = time.monotonic()
         if self._cached is not None and now < self._expiry:
             cached = self._cached
             if not windows:
-                # Sem restrição configurada: qualquer janela serve.
-                return FocusedState(focused=True, window_title=cached.window_title)
+                return FocusedState(
+                    focused=cached.focused, window_title=cached.window_title
+                )
             return FocusedState(
-                focused=any(w in cached.window_title for w in windows),
+                focused=cached.focused
+                and any(w.lower() in cached.window_title.lower() for w in windows),
                 window_title=cached.window_title,
             )
 
-        title = self._checker.active_window_title() or ""
-        state = FocusedState(focused=bool(title), window_title=title)
-        if not title and self._unknown_is_not_focused:
-            state = FocusedState(focused=False, window_title="")
+        title = self._checker.active_window_title()
+        normalized = (title or "").lower()
+        # Falha de leitura (None) e título vazio são tratados do mesmo
+        # jeito pelo policy conservador — nenhum foco sem confirmação.
+        focused = bool(normalized) if self._unknown_is_not_focused else True
+        state = FocusedState(focused=focused, window_title=title or "")
 
         self._cached = state
         self._expiry = now + self._ttl_ms / 1000.0
 
         if not windows:
             return FocusedState(focused=state.focused, window_title=state.window_title)
+        # Comparação case-insensitive sobre o título normalizado em
+        # memória — o window_title exposto mantém a capitalização real.
         return FocusedState(
-            focused=state.focused and any(w in state.window_title for w in windows),
+            focused=state.focused
+            and any(w.lower() in normalized for w in windows),
             window_title=state.window_title,
         )
 

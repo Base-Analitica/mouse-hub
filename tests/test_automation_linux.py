@@ -575,6 +575,57 @@ def test_service_clicker_uses_focus_and_io(svc):
     assert clicker.state == AutoClickerState.STOPPED
 
 
+def test_focus_fail_closed_on_none_title():
+    """Adapter indisponível (título None): fora do jogo. Falha de
+    leitura nunca vira foco — clique sem janela confirmada é
+    inaceitável."""
+
+    class NoneSource:
+        def active_window_title(self):
+            return None
+
+    checker = WindowFocusChecker(NoneSource(), ttl_ms=500)
+    assert not checker.is_focused(("Minecraft",)).focused
+    assert not checker.is_focused(("qualquer jogo",)).focused
+
+
+def test_focus_case_insensitive():
+    """O X devolve títulos com capitalização variável — 'minecraft'
+    casa com 'Minecraft', 'MINECRAFT' etc."""
+
+    class TitleSource:
+        def __init__(self, title):
+            self._t = title
+
+        def active_window_title(self):
+            return self._t
+
+    checker = WindowFocusChecker(TitleSource("MINECRAFT 1.21"), ttl_ms=500)
+    assert checker.is_focused(("minecraft",)).focused
+    assert checker.is_focused(("Minecraft",)).focused
+    checker2 = WindowFocusChecker(TitleSource("minecraft"), ttl_ms=500)
+    assert checker2.is_focused(("MINECRAFT",)).focused
+
+
+def test_focus_fail_closed_is_cached():
+    """O resultado fail-closed fica no cache com TTL — a próxima
+    consulta dentro do TTL não re-leitura o adapter."""
+
+    class CountingSource:
+        def __init__(self):
+            self.calls = 0
+
+        def active_window_title(self):
+            self.calls += 1
+            return None
+
+    src = CountingSource()
+    checker = WindowFocusChecker(src, ttl_ms=500)
+    assert not checker.is_focused(("Minecraft",)).focused
+    assert not checker.is_focused(("Minecraft",)).focused
+    assert src.calls == 1
+
+
 def test_service_rejects_double_playback(svc):
     """play() durante playback ativo retorna False — nunca sobrescreve
     o worker em curso nem lança exceção."""
