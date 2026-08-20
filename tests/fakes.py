@@ -159,6 +159,13 @@ class FakeHidAccess(HidAccess):
         # Rejeita o SetSensorDPI com erro FAP 0x09 (UNSUPPORTED) em
         # vez de erro RAP curto — para cobrir a correlação de erros FAP.
         self.dpi_set_fap_error: bool = False
+        # API OBSERVÁVEL: histórico de comandos SetSensorDPI enviados
+        # ao endpoint (cada entrada = (feature_index, dpi) do request
+        # válido). Testes respondem "o comando correto de DPI foi
+        # enviado ao adapter HID" SEM depender de offsets fixos do
+        # payload — hid.raw_written_reports continua disponível para
+        # quem precisar inspecionar o report bruto.
+        self._dpi_commands: List[tuple] = []
         # Readback: "echo" devolve o eco do último SetSensorDPI com o
         # valor aplicado; "none" devolve None.
         self.readback_mode: str = "echo"
@@ -279,6 +286,17 @@ class FakeHidAccess(HidAccess):
         req = self._parse_request(report)
         if req is None:
             return OperationResult.failed("report sem cabeçalho HID++")
+        # Registrar o comando SetSensorDPI na API observável (antes de
+        # qualquer desfecho — registra o que foi ENVIADO ao adapter,
+        # não o que foi confirmado).
+        if (
+            req["report_id"] == LONG_REPORT_ID
+            and req["feature_index"] == self.dpi_feature_index
+            and req["function"] == DPI_FN_SET
+            and len(req["params"]) >= 3
+        ):
+            dpi = (req["params"][1] << 8) | req["params"][2]
+            self._dpi_commands.append((req["feature_index"], dpi))
         if req["report_id"] != LONG_REPORT_ID:
             # FAP só usa long report; o fake não responde a short
             # report (mudo, como o device real faria).
@@ -415,6 +433,30 @@ class FakeHidAccess(HidAccess):
     def applied_dpi(self) -> Optional[int]:
         """Último DPI confirmado que o fake "aplicou" (eco do SetSensorDPI)."""
         return self._last_set_dpi
+
+    def last_dpi_command(self) -> Optional[tuple]:
+        """Último comando SetSensorDPI ENVIADO ao adapter HID
+        (feature_index, dpi) — o efeito observável do pipeline, sem
+        depender de offsets fixos do payload."""
+        return self._dpi_commands[-1] if self._dpi_commands else None
+
+    @property
+    def applied_dpi_history(self) -> List[tuple]:
+        """Histórico de todos os SetSensorDPI enviados ao adapter HID
+        [(feature_index, dpi), ...] — útil para verificar que nenhum
+        DPI intermediário/bloqueado chegou ao hardware."""
+        return list(self._dpi_commands)
+
+    @property
+    def raw_written_reports(self) -> List[bytes]:
+        """Reports brutos escritos ao adapter HID (acesso de escape para
+        casos onde o raw precisa ser inspecionado) — preferir
+        last_dpi_command()/applied_dpi_history para asserções."""
+        return list(self.written_reports)
+
+    def reset_dpi_history(self) -> None:
+        """Limpa o histórico observável de comandos DPI (por teste)."""
+        self._dpi_commands = []
 
 
 class FakeSystemInput(SystemInput):
