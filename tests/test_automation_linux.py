@@ -146,6 +146,102 @@ def test_linux_io_cleanup_is_idempotent():
     io.cleanup()
 
 
+def test_linux_io_ensure_display_single_open_under_concurrency():
+    """Dois threads chegando simultaneamente ao _ensure_display resultam
+    em EXATAMENTE UMA abertura de Display — a abertura ocorre dentro do
+    mesmo lock que protege a referência; nenhum display excedente é
+    vazado e o cleanup continua idempotente.
+
+    Cenário que a versão anterior (open FORA do lock) deixava passar:
+    dois threads abriam dois Displays, ambos atribuíam a referência e
+    um deles era perdido (nunca fechado) — vazamento de conexão X.
+    """
+    io = LinuxAutomationIO()
+    open_count = 0
+    open_lock = threading.Lock()
+    opened_displays: list = []
+
+    display = mock.MagicMock()
+    display.has_extension.return_value = True
+
+    def CountingDisplay():
+        nonlocal open_count
+        with open_lock:
+            open_count += 1
+            opened_displays.append(display)
+        return display
+
+    barrier = threading.Barrier(2, timeout=5)
+
+    def worker():
+        barrier.wait()
+        io._ensure_display()
+
+    with mock.patch("mouse_hub.platform.linux.automation.Display", side_effect=CountingDisplay):
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert open_count == 1, (
+            f"race: {open_count} Displays criados sob concorrência — "
+            "a abertura deve ocorrer dentro do lock da referência"
+        )
+
+    # ambos os threads reutilizam a MESMA instância
+    a = io._ensure_display()
+    b = io._ensure_display()
+    assert a is b, "threads devem reutilizar o mesmo Display"
+
+    # cleanup idempotente: o display vencedor é fechado uma vez
+    io.close()
+    display.close.assert_called_once()
+    io.close()  # segunda chamada não estoura, não refecha
+    assert display.close.call_count == 1
+    assert io._display is None
+
+
+def test_linux_io_injected_display_stays_non_owned():
+    """Display injetado no AutomationService não é do core — o cleanup
+    do serviço NUNCA pode fechá-lo (responsabilidade do injetor).
+    Valida o contrato de ownership (issue: clicker-first registra,
+    playback reutiliza a mesma instância, cleanup fecha apenas owned)."""
+    io = FakeAutomationIO()
+    service = AutomationService(
+        macros_path=Path("/tmp/mouse-hub-test-injected.json"),
+        io=io,  # IO injetado → o serviço NÃO o possui (ownership do injetor)
+    )
+    assert not service._io_owned
+
+    # playback-first: self._io nasce None e o IO injetado é registrado
+    # ao primeiro play(). Aqui validamos o caso mais crítico:
+    # clicker-first com IO injetado — o clicker reutiliza EXATAMENTE o
+    # IO do serviço (mesma instância), sem criar display paralelo.
+    clicker = service.clicker
+    assert clicker._io is io, (
+        "clicker-first deve reutilizar o IO injetado — mesma instância, "
+        "sem abrir segunda conexão"
+    )
+
+    service.cleanup()
+    # IO injetado continua vivo — o cleanup do core NUNCA fecha o que
+    # foi injetado (responsabilidade do injetor)
+    assert io.closed is False, (
+        "display/IO injetado foi fechado pelo core — quebra o contrato "
+        "de ownership (o injetor deve gerenciar o próprio recurso)"
+    )
+
+    # caso complementar: IO owned (criado pelo próprio serviço) DEVE
+    # ser fechado no cleanup — o contrato é de fechamento seletivo
+    owned_service = AutomationService(
+        macros_path=Path("/tmp/mouse-hub-test-owned.json"))
+    owned_service.clicker  # cria LinuxAutomationIO internamente
+    owned_service.cleanup()
+    assert owned_service._io is None, (
+        "IO owned não foi liberado da referência após cleanup"
+    )
+
+
 # ══════════════════ Fonte de título X11 ════════════════════════════
 
 

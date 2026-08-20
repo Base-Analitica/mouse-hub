@@ -152,27 +152,36 @@ class LinuxAutomationIO(AutomationIO):
     # ── Conexão ────────────────────────────────────────────────────
 
     def _ensure_display(self) -> Optional[Display]:
-        """Abre a conexão sob demanda, dentro de self._lock.
+        """Abre a conexão sob demanda.
+
+        Toda a abertura do Display ocorre **dentro de self._lock** —
+        a referência (`self._display`) e a criação da conexão são
+        protegidas pelo mesmo lock, então dois threads que cheguem
+        simultaneamente resultam em **exatamente um Display criado**.
+        O thread perdedor reutiliza a conexão do vencedor; o excedente
+        nunca é perdido (é fechado imediatamente).
 
         Retorna None (com self._error preenchido) quando o display não
         puder ser aberto ou a extensão XTest não estiver disponível —
         falha sinalizada ao caller em vez de exceção estourada.
         """
-        if self._display is not None:
-            return self._display
-        try:
-            display = Display()
-            if not display.has_extension("XTEST"):
-                display.close()
-                self._error = "extensão XTEST indisponível"
-                self._display = None
+        with self._lock:
+            if self._display is not None:
+                return self._display
+            display: Optional[Display] = None
+            try:
+                display = Display()
+                if not display.has_extension("XTEST"):
+                    display.close()
+                    self._error = "extensão XTEST indisponível"
+                    display = None
+                    return None
+                self._display = display
+                return display
+            except Exception as exc:  # noqa: BLE001 — Xlib lança bases variadas
+                self._error = f"display indisponível: {exc}"
+                display = None
                 return None
-            self._display = display
-            return display
-        except Exception as exc:  # noqa: BLE001 — Xlib lança bases variadas
-            self._error = f"display indisponível: {exc}"
-            self._display = None
-            return None
 
     def cleanup(self) -> None:
         """Fecha a conexão exatamente uma vez, de forma idempotente."""
