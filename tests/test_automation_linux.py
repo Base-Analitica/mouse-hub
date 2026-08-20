@@ -547,19 +547,35 @@ def _svc_events():
 @pytest.fixture
 def svc(tmp_path):
     backend = FakeCaptureBackend(events_to_inject=_svc_events())
+    # Fonte de título determinística: título de jogo focado, sem
+    # depender de display X real — o runner de CI não tem DISPLAY.
     return AutomationService(
         macros_path=tmp_path / "macros.json",
         io=FakeAutomationIO(),
         capture_backend=backend,
+        title_source=FakeFocusTitleSource(title="Minecraft 1.21"),
     )
 
 
-def test_service_lazy_nothing_created_at_init(svc):
+@pytest.fixture
+def svc_lazy(tmp_path):
+    """Serviço mínimo sem nenhuma dependência injetada — usado para
+    verificar que o `__init__` não abre display nem lê disco."""
+    backend = FakeCaptureBackend(events_to_inject=[])
+    return AutomationService(
+        macros_path=tmp_path / "macros.json",
+        capture_backend=backend,
+    )
+
+
+def test_service_lazy_nothing_created_at_init(svc_lazy):
     """Startup não abre display nem lê disco."""
+    svc = svc_lazy
     assert svc._title_source is None
     assert svc._focus is None
     assert svc._store is None
     assert svc._capture is None
+    svc.cleanup()
 
 
 def test_service_recording_lifecycle(svc):
