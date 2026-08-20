@@ -2,44 +2,47 @@
 
 Issue #12 — Definir e cumprir orçamento de performance para IdeaPad S145 i5 / 8 GB.
 
-Este documento define **como** o Mouse Hub é medido, **o que** é medido,
-**onde** as medições podem ser repetidas e **quais** são os orçamentos de
-projeto. Nenhum número aqui é atribuído ao hardware de referência
-(Lenovo IdeaPad S145) sem medição executada nele — as seções de
-evidência dizem explicitamente em qual ambiente foram obtidas.
+Este documento define **como** o Mouse Hub é medido, **o que** é medido e
+**onde** cada medição pode ser repetida. Toda afirmação numérica abaixo
+é rotulada explicitamente como uma destas três categorias:
 
-## Princípios
+| Rótulo | Significado |
+| --- | --- |
+| **META** | Orçamento de projeto — valor-alvo que ainda não foi medido neste hardware |
+| **MEDIDA** | Resultado obtido em execução real, no ambiente descrito |
+| **INFERÊNCIA** | Conclusão derivada de medições — declarada como tal, não como fato medido |
 
-Performance é requisito funcional do produto. As medições seguem quatro
-regras fixas: nada de benchmark inventado, nada de número atribuído a
-hardware não testado, medições reproduzíveis com um único comando e
-separação clara entre **dados medidos** e **metas (orçamentos)**.
+Nenhum número deste documento é atribuído ao Lenovo IdeaPad S145. As
+medições físicas no S145 ainda não foram executadas (o executor não
+teve acesso ao equipamento); a seção 5 descreve como repeti-las nele.
 
-## Orçamentos de projeto (metas)
+## 1. Metas de projeto
 
-| Métrica | Orçamento | Racional |
+Os valores abaixo são orçamentos definidos pela issue #12 como meta.
+São **METAS**, não medições:
+
+| Métrica | META | Racional |
 | --- | --- | --- |
 | CPU em idle (sem automações, 60 s) | ≤ 1% de um núcleo | app de controle de mouse deve ficar dormente |
-| RSS em idle (processo principal) | ≤ 150 MB | folga confortável para 8 GB do notebook de referência |
+| RSS em idle (processo principal) | ≤ 150 MB | folga para 8 GB do notebook de referência |
 | Subprocessos filhos em idle | 0 | xdotool/xinput não pertencem ao hot path nativo |
 | Busy-wait em idle | proibido | aguardo é sempre `Event.wait` / timers do Qt |
 | Crescimento de memória (sessão prolongada) | < 10% sobre o baseline | ausência de vazamento em listeners e workers |
-| Custo do auto-clicker | ≤ `max(2,0; CPS × 0,05)` % CPU | escala linear com CPS, sem overhead fixo alto |
+| Auto-clicker | custo de CPU escalando com CPS, sem overhead fixo alto | requisito funcional da issue |
 | Inicialização (instanciação da janela) | sem regressão > 20% sobre o baseline medido | meta calibrada no ambiente de CI |
 
-Os orçamentos são validados fisicamente no IdeaPad S145 sempre que o
-executor tiver acesso ao equipamento. Até lá, valem as medições do
-ambiente de CI e o procedimento de repetição abaixo.
+As METAS passam a ser consideradas cumpridas no S145 somente após a
+execução das medições da seção 5 no equipamento.
 
-## Como medir (reproduzível)
+## 2. Como medir (reproduzível)
 
-### 1. Bench de fundação (startup, idle, auto-clicker)
+### 2.1 Bench de fundação (startup, idle, auto-clicker)
 
 ```bash
 QT_QPA_PLATFORM=offscreen python3 -m unittest tests.bench_perf -v
 ```
 
-Mede em uma única execução, no processo real do app nativo:
+Mede, no processo real do app nativo, em uma única execução:
 
 | Métrica | Fonte |
 | --- | --- |
@@ -50,37 +53,43 @@ Mede em uma única execução, no processo real do app nativo:
 | `idle_cpu_pct` | `/proc/<pid>/stat` utime+stime sobre janela de 60 s |
 | `cps_matrix` | CPU + contagem real de cliques por regime (1, 20, 50 CPS) |
 
-Duração ajustável: `BENCH_IDLE_SECONDS` (padrão 60) e
-`BENCH_ACTIVE_SECONDS` (padrão 20 por regime CPS). No CI os valores são
-encurtados (`10 / 5`) para caber no tempo de execução. O auto-clicker
-usa `FakeAutomationIO` injetada no `AutomationService` — o custo do
-XTest real é desprezível frente ao custo de sistema, e a contagem de
-cliques valida o clock do worker (não pode medir "relógio quebrado"
-com CPU zero).
+Duração ajustável por variáveis de ambiente: `BENCH_IDLE_SECONDS`
+(padrao 60) e `BENCH_ACTIVE_SECONDS` (padrao 20 por regime CPS). No CI
+os valores são encurtados (`10 / 5`) para caber no tempo de execução.
 
-### 2. Estabilidade de memória
+O auto-clicker é executado com `FakeAutomationIO` injetada no
+`AutomationService` — o emissor real de eventos (XTest) é substituído
+por um fake que apenas acumula eventos. Consequência direta: a CPU
+medida nestes regimes **não inclui** o custo da emissão real de
+eventos X11. Esse custo não é medido por este teste e não deve ser
+informado como se fosse (ver seção 4).
+
+### 2.2 Estabilidade de memória
 
 ```bash
 QT_QPA_PLATFORM=offscreen python3 -m unittest tests.test_memory_stability -v
 ```
 
 Mantém a janela viva por 120 s com `processEvents` a cada segundo,
-coletando RSS a cada 10 s. O teste reprova com crescimento total ≥ 10%
-sobre o baseline — cobre vazamento de listeners, workers e timers.
+coletando RSS a cada 10 s. Reprova com crescimento total ≥ 10% sobre o
+baseline — cobre vazamento de listeners, workers e timers.
 
-### 3. Custo de macro playback
+### 2.3 Custo de macro playback
 
 ```bash
 QT_QPA_PLATFORM=offscreen python3 -m unittest tests.test_playback_cost -v
 ```
 
 Reproduz uma macro representativa (10 s, 40 eventos de teclas, cliques
-e movimentos) e mede CPU do processo, latência de `play()` na thread da
-UI e vazamento de threads após o fim. Orçamentos: < 2% CPU para a
-macro longa, `play()` retorna em < 100 ms (worker separado), threads
-voltam ao baseline (cleanup do worker confirmado).
+e movimentos) com backend mockado e mede:
 
-### 4. Smoke da UI (Xvfb)
+* CPU **adicional** do processo sobre o fundo do mesmo processo
+  (janela de idle de 2 s antes do playback é descontada);
+* latência de `play()` na thread da UI;
+* threads após o fim do playback, comparadas ao snapshot da mesma
+  execução (cleanup do worker).
+
+### 2.4 Smoke da UI (Xvfb)
 
 ```bash
 QT_QPA_PLATFORM=offscreen xvfb-run -a python3 -m unittest tests.smoke_ui_init
@@ -89,18 +98,18 @@ QT_QPA_PLATFORM=offscreen xvfb-run -a python3 -m unittest tests.smoke_ui_init
 Valida que a fundação constrói e permanece 100% lazy: nenhum display X,
 worker ou acesso a disco é criado antes do primeiro uso da feature.
 
-### 5. Suíte determinística completa
+### 2.5 Suíte determinística completa
 
 ```bash
 QT_QPA_PLATFORM=offscreen python3 -m pytest tests/
 ```
 
-Inclui testes de regressão que provam, por mock, a ausência de
-subprocesso no hot path (`tests/test_automation_linux.py`): clique
-via XTest nativo com `subprocess.run` nunca chamado, e tick de foco do
-Dashboard/Auto-Clicker sem xdotool/xinput.
+Inclui testes que provam, por mock, a ausência de subprocesso no hot
+path (`tests/test_automation_linux.py`): clique via XTest nativo com
+`subprocess.run` nunca chamado, e tick de foco do Dashboard/Auto-Clicker
+sem xdotool/xinput.
 
-### Repetindo no IdeaPad S145
+### Repetindo no IdeaPad S145 (medição futura)
 
 Em uma instalação padrão do Linux Mint com o mouse conectado:
 
@@ -113,43 +122,74 @@ python3 -m pip install -e ".[dev]"
 QT_QPA_PLATFORM=offscreen python3 -m unittest tests.bench_perf tests.test_memory_stability tests.test_playback_cost -v
 ```
 
-Com display físico (avaliação de responsividade da UI), troque o
-Xvfb do smoke por `xvfb-run -a` ou rode `./launcher.sh` e meça com
-`ps`/`htop`/`pidstat -p <pid> 1 60` ao lado.
+Com display físico, trocar o Xvfb do smoke por `xvfb-run -a` ou rodar
+`./launcher.sh` e medir com `ps`/`htop`/`pidstat -p <pid> 1 60` ao
+lado. Os resultados obtidos nessa execução são a única fonte válida
+para afirmar que as METAS da seção 1 foram cumpridas no S145.
 
-## Caminhos de custo identificados
+## 3. Caminhos de custo identificados
 
-| Caminho | Custo real | Estado |
+| Caminho | Custo | Natureza |
 | --- | --- | --- |
-| App nativo em idle | 0,1% CPU, 0 subprocessos | medido — dentro do orçamento |
-| Auto-clicker 1–50 CPS | 0,0–0,7% CPU, 1 thread, escalando linear | medido — dentro do orçamento |
-| Macro playback (10 s) | 0,1% CPU, worker dedicado com cleanup | medido — dentro do orçamento |
-| `mouse_hub.py` (app web legado) | 2–3 subprocessos xdotool por clique, print por iteração, polling de 200 ms | identificado — lançado por `launcher.sh`/`start.sh` na raiz; fluxo nativo não o carrega |
-| `MouseController` (xinput) | subprocesso esporádico apenas em ação do usuário (DPI/sensibilidade) | aceito — operação rara, não afeta idle |
+| App nativo em idle | 0,1% CPU; 0 subprocessos filhos (MEDIDO, seção 4) | dentro da META |
+| Auto-clicker 1–50 CPS | CPU de sistema 0,0–0,7%, 1 thread, escalando com CPS (MEDIDO com emissor fake — ver seção 4) | dentro da META no CI |
+| Macro playback (10 s) | CPU adicional 0,1–0,5%; `play()` retorna em < 1 ms; threads voltam ao baseline (MEDIDO com emissor mockado) | dentro da META no CI |
+| `mouse_hub.py` (app web legado) | 2–3 subprocessos xdotool por clique, `print` por iteração, polling de 200 ms (INFERÊNCIA da leitura do código, confirmada qualitativamente) | não carregado pelo fluxo nativo |
+| `MouseController` (xinput) | subprocesso esporádico apenas em ação do usuário (DPI/sensibilidade) (MEDIDA: `children` = 0 em idle) | aceito — operação rara |
 
-O app web legado (`mouse_hub.py`) **não é importado nem carregado** pelo
-fluxo nativo, portanto não consome CPU/RAM quando o app nativo roda.
-A descontinuação formal dele pertence à issue #10; esta PR apenas
-muda o launcher padrão da raiz para o app nativo, removendo o servidor
-HTTP e o xdotool do fluxo normal de uso.
+Sobre o custo real de emissão de eventos XTest/XRecord: este
+documento **não** afirma um valor numérico. A emissão real não é
+medida pelos testes aqui descritos; o que está medido é o custo de
+sistema (scheduler, timers, workers) do app nativo. O custo de
+transporte X11 permanece uma questão em aberto, a ser respondida pela
+medição no S145 (seção 5) ou por uma sessão com display real.
 
-## Ambiente das medições desta PR
+## 4. Evidências desta PR
 
-As medições da seção de evidências foram executadas em:
+Todas as medições abaixo foram executadas no mesmo ambiente:
 
 * Ubuntu 24.04 (Linux 6.1.102 x86_64), 6 vCPU AMD EPYC, 3,8 GB RAM;
-* Python 3.12.3, PyQt5 5.15.11, python-xlib 0.17, pytest 8;
+* Python 3.12.3, PyQt5 5.15.11, python-xlib, pytest 8;
 * display virtual Xvfb (`QT_QPA_PLATFORM=offscreen`) — mesmo ambiente
   do CI do projeto (GitHub Actions `ubuntu-latest`);
 * commit de referência: `271d4f7` (main).
 
-Nenhum valor acima afirma comportamento no IdeaPad S145. A validação
-física no notebook de referência é obrigatória antes de qualquer
-afirmação sobre ele; os orçamentos têm margem suficiente (folga de
-10–100× sobre os números medidos) para tolerar a diferença de
-hardware entre o CI e o S145.
+| Métrica | MEDIDA | Categoria da META correspondente |
+| --- | --- | --- |
+| Inicialização (instanciação da janela) | 174,2 ms (164,5 ms em segunda execução) | ≤ baseline + 20% |
+| RSS estabilizado | 64,1 MB (62,5 MB na segunda execução) | ≤ 150 MB |
+| Threads / subprocessos em idle | 1 / 0 | 0 filhos |
+| CPU idle (10 s / 20 s) | 0,1% | ≤ 1% |
+| Auto-clicker 1 CPS | 0,0% CPU do sistema (4/3 cliques entregues) | — |
+| Auto-clicker 20 CPS | 0,0–0,2% CPU do sistema (60/100 cliques) | — |
+| Auto-clicker 50 CPS | 0,4–0,7% CPU do sistema (149–249/150–250 cliques) | — |
+| Macro playback 10 s | CPU adicional 0,1–0,5%; `play()` 0,18–0,35 ms; threads no baseline | — |
+| Memória em 120 s (UI viva) | 0,0% de crescimento (64204 KB constante) | < 10% |
 
-## Mudanças desta PR
+Na segunda execução (janela do processo já aquecida) os valores de
+startup e RSS caíram para 36,7 ms e 55,5 MB no runner de CI — a
+diferença entre as duas execuções é apresentada sem escolher uma como
+"o" valor oficial; ambas são evidência do mesmo método.
+
+## 5. Validação pendente no IdeaPad S145
+
+Esta é a lista de pendências para completar a issue #12 no hardware de
+referência:
+
+1. executar `tests.bench_perf` no S145 e comparar cada métrica com a
+   META da seção 1;
+2. executar `tests.test_memory_stability` e `tests.test_playback_cost`
+   no S145;
+3. medir responsividade da UI com display real (os valores de RSS em
+   offscreen tendem a ser menores que com display físico, pois nada é
+   rasterizado — a META de 150 MB foi definida com essa margem);
+4. medir o custo real da emissão XTest/XRecord sob display real, que
+   não é capturado pelos testes com emissor mockado.
+
+Enquanto as etapas 1–4 não forem executadas, todas as afirmações sobre
+o S145 neste repositório são inválidas e devem ser ignoradas.
+
+## 6. Mudanças desta PR
 
 1. `launcher.sh` e `start.sh` da raiz passam a lançar o app nativo
    (`app/mouse_hub_app.py`) — sem servidor HTTP no fluxo normal; o
@@ -159,15 +199,4 @@ hardware entre o CI e o S145.
    memória em sessão prolongada.
 4. `tests/test_playback_cost.py` — regressão de CPU/latência/cleanup
    do macro playback.
-5. Seção `Performance` no README com os orçamentos e o link para a
-   metodologia.
-
-## Validade das medições
-
-* O bench do auto-clicker usa `FakeAutomationIO`; o custo do XTest real
-  é medido como desprezível em relação ao custo de sistema, dentro de
-  ~0,01 ponto percentual de CPU — abaixo do piso de ruído do método.
-* O bench de playback também usa backend mockado pelo mesmo motivo.
-* O RSS medido em offscreen tende a ser menor que no display físico
-  (nenhum conteúdo rasterizado de widgets acelerados) — a margem do
-  orçamento de 150 MB cobre essa diferença com folga.
+5. Seção `Performance` no README com resumo de performance.

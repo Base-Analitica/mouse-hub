@@ -102,39 +102,25 @@ O Auto-Clicker **NÃO funciona** fora do Minecraft/Lunar Client. O detector veri
 - "Badlion"
 - "Feather"
 - "Hypixel"
-
 ## 📊 Performance
 
-Hardware de referência: **Lenovo IdeaPad S145, Intel Core i5, 8 GB RAM,
-Linux Mint padrão**. Performance é requisito funcional — o app controla
-um mouse, não é uma plataforma pesada. Metodologia completa em
+Performance é requisito funcional — o app controla um mouse, não é uma
+plataforma pesada. Orçamentos de projeto (CPU idle ≤ 1%, RSS ≤ 150 MB,
+0 subprocessos em idle, memória sem vazamento) e o procedimento
+reproduzível de medição estão em
 [`docs/performance/metodologia.md`](docs/performance/metodologia.md).
 
-**Orçamentos de projeto** (validados fisicamente no S145 quando o
-executor tiver acesso ao equipamento):
+**Resumo das medições no ambiente do CI** (Ubuntu 24.04, Python 3.12,
+PyQt5 5.15.11, display virtual Xvfb — **não** é o IdeaPad S145; a
+validação no notebook de referência é descrita na metodologia):
 
-| Métrica | Orçamento |
+| Métrica | Medido no CI |
 | --- | --- |
-| CPU idle (60 s, sem automações) | ≤ 1% de um núcleo |
-| RSS idle | ≤ 150 MB |
-| Subprocessos em idle | 0 |
-| Crescimento de memória (sessão prolongada) | < 10% sobre baseline |
-| Auto-clicker (1–50 CPS) | ≤ `max(2,0; CPS × 0,05)` % CPU |
-| Inicialização | sem regressão > 20% sobre baseline |
-
-**Evidências medidas** (Ubuntu 24.04, Python 3.12, PyQt5 5.15.11,
-display virtual Xvfb — ambiente do CI; não são medições no S145):
-
-| Métrica | Resultado |
-| --- | --- |
-| Inicialização (janela) | ~174 ms |
-| RSS estabilizado | ~64 MB |
+| Inicialização | ~164–174 ms |
+| RSS idle | ~62–64 MB |
 | Threads / subprocessos em idle | 1 / 0 |
-| CPU idle (10 s) | 0,1% |
-| Auto-clicker 1 CPS | 0,0% CPU (4/3 cliques entregues) |
-| Auto-clicker 20 CPS | 0,0% CPU (60/60) |
-| Auto-clicker 50 CPS | 0,67% CPU (149/150) |
-| Macro playback 10 s | 0,1% CPU; `play()` retorna em 0,25 ms |
+| CPU idle | 0,1% |
+| Auto-clicker 1–50 CPS | 0,0–0,7% CPU, dentro do esperado |
 | Memória em 120 s | 0,0% de crescimento |
 
 Repetir as medições:
