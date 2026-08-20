@@ -506,6 +506,45 @@ def test_recorder_load_handles_file_in_store_v1_format(macro_store):
     assert MacroRecorder.load(macro_store._path, "compartilhada") is None
 
 
+def test_applied_dpi_lost_on_controller_reload(tmp_path):
+    """REGRESSÃO CONHECIDA (registrada para correção em issue própria):
+    o DPI confirmado é persistido em config.json (persisted=True após
+    o ACK do hardware), mas o constructor do MouseController SEMPRE
+    parte de applied_dpi=None e NENHUM caminho (refresh_device/probe)
+    restaura o valor confirmado do disco — o estado aplicado fica
+    órfão no reinício, contradizendo a invariante "hardware real é
+    autoridade": o controller declara não saber o DPI real mesmo após
+    persistir a confirmação. requested/applied/persistido devem
+    convergir no reload.
+    Comportamento esperado após a correção: um controller recriado
+    com o mesmo config (e o mesmo dispositivo registrado) deve
+    restaurar applied_dpi == 1600 a partir do disco."""
+    from mouse_hub.core.dpi_persistence import DpiConfigPersister
+
+    paths = ConfigPaths(tmp_path / "cfg", tmp_path / "data")
+    paths.config_dir.mkdir(parents=True)
+    save_config(default_config(), paths)
+
+    hid = FakeHidForPipeline()
+    ctrl = make_linux_controller(hid, FakeSystemInput(), paths)
+    ctrl.refresh_device(fake_g403_device())
+    assert ctrl.probe_endpoint().status.ok
+
+    result = ctrl.set_hardware_dpi(1600)
+    assert result.status.value == "applied"
+    assert result.details["persisted"] is True
+    assert ctrl.applied_dpi == 1600
+
+    # Reload: nova instância com o mesmo config e o mesmo dispositivo.
+    ctrl2 = make_linux_controller(hid, FakeSystemInput(), paths)
+    ctrl2.refresh_device(fake_g403_device())
+    ctrl2.probe_endpoint()
+
+    # Comportamento atual: o controller NÃO restaura o DPI confirmado
+    # do disco — applied_dpi volta a None.
+    assert ctrl2.applied_dpi is None
+
+
 # ── Invariante: reprodução de macros com timing controlável ─────────
 
 
@@ -768,9 +807,13 @@ def test_scheduler_cancel_wakes_wait_immediately(controller):
 
 
 def test_scheduler_interval_update_interrupts_current_wait(controller):
-    """INVARIANTE: ajustar o intervalo interrompe o aguardo em curso —
-    a reconfiguração de CPS durante a execução já vale no próximo
-    tick, sem esperar o timeout antigo."""
+    """INVARIANTE: ajustar o intervalo faz o aguardo em curso acordar
+    cedo — a reconfiguração de CPS já vale no próximo tick, sem esperar
+    o timeout antigo. Nota: este teste cobre o acordar do wait atual;
+    a regressão conhecida do scheduler (o wait SEGUINTE falha e encerra
+    o loop do engine — exercida em
+    test_autoclicker_set_cps_during_run_stops_engine_silently) deve
+    coexistir com este comportamento quando o bug for corrigido."""
     scheduler = AutomationScheduler(60.0)
     done = threading.Event()
     threading.Thread(target=lambda: (scheduler.wait_next(), done.set()), daemon=True).start()
