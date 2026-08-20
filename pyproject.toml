@@ -16,7 +16,13 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Utilities",
 ]
-dependencies = []
+dependencies = [
+    # Emissão nativa de input (XTest/XRecord) e leitura do título da
+    # janela ativa (Xlib) — usada pelo engine de automação e pelas
+    # consultas de foco. Dependência de produção, não de CI.
+    "python-xlib>=0.17",
+    "PyQt5>=5.15",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

@@ -4,10 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main, "feat/*"]
 
 jobs:
   test:
-    name: Lint de sintaxe e testes de unidade
+    name: Lint de sintaxe e testes determinísticos
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,7 +21,26 @@ jobs:
         run: python3 -m compileall -q mouse_hub tests mouse_hub.py app && python3 -c "import mouse_hub.core, mouse_hub.platform.linux"
 
       - name: Instalar dependências de teste
-        run: python3 -m pip install --user -e ".[dev]"
+        run: python3 -m pip install --user -e ".[dev]" PyQt5==5.15.11
 
-      - name: Rodar suíte de testes (sem hardware)
-        run: python3 -m pytest
+      - name: Rodar suíte de testes determinísticos (sem hardware)
+        run: QT_QPA_PLATFORM=offscreen python3 -m pytest tests/
+
+      - name: Benchmark mínimo (startup, idle, CPS) — versão encurtada do CI
+        run: QT_QPA_PLATFORM=offscreen BENCH_IDLE_SECONDS=10 BENCH_ACTIVE_SECONDS=5 python3 -m unittest tests.bench_perf -v
+
+  ui_smoke:
+    name: Smoke da UI (Xvfb)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências de teste
+        run: python3 -m pip install --user -e ".[dev]" PyQt5==5.15.11
+
+      - name: Smoke da janela principal com display virtual
+        run: QT_QPA_PLATFORM=offscreen xvfb-run -a python3 -m unittest tests.smoke_ui_init

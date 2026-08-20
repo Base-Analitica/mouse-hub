@@ -15,6 +15,12 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+# Bootstrap: o launcher executa este script a partir de app/;
+# o pacote mouse_hub (automation) vive no repositório raiz.
+_repo_root = str(Path(__file__).resolve().parent.parent)
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
 from datetime import datetime
 
 from PyQt5.QtWidgets import (
@@ -28,6 +34,15 @@ from PyQt5.QtCore import (
     Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize,
     pyqtSignal, QObject, QThread, QPoint, QRect
 )
+# ── Core único de automação (arquitetura PR #14) ─────────────
+# O AutomationService centraliza foco, gravação, playback e clicker —
+# nada é criado no startup (lazy) e o hot path usa XTest/XRecord
+# nativos, sem subprocessos (xdotool/xinput foram removidos do caminho
+# de alta frequência).
+from mouse_hub.core.automation.service import AutomationService
+from mouse_hub.core.automation.types import MouseButton
+from mouse_hub.platform.linux.automation import focus_patterns
+
 from PyQt5.QtGui import (
     QFont, QColor, QPalette, QIcon, QPainter, QPainterPath,
     QLinearGradient, QPixmap, QFontDatabase, QBrush, QPen,
@@ -354,181 +369,197 @@ class MouseController:
         except Exception:
             pass
 
-    def is_minecraft_focused(self):
-        """Detecta se Minecraft/Lunar Client esta em foco"""
-        try:
-            result = subprocess.run(["xdotool", "getactivewindow"],
-                                    capture_output=True, text=True, timeout=2)
-            if result.returncode != 0:
-                return False
-            wid = result.stdout.strip()
-            result = subprocess.run(["xdotool", "getwindowname", wid],
-                                    capture_output=True, text=True, timeout=2)
-            if result.returncode != 0:
-                return False
-            name = result.stdout.strip().lower()
-            keywords = ["minecraft", "lunar client", "lunar",
-                        "badlion", "feather", "hypixel", "mina launcher",
-                        "prismarine", "salwyrr", "vanilla"]
-            return any(k in name for k in keywords)
-        except Exception:
-            return False
+    # Observação de arquitetura (Issue #12): a detecção de foco não
+    # vive mais aqui — consulta xdotool duplicava subprocess em cada
+    # tick do dashboard. O foco agora é centralizado no
+    # AutomationService (X11TitleSource + WindowFocusChecker com
+    # cache TTL), compartilhado por Dashboard, Auto-Clicker e Macros.
 
 
 class AutoClickerEngine:
-    """Motor do auto-clicker"""
+    """Fachada mínima sobre o AutoClickerEngine do core único
+    (mouse_hub.core.automation.autoclicker), mantendo o contrato que as
+    páginas PyQt já usam (cps, button como int, running, state, start).
 
-    MINECRAFT_KEYWORDS = [
-        "minecraft", "lunar client", "lunar", "badlion",
-        "feather", "hypixel", "mina launcher", "prismarine",
-        "salwyrr", "vanilla"
-    ]
+    O engine do core usa `MouseButton` (enum) e o estado real vem dele —
+    a UI NÃO deve manter estado espelho.
+    """
 
-    def __init__(self, mouse_controller):
-        self.mc = mouse_controller
-        self.running = False
-        self.cps = 10
-        self.button = 1
-        self.jitter_ms = 0
-        self._thread = None
-
-    def start(self):
-        if self.running:
-            return
-        self.running = True
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        self.running = False
-        if self._thread:
-            self._thread.join(timeout=2)
-
-    def _loop(self):
-        import random
-        while self.running:
-            if self.mc.is_minecraft_focused():
-                try:
-                    subprocess.run(["xdotool", "click", str(self.button)],
-                                   capture_output=True, timeout=2)
-                except Exception:
-                    pass
-                delay = 1.0 / max(1, self.cps)
-                if self.jitter_ms > 0:
-                    delay += random.uniform(-self.jitter_ms, self.jitter_ms) / 1000.0
-                    delay = max(0.001, delay)
-                time.sleep(delay)
-            else:
-                time.sleep(0.3)
+    def __init__(self, svc):
+        self._svc = svc
+        # O engine do core é lazy no serviço (nada criado antes do
+        # usuário usar a feature). As páginas leem estado no _build
+        # (estado inicial == defaults do core), então as leituras em
+        # idle NÃO criam o engine — só mutações (start/stop/set_*)
+        # disparam a criação.
+        self._started = False
 
     @property
-    def is_minecraft_active(self):
-        return self.mc.is_minecraft_focused()
+    def _native(self):
+        if self._started:
+            return self._svc.clicker
+        # Estado padrão antes do primeiro uso: espelha os defaults do
+        # core (STOPPED, CPS 5, botão esquerdo) sem instanciar nada.
+        return self
+
+    @property
+    def running(self):
+        """Fonte de verdade: estado real do motor, não o botão da UI."""
+        from mouse_hub.core.automation.autoclicker import AutoClickerState
+        if not self._started:
+            return False
+        return self._native.state in (
+            AutoClickerState.RUNNING,
+            AutoClickerState.BLOCKED_BY_FOCUS,
+        )
+
+    @property
+    def state(self):
+        from mouse_hub.core.automation.autoclicker import AutoClickerState
+        if not self._started:
+            return AutoClickerState.STOPPED
+        return self._native.state
+
+    @property
+    def error(self):
+        """Compat com a UI: o core chama o campo de `last_error`."""
+        return self._native.last_error
+
+    @property
+    def cps(self):
+        if not self._started:
+            return 10  # default do core
+        return self._native.cps
+
+    @cps.setter
+    def cps(self, value):
+        self._ensure_started()
+        self._native.set_cps(value)
+
+    @property
+    def button(self):
+        """Compat: UI usa botão como int (1/2/3)."""
+        if not self._started:
+            return 1  # default do core (MouseButton.LEFT)
+        return self._native.button.button_id
+
+    @button.setter
+    def button(self, value):
+        self._ensure_started()
+        self._native.set_button(MouseButton.from_id(int(value)))
+
+    def _ensure_started(self):
+        if self._started:
+            return
+        self._started = True
+        # Cria o engine do core sob demanda (display X + scheduler) —
+        # primeira ação do usuário na página do clicker.
+        self._svc.clicker
+
+    def start(self):
+        self._ensure_started()
+        self._native.start()
+
+    def stop(self):
+        if not self._started:
+            return
+        self._native.stop()
+
+    def cleanup(self):
+        if self._started:
+            self._native.stop()
 
 
 class MacroEngine:
-    """Motor de macros"""
+    """Fachada sobre o AutomationService (core único) — mantém o formato
+    de API que as páginas PyQt esperam (recording, start_recording,
+    stop_recording, play, delete, list_all, capture_failed).
 
-    def __init__(self):
-        self.macros = self._load()
-        self.recording = False
-        self.current_name = ""
-        self.record_start = 0
-        self.events = []
+    Tudo fica lazy no startup: o serviço só abre display/worker/disco
+    quando a primeira operação de macro acontece.
+    """
 
-    def _load(self):
-        if MACROS_PATH.exists():
-            try:
-                return json.loads(MACROS_PATH.read_text())
-            except Exception:
-                pass
-        return {}
+    def __init__(self, svc):
+        self._svc = svc
 
-    def _save(self):
+    @property
+    def recording(self):
+        return self._svc.recording
+
+    @property
+    def capture_failed(self):
+        return self._svc.capture_failure
+
+    @property
+    def macros(self):
+        """Compat: dict {nome: info} usado por MacrosPage — derivado do
+        store (que só expõe nomes) + contagem de eventos.
+
+        Nota: o store transacional não guarda metadados por macro (a
+        estrutura antiga inventava `count`/`created`); a contagem vem
+        dos eventos reais, a data mostra a geração do arquivo.
+        """
+        names = self._svc.list_macros()
         try:
-            MACROS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            MACROS_PATH.write_text(json.dumps(self.macros, indent=2))
-        except Exception:
-            pass
+            created = datetime.fromtimestamp(
+                self._svc.store.path.stat().st_mtime
+            ).strftime("%Y-%m-%d")
+        except Exception:  # noqa: BLE001
+            created = "—"
+        return {
+            name: {
+                "count": len(self._svc.store.get(name) or []),
+                "created": created,
+            }
+            for name in names
+        }
 
     def start_recording(self, name):
-        self.recording = True
-        self.current_name = name
-        self.record_start = time.time()
-        self.events = []
+        """Inicia gravação real. Se o capturador não conseguir abrir o
+        display X, gravação não inicia e o motivo fica acessível em
+        self.capture_failed."""
+        if self.recording:
+            return
+        if not self._svc.start_recording(name):
+            return
 
     def stop_recording(self):
         if not self.recording:
             return None
-        self.recording = False
-        name = self.current_name
-        self.macros[name] = {
-            "name": name,
-            "events": self.events,
-            "created": datetime.now().isoformat(),
-            "count": len(self.events),
-        }
-        self._save()
-        return name
-
-    def add_event(self, etype, **kwargs):
-        if not self.recording:
-            return
-        elapsed = time.time() - self.record_start
-        event = {"time": round(elapsed, 4), "type": etype}
-        event.update(kwargs)
-        self.events.append(event)
+        ok = self._svc.stop_recording()
+        name = self._svc.list_macros()[-1] if ok else None
+        return name if ok else None
 
     def play(self, name, repeat=1):
-        if name not in self.macros:
-            return False
-        events = self.macros[name]["events"]
-        if not events:
-            return False
+        """Inicia reprodução no worker de playback. Já em execução,
+        rejeita silenciosamente (o serviço nunca sobrescreve o worker
+        em curso) — a UI usa playback_state para o feedback."""
+        return self._svc.play(name, repeat=repeat)
 
-        def _run():
-            for _ in range(repeat):
-                prev = 0
-                for ev in events:
-                    delay = ev["time"] - prev
-                    if delay > 0:
-                        time.sleep(delay)
-                    prev = ev["time"]
-                    etype = ev["type"]
-                    if etype == "key":
-                        try:
-                            subprocess.run(["xdotool", "key", ev["key"]],
-                                           capture_output=True, timeout=2)
-                        except Exception:
-                            pass
-                    elif etype == "click":
-                        try:
-                            subprocess.run(["xdotool", "click", str(ev.get("button", 1))],
-                                           capture_output=True, timeout=2)
-                        except Exception:
-                            pass
-                    elif etype == "move":
-                        try:
-                            subprocess.run(["xdotool", "mousemove",
-                                            str(ev.get("x", 0)), str(ev.get("y", 0))],
-                                           capture_output=True, timeout=2)
-                        except Exception:
-                            pass
+    def cancel_playback(self):
+        return self._svc.cancel_playback()
 
-        threading.Thread(target=_run, daemon=True).start()
-        return True
+    @property
+    def playback_state(self):
+        return self._svc.playback_state
+
+    @property
+    def playback_error(self):
+        return self._svc.playback_error
+
+    def cancel_recording(self):
+        self._svc.cancel_recording()
 
     def delete(self, name):
-        if name in self.macros:
-            del self.macros[name]
-            self._save()
-            return True
-        return False
+        return self._svc.delete_macro(name)
 
     def list_all(self):
-        return {k: {"name": v["name"], "count": v["count"],
-                     "created": v["created"]}
-                for k, v in self.macros.items()}
+        return self.macros
+
+    def cleanup(self):
+        """Encerramento completo — delega ao serviço (mutex garante que
+        capture e playback param sem corrida)."""
+        self._svc.cleanup()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -709,11 +740,12 @@ class DangerButton(QPushButton):
 
 class DashboardPage(QWidget):
     """Pagina principal - Dashboard"""
-    def __init__(self, mc, ac, me):
+    def __init__(self, mc, ac, me, svc):
         super().__init__()
         self.mc = mc
         self.ac = ac
         self.me = me
+        self.svc = svc
         self._build()
 
     def _build(self):
@@ -816,14 +848,18 @@ class DashboardPage(QWidget):
         self.dpi_card.set_value(str(self.mc.current_dpi))
         self.sens_card.set_value(f"{self.mc.current_sensitivity}%")
 
-        mc_active = self.mc.is_minecraft_focused()
+        # Foco consultado no checker compartilhado (TTL 500ms) — zero
+        # subprocesso no tick do dashboard (era xdotool 2x).
+        focused = self.svc.window_service.is_focused(tuple(focus_patterns()))
+        mc_active = focused.focused
         self.mc_card.set_value("ON" if mc_active else "OFF")
         self.mc_card.value_label.setStyleSheet(f"""
             color: {COLORS['mc_green'] if mc_active else COLORS['text_muted']};
             font-size: 24px; font-weight: 900; background: transparent;
         """)
 
-        clicker_on = self.ac.running
+        # Estado real do motor (running | blocked_by_focus contam como ON)
+        clicker_on = self.ac.state.value in ("running", "blocked_by_focus")
         self.clicker_card.set_value("ON" if clicker_on else "OFF")
         self.clicker_card.value_label.setStyleSheet(f"""
             color: {COLORS['danger'] if clicker_on else COLORS['text_muted']};
@@ -1107,10 +1143,11 @@ class SensitivityPage(QWidget):
 
 class AutoClickerPage(QWidget):
     """Pagina do Auto-Clicker"""
-    def __init__(self, mc, ac):
+    def __init__(self, mc, ac, svc):
         super().__init__()
         self.mc = mc
         self.ac = ac
+        self.svc = svc
         self._build()
 
     def _build(self):
@@ -1336,7 +1373,10 @@ class AutoClickerPage(QWidget):
             """)
 
     def _update(self):
-        mc_active = self.mc.is_minecraft_focused()
+        # Foco via checker compartilhado (TTL 500ms) — o xdotool era
+        # consultado a cada segundo; agora é memória até o cache expirar.
+        focused = self.svc.window_service.is_focused(tuple(focus_patterns()))
+        mc_active = focused.focused
         if mc_active:
             self.mc_status.setText("⛏️  Minecraft Detectado!")
             self.mc_status.setStyleSheet(f"""
@@ -1360,16 +1400,39 @@ class AutoClickerPage(QWidget):
                 font-weight: 600;
             """)
 
-        if self.ac.running:
-            btn_name = {1: "esquerdo", 2: "meio", 3: "direito"}.get(self.ac.button, "?")
+        # Estado real do motor como fonte de verdade (não o botão da UI)
+        state = self.ac.state
+        if state.value == "running":
+            btn_name = {1: "esquerdo", 2: "meio", 3: "direito"}.get(
+                self.ac.button, "?")
+            self.status_title.setText("Auto-Clicker Ativo!")
             self.status_sub.setText(f"{self.ac.cps} CPS — Botão {btn_name}")
+            self.status_icon.setText("🔥")
+            self.toggle_btn.setText("⏹️  Parar Auto-Clicker")
+        elif state.value == "blocked_by_focus":
+            self.status_title.setText("Aguardando jogo em foco...")
+            self.status_sub.setText(
+                "Ligado, mas só clica com Minecraft/Lunar Client ativo")
+            self.status_icon.setText("⏳")
+            self.toggle_btn.setText("⏹️  Parar Auto-Clicker")
+        elif state.value == "failed":
+            self.status_title.setText("Auto-Clicker com erro")
+            self.status_sub.setText(f"Falha: {self.ac.error or 'desconhecida'}")
+            self.status_icon.setText("⚠️")
+            self.toggle_btn.setText("▶️  Iniciar Auto-Clicker")
+        else:
+            self.status_title.setText("Auto-Clicker Desligado")
+            self.status_sub.setText("Clique em iniciar para começar")
+            self.status_icon.setText("🖱️")
+            self.toggle_btn.setText("▶️  Iniciar Auto-Clicker")
 
 
 class MacrosPage(QWidget):
     """Pagina de Macros"""
-    def __init__(self, me):
+    def __init__(self, me, svc):
         super().__init__()
         self.me = me
+        self.svc = svc
         self._build()
 
     def _build(self):
@@ -1398,13 +1461,51 @@ class MacrosPage(QWidget):
         self.name_input.setStyleSheet(f"padding: 10px; font-size: 14px;")
         rl.addWidget(self.name_input)
 
+        row = QHBoxLayout()
         self.record_btn = DangerButton("⏺️  Gravar Macro")
         self.record_btn.clicked.connect(self._toggle_record)
-        rl.addWidget(self.record_btn)
+        row.addWidget(self.record_btn)
+
+        self.cancel_btn = QPushButton("❌ Cancelar")
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.cancel_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {COLORS['bg_card']};
+                color: {COLORS['text_secondary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 700;
+            }}
+            QPushButton:hover {{
+                border-color: {COLORS['danger']};
+                background: rgba(239, 68, 68, 0.1);
+            }}
+        """)
+        self.cancel_btn.clicked.connect(self._cancel_record)
+        row.addWidget(self.cancel_btn)
+        row.addStretch()
+        rl.addLayout(row)
 
         self.record_status = QLabel("")
         self.record_status.setStyleSheet(f"color: {COLORS['danger']}; font-size: 12px; font-weight: 600; background: transparent;")
         rl.addWidget(self.record_status)
+
+        # Feedback do playback (estado real do worker, incl. FAILED):
+        # refresh leve a cada 500ms — sem polling de subprocesso,
+        # apenas leitura de estado em memória do serviço.
+        self.play_status = QLabel("")
+        self.play_status.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 12px; "
+            "font-weight: 600; background: transparent;"
+        )
+        rl.addWidget(self.play_status)
+
+        self._play_timer = QTimer()
+        self._play_timer.timeout.connect(self._update_play_status)
+        self._play_timer.start(500)
 
         layout.addWidget(rec_frame)
 
@@ -1425,17 +1526,62 @@ class MacrosPage(QWidget):
 
         self._refresh_list()
 
+    def _set_recording_ui(self, recording: bool) -> None:
+        self.record_btn.setText("⏹️  Parar Gravação" if recording else "⏺️  Gravar Macro")
+        self.cancel_btn.setVisible(recording)
+        self.name_input.setEnabled(not recording)
+
+    def _cancel_record(self):
+        """Aborta a gravação descartando os eventos acumulados."""
+        self.me.cancel_recording()
+        self._set_recording_ui(False)
+        self.record_status.setText("⚠️  Gravação cancelada — eventos descartados")
+
     def _toggle_record(self):
         if self.me.recording:
             name = self.me.stop_recording()
-            self.record_btn.setText("⏺️  Gravar Macro")
-            self.record_status.setText(f"✅ Macro '{name}' salva! ({len(self.me.macros.get(name, {}).get('events', []))} eventos)")
+            self._set_recording_ui(False)
+            if name is None:
+                self.record_status.setText(
+                    "⚠️  Gravação descartada (sem eventos ou nome inválido)")
+            else:
+                count = self.me.macros.get(name, {}).get("count", 0)
+                self.record_status.setText(
+                    f"✅ Macro '{name}' salva! ({count} eventos)")
             self._refresh_list()
         else:
-            name = self.name_input.text() or f"macro_{int(time.time())}"
+            name = self.name_input.text().strip() or \
+                f"macro_{int(time.time())}"
             self.me.start_recording(name)
-            self.record_btn.setText("⏹️  Parar Gravação")
-            self.record_status.setText(f"🔴 Gravando '{name}'... pressione parar quando terminar.")
+            if self.me.recording:
+                self._set_recording_ui(True)
+                self.record_status.setText(
+                    f"🔴 Gravando '{name}'... pressione parar quando "
+                    "terminar. Teclas e cliques são capturados em "
+                    "qualquer janela.")
+            else:
+                reason = self.me.capture_failed or "capturador indisponível"
+                self.record_status.setText(
+                    f"❌ Não foi possível iniciar a gravação: {reason}")
+
+    def _update_play_status(self) -> None:
+        """Reflete o estado real do playback: em execução ou FAILED com
+        o motivo do último erro. Sincroniza também os botões Play —
+        durante a reprodução qualquer botão vira '❌ Cancel'."""
+        state = self.me.playback_state
+        running = state == "running"
+        if running:
+            self.play_status.setText("▶️  Reproduzindo...")
+        elif state == "failed":
+            reason = self.me.playback_error or "falha de emissão"
+            self.play_status.setText(f"❌ Playback falhou: {reason}")
+        else:
+            self.play_status.setText("")
+        for child in self.macro_list_widget.findChildren(QPushButton):
+            if child.text() in ("▶️ Play", "❌ Cancel") and child is not getattr(
+                self, "_last_del_btn", None
+            ):
+                child.setText("❌ Cancel" if running else "▶️ Play")
 
     def _refresh_list(self):
         # Clear
@@ -1493,7 +1639,19 @@ class MacrosPage(QWidget):
                 }}
                 QPushButton:hover {{ background: {COLORS['accent_light']}; }}
             """)
-            play_btn.clicked.connect(lambda _, n=name: self.me.play(n))
+
+            def on_play(btn, n=name):
+                """Play/Cancel — o botão espelha o estado do playback:
+                durante a execução vira '❌ Cancel' e encerra a
+                emissão em curso (worker exato, sem criar substituto)."""
+                if self.me.playing:
+                    self.me.cancel_playback()
+                    btn.setText("▶️ Play")
+                else:
+                    if self.me.play(n):
+                        btn.setText("❌ Cancel")
+
+            play_btn.clicked.connect(lambda _, b=play_btn: on_play(b))
             il.addWidget(play_btn)
 
             del_btn = QPushButton("🗑️")
@@ -1609,11 +1767,12 @@ class ProfilesPage(QWidget):
 
 class SettingsPage(QWidget):
     """Pagina de Configuracoes"""
-    def __init__(self, mc, ac, me):
+    def __init__(self, mc, ac, me, svc):
         super().__init__()
         self.mc = mc
         self.ac = ac
         self.me = me
+        self.svc = svc
         self._build()
 
     def _build(self):
@@ -1712,8 +1871,14 @@ class MouseHubApp(QMainWindow):
 
         # Engines
         self.mc = MouseController()
-        self.ac = AutoClickerEngine(self.mc)
-        self.me = MacroEngine()
+        # Core único de automação (PR #14): uma única instância
+        # compartilhada por todas as páginas — foco, gravação, playback
+        # e clicker centralizados (detect once, share state). Nada é
+        # criado no startup (lazy): display, workers e disco só surgem
+        # quando a feature é usada.
+        self.svc = AutomationService(macros_path=MACROS_PATH)
+        self.ac = AutoClickerEngine(self.svc)
+        self.me = MacroEngine(self.svc)
 
         # Central widget
         central = QWidget()
@@ -1811,13 +1976,13 @@ class MouseHubApp(QMainWindow):
         self.stack = QStackedWidget()
         self.stack.setStyleSheet(f"background: {COLORS['bg_darkest']};")
 
-        self.dashboard_page = DashboardPage(self.mc, self.ac, self.me)
+        self.dashboard_page = DashboardPage(self.mc, self.ac, self.me, self.svc)
         self.dpi_page = DPIPage(self.mc)
         self.sens_page = SensitivityPage(self.mc)
-        self.clicker_page = AutoClickerPage(self.mc, self.ac)
-        self.macros_page = MacrosPage(self.me)
+        self.clicker_page = AutoClickerPage(self.mc, self.ac, self.svc)
+        self.macros_page = MacrosPage(self.me, self.svc)
         self.profiles_page = ProfilesPage(self.mc)
-        self.settings_page = SettingsPage(self.mc, self.ac, self.me)
+        self.settings_page = SettingsPage(self.mc, self.ac, self.me, self.svc)
 
         self.stack.addWidget(self.dashboard_page)
         self.stack.addWidget(self.dpi_page)
@@ -1838,7 +2003,12 @@ class MouseHubApp(QMainWindow):
             btn.set_active(i == index)
 
     def closeEvent(self, event):
-        self.ac.stop()
+        # Encerramento completo: captura, playback e worker do clicker
+        # (o mutex do serviço garante a parada sem corrida; a chamada é
+        # idempotente quando nada foi usado).
+        self.me.cleanup()
+        self.ac.cleanup()
+        self.svc.cleanup()
         event.accept()
 
 
