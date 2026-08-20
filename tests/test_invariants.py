@@ -132,12 +132,16 @@ def test_pipeline_normalizes_dpi_by_step(controller):
     assert result.status.value == "applied_partial"
     assert result.details["requested"] == 825
     assert result.details["applied"] == 850
-    assert hid.written_reports
-    payload = hid.written_reports[-1]
-    # O report escrito ao hidraw é o efeito externo observável: os bytes
-    # 6-7 do payload carregam o DPI que o HARDWARE efetivamente receberia
-    # — não é um detalhe de implementação arbitrário.
-    assert (payload[5] << 8 | payload[6]) == 850
+    assert hid.written_reports  # o comando saiu pelo adapter HID
+    # O efeito observável do pipeline: o comando SetSensorDPI que
+    # CHEGOU ao adapter HID carrega o DPI CLAMPADO+QUANTIZADO (850),
+    # não o solicitado (825). assert sobre a API observável do fake
+    # (feature_index, dpi) — NUNCA sobre offset fixo do payload.
+    assert hid.last_dpi_command() == (hid.dpi_feature_index, 850)
+    # Nota: hid.applied_dpi (leitura do GetSensorDPI) continua None
+    # neste teste porque o readback_mode padrão requer o poll
+    # pós-aplicação — a confirmação do valor aplicado é validada via
+    # result.details["applied"], que é o contrato do controller.
 
 
 def test_pipeline_clamps_below_minimum(controller):
