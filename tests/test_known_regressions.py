@@ -4,19 +4,22 @@ ESTES TESTES NÃO SÃO INVARIANTES PERMANENTES: reproduzem bugs reais da
 implementação atual (documentados para correção em issues próprias —
 #16 MacroStore reload, #17 MacroRecorder.load v1, #18 set_cps race,
 GAP applied_dpi restore no startup). Quando cada bug for corrigido, o
-assert correspondente DEVE mudar para o comportamento esperado descrito
-na própria docstring — a docstring de cada teste descreve explicitamente
-o comportamento esperado pós-correção.
-
-NENHUM destes testes deve ser removido enquanto o bug existir: eles são
-a única evidência determinística de que a correção aconteceu (o CI passa
-a exigir o roundtrip/restore/hot-config completos).
+teste DEVE ser convertido para o comportamento esperado descrito na
+própria docstring (o CI passa a exigir o roundtrip/restore/hot-config
+completos — é isso que garante que a correção permaneça corrigida).
+Bugs corrigidos na PR #20 (asserts convertidos para o comportamento
+esperado, mantendo o teste como reguarda de regressão):
+- #16 → test_macro_mouse_events_roundtrip_after_fix
+- #17 → test_recorder_load_reads_store_v1_after_fix
+- #18 → test_autoclicker_set_cps_during_run_keeps_running_after_fix
+Correção pendente (bug ainda existente):
+- GAP applied_dpi restore no startup → test_applied_dpi_lost_on_controller_reload
 
 Organização:
-- test_macro_mouse_events_lost_on_reload   (bug #16 — MacroStore)
-- test_recorder_load_handles_file_in_store_v1_format (bug #17 — Recorder)
-- test_applied_dpi_lost_on_controller_reload (GAP — restore no startup)
-- test_autoclicker_set_cps_during_run_stops_engine_silently (bug #18)
+- test_macro_mouse_events_roundtrip_after_fix (bug #16 corrigido — MacroStore)
+- test_recorder_load_reads_store_v1_after_fix (bug #17 corrigido — Recorder)
+- test_applied_dpi_lost_on_controller_reload (GAP pendente — restore no startup)
+- test_autoclicker_set_cps_during_run_keeps_running_after_fix (bug #18 corrigido)
 
 Determinística: sem hardware real, sem Display X, sem hidraw, sem
 subprocesso — só fakes de tests/fakes.py.
@@ -61,19 +64,15 @@ def macro_store(tmp_path):
     return MacroStore(tmp_path / "macros.json")
 
 
-def test_macro_mouse_events_lost_on_reload(macro_store):
-    """REGRESSÃO CONHECIDA (registrada para correção em issue própria):
-    o MacroStore grava o button do mouse como STRING ("left"), mas o
-    _validate_event chama int() sobre ele — a macro inteira de mouse
-    é descartada no reload (load==0) SEM qualquer aviso ou evidência:
-    o get() volta None como se a macro nunca tivesse existido. Isto
-    CONTRADIZ as invariantes 5 (falha nunca vira sucesso falso) e 7
-    (persistência fail-closed com evidência): a gravação diz que
-    persistiu, o reload diz que nada existia. Quando o bug for
-    corrigido (serializar o id numérico do botão e/ou reportar
-    entradas descartadas), este assert deve mudar para o roundtrip
-    completo.
-    """
+def test_macro_mouse_events_roundtrip_after_fix(macro_store):
+    """INVARIANTE (correção #16, anteriormente regressão conhecida):
+    eventos de mouse fazem roundtrip completo pelo MacroStore — o flush
+    grava o button como ID NUMÉRICO e o reload o aceita nos dois
+    formatos (numérico e textual legado "left"), com as entradas
+    descartadas visíveis em `discarded_entries` em vez de perda
+    silenciosa. Este era o teste
+    `test_macro_mouse_events_lost_on_reload` (reload descartava a macro
+    inteira), convertido para o comportamento esperado pós-correção."""
     events = [
         RecordedEvent(EventType.MOUSE_PRESS, button=MouseButton.LEFT.value, keycode=0, delta_ms=0.0),
         RecordedEvent(EventType.MOUSE_RELEASE, button=MouseButton.LEFT.value, keycode=0, delta_ms=10.0),
@@ -81,21 +80,22 @@ def test_macro_mouse_events_lost_on_reload(macro_store):
     macro_store.add("mouse", events)
     macro_store.flush()
 
-    # A gravação persistiu o arquivo (evidência do que foi gravado),
-    # mas o reload descarta a macro silenciosamente.
-    assert macro_store.load() == 0
-    assert macro_store.get("mouse") is None
+    # Comportamento esperado pós-correção (#16): roundtrip completo,
+    # sem descartes — o roundtrip vazio era o bug.
+    assert macro_store.load() == 1
+    loaded = macro_store.get("mouse")
+    assert loaded is not None
+    assert len(loaded) == 2
+    assert loaded[0].kind == EventType.MOUSE_PRESS and loaded[0].button == 1
+    assert macro_store.discarded_entries.get("mouse", 0) == 0
 
-def test_recorder_load_handles_file_in_store_v1_format(macro_store):
-    """REGRESSÃO CONHECIDA (registrada para correção em issue própria):
-    o MacroStore grava macros no formato v1 (wrapper {schema_version,
-    macros:{name: [...]}}), mas o MacroRecorder.load espera um dicionário
-    raiz {nome: [eventos]} — o load do recorder retorna None para macros
-    gravadas pelo store, sem aviso. Os dois consumidores NÃO compartilham
-    a mesma fonte de verdade, o que contradiz a invariante "evidência":
-    a gravação e a leitura reportam verdades diferentes sobre o mesmo
-    arquivo. Quando o bug for corrigido, este assert deve mudar para o
-    roundtrip completo."""
+def test_recorder_load_reads_store_v1_after_fix(macro_store):
+    """INVARIANTE (correção #17, anteriormente regressão conhecida):
+    gravação e reprodução compartilham o MESMO contrato de armazenamento
+    — o MacroRecorder.load entende o container v1 do MacroStore. Este
+    era o teste `test_recorder_load_handles_file_in_store_v1_format`
+    (recorder retornava None para macros gravadas pelo store),
+    convertido para o comportamento esperado pós-correção."""
     events = [
         RecordedEvent(EventType.KEY_PRESS, button=0, keycode=38, delta_ms=0.0),
         RecordedEvent(EventType.KEY_RELEASE, button=0, keycode=38, delta_ms=33.33),
@@ -103,8 +103,13 @@ def test_recorder_load_handles_file_in_store_v1_format(macro_store):
     macro_store.add("compartilhada", events)
     macro_store.flush()
 
-    # Comportamento atual: o recorder não entende o formato v1 do store.
-    assert MacroRecorder.load(macro_store._path, "compartilhada") is None
+    # Comportamento esperado pós-correção (#17): o recorder entende o
+    # container v1 do store — retornar None era o bug.
+    loaded = MacroRecorder.load(macro_store._path, "compartilhada")
+    assert loaded is not None
+    assert len(loaded) == 2
+    assert loaded[0].kind == EventType.KEY_PRESS
+    assert loaded[1].delta_ms == pytest.approx(33.33, abs=0.005)
 
 def test_applied_dpi_lost_on_controller_reload(tmp_path):
     """REGRESSÃO CONHECIDA (registrada para correção em issue própria):
@@ -163,10 +168,15 @@ def test_autoclicker_set_cps_during_run_stops_engine_silently(controller):
     engine.start()
     time.sleep(0.15)
     clicks_before = engine.stats.clicks
-    engine.set_cps(50)  # interval cai para 20 ms — mas o engine se mata
-    time.sleep(0.3)
-    # Comportamento atual: o engine para sozinho após o set_cps.
+    engine.set_cps(50)  # interval cai para 20 ms — o engine segue vivo
+    time.sleep(0.4)
+    # Comportamento esperado pós-correção (#18): o engine continua
+    # RUNNING após o set_cps e os cliques continuam somando — parar
+    # sozinho era o bug (race do Event de parada no setter de interval).
+    assert engine.state == AutoClickerState.RUNNING
+    assert engine.running
+    assert engine.stats.clicks > clicks_before
+    extra = engine.stats.clicks - clicks_before
+    assert extra >= 10  # ~20 cliques esperados a 50 CPS em 0.4 s
+    engine.stop()
     assert engine.state == AutoClickerState.STOPPED
-    assert not engine.running
-    assert engine.last_error is None  # sem diagnóstico — parada silenciosa
-    assert engine.stats.clicks == clicks_before  # zero cliques após a troca

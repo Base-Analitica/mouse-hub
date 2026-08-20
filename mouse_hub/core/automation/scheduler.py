@@ -100,8 +100,8 @@ class AutomationScheduler:
             if remaining <= 0:
                 return True  # o intervalo completou normalmente
             # Dorme até o fim do tick OU até o intervalo mudar
-            # (_notify) — nunca gira esperando.
-            self._notify.wait(min(max(remaining, 0.0), remaining))
+            # (_notify) — nunca gira esperando (Event.wait, não loop).
+            self._notify.wait(remaining)
             with self._lock:
                 if self._version != version:
                     # A configuração mudou durante o sono: recalcular
