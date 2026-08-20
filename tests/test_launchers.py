@@ -114,7 +114,8 @@ class LauncherSafetyTest(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────
 
 # FAKE APP: escreve o marker no MESMO formato do app real
-# (PID real + boottime) para provar o protocolo; a lógica de
+# (PID real + process start time do /proc, campo 22) para provar o
+# protocolo; a lógica de
 # validação testada é a do launcher.sh.
 _FAKE_APP = """
 import os, sys, atexit, time
@@ -189,10 +190,9 @@ def _marker(pid_file: str):
 
 class LauncherLifecycleTest(unittest.TestCase):
     """Casos determinísticos do lifecycle do launcher.sh com fake app.
-
     O fake app reproduz o protocolo do app real (marker com PID real
-    + boottime) — os testes provam o comportamento do launcher, não
-    a UI (que depende de DISPLAY/X completo).
+    + process start time) — os testes provam o comportamento do
+    launcher, não a UI (que depende de DISPLAY/X completo).
     """
 
     def setUp(self):
@@ -235,9 +235,9 @@ class LauncherLifecycleTest(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("iniciado", res.stdout)
 
-        pid, bt = _marker(self.marker_file)
+        pid, st = _marker(self.marker_file)
         self.assertIsNotNone(pid, "marker nao criado")
-        self.assertIsNotNone(bt, "boottime ausente no marker")
+        self.assertIsNotNone(st, "start time ausente no marker")
 
         # PID existe, é o python do fake app e está vivo
         self.assertTrue(self._wait_alive(pid),
@@ -248,12 +248,13 @@ class LauncherLifecycleTest(unittest.TestCase):
         self.assertIn("fake_app.py", cmdline,
                       "processo nao e o app registrado")
 
-        # boottime registrado == atual — anti PID-reuse
+        # process start time registrado == atual — anti PID-reuse
+        # (campo 22 de /proc/<pid>/stat, clock ticks desde o boot)
         with open(f"/proc/{pid}/stat", "rb") as _st:
             stat = _st.read().decode("ascii")
-        curbt = stat[stat.rfind(")") + 2:].split()[19]
-        self.assertEqual(bt, curbt,
-                         "boottime diverge — marker nao representa "
+        curst = stat[stat.rfind(")") + 2:].split()[19]
+        self.assertEqual(st, curst,
+                         "start time diverge — marker nao representa "
                          "o processo real")
 
         # segunda execução não inicia nova instância

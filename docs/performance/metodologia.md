@@ -143,9 +143,10 @@ e coberto por testes determinísticos (`tests/test_launchers.py`,
 `LauncherLifecycleTest`, sem UI real e sem sleep longo):
 
 1. processo inicia → marcador criado pelo PRÓPRIO processo Python do
-   app (PID real + boottime do `/proc/<pid>/stat`), PID existente,
-   cmdline do Mouse Hub, vivo e boottime idêntico ao registrado
-   (kernel que reutiliza PID não passa — boottime é monotônico);
+   app (PID real + process start time, campo 22 de
+   `/proc/<pid>/stat`), PID existente, cmdline do Mouse Hub, vivo e
+   start time idêntico ao registrado (kernel que reutiliza PID não
+   passa — start time é monotônico por encarnação);
 2. processo morre na inicialização → launcher detecta, NÃO anuncia
    sucesso, marcador removido (falha nunca vira sucesso);
 3. marcador stale (PID inexistente) → removido, nova execução inicia.
@@ -230,7 +231,7 @@ com `QT_QPA_PLATFORM=offscreen`, ou na sandbox local equivalente —
 | Memória em 120 s (UI viva) | 0,0% de crescimento (64204–65120 KB; pico usado como referência) | < 10% |
 | Recording: 2.000 callbacks | 2,3–3,9 ms totais (< 0,002 ms/evento); threads no baseline | — |
 | Recording: crescimento de memória 4k→8k eventos | 264 KB → 528 KB (proporcional; `VmRSS` como evidência secundária) | — |
-| Lifecycle do launcher | fake app determinístico: 3 casos (início com PID real + boottime, morte imediata sem sucesso falso, marker stale removido) | uma instância por display |
+| Lifecycle do launcher | fake app determinístico: 3 casos (início com PID real + process start time, morte imediata sem sucesso falso, marker stale removido) | uma instância por display |
 
 Os valores de cold startup variam fortemente com o estado do cache de
 módulos: com o PyQt5 já importado na máquina a janela abre em

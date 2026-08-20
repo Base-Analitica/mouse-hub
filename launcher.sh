@@ -60,20 +60,21 @@ fi
 # O marcador é escrito pelo PRÓPRIO processo Python do app (PID
 # real) logo após o QApplication ser criado; o formato é:
 #   linha 1: PID do processo real
-#   linha 2: boottime do PID em /proc/$PID/stat (campo 22)
+#   linha 2: process start time do PID em /proc/$PID/stat (campo 22,
+#            clock ticks desde o boot — starttime, não "boottime")
 # A validação exige 4 condições simultâneas — PID existe, cmdline
-# pertence ao Mouse Hub, processo vivo (kill -0) E boottime
+# pertence ao Mouse Hub, processo vivo (kill -0) E starttime
 # idêntico ao registrado. O kernel pode reutilizar um PID, mas a
-# chance de reutilizar o MESMO PID com o MESMO boottime e o MESMO
-# cmdline é nula na prática: boottime é monotônico por PID.
+# chance de reutilizar o MESMO PID com o MESMO starttime e o MESMO
+# cmdline é nula na prática: starttime é monotônico por encarnação.
 RUN_MARKER="/tmp/mouse-hub-native-${DISPLAY:-:0}.pid"
 
 _valid_marker() {
     # $1 = arquivo do marcador; imprime PID real se válido
     [ -f "$1" ] || return 1
-    local mpid mbt
+    local mpid mstart
     mpid=$(sed -n '1p' "$1" | tr -d '[:space:]')
-    mbt=$(sed -n '2p' "$1" | tr -d '[:space:]')
+    mstart=$(sed -n '2p' "$1" | tr -d '[:space:]')
     [ -n "$mpid" ] || return 1
     # PID existe e está vivo
     kill -0 "$mpid" 2>/dev/null || return 1
@@ -85,10 +86,10 @@ _valid_marker() {
     local cmdline
     cmdline=$(cat "/proc/$mpid/cmdline" 2>/dev/null | tr '\0' ' ')
     echo "$cmdline" | grep -q "$expected_name" || return 1
-    # boottime registrado bate com o atual — anti PID-reuse
-    local curbt
-    curbt=$(awk '{print $22}' "/proc/$mpid/stat" 2>/dev/null)
-    [ -n "$curbt" ] && [ "$curbt" = "$mbt" ] || return 1
+    # process start time registrado bate com o atual — anti PID-reuse
+    local curstart
+    curstart=$(awk '{print $22}' "/proc/$mpid/stat" 2>/dev/null)
+    [ -n "$curstart" ] && [ "$curstart" = "$mstart" ] || return 1
     echo "$mpid"
     return 0
 }
@@ -103,7 +104,8 @@ rm -f "$RUN_MARKER"
 
 # ── Inicia o app em segundo plano ─────────────────────────
 # O marcador é escrito e removido pelo PRÓPRIO processo Python
-# (via atexit), que registra seu PID real + boottime. O bash
+# (via atexit), que registra seu PID real + process start time. O
+# bash
 # intermediário mantém uma trap de fallback para o caso raro de
 # o Python ser morto sem rodar atexit (SIGKILL). Nenhum
 # watcher, daemon ou loop de monitoramento fica rodando.
@@ -113,7 +115,7 @@ rm -f "$RUN_MARKER"
 # shebang deste script) roda o trap nesses cenários.
 cd "$SCRIPT_DIR"
 # O path do marcador é exportado para o processo do app — assim o
-# Python sabe ONDE escrever o PID real + boottime (sem precisar
+# Python sabe ONDE escrever o PID real + process start time (sem
 # recompor a regra de nome de arquivo dentro do app).
 export MOUSE_HUB_RUN_MARKER="$RUN_MARKER"
 nohup /bin/bash -c "trap 'rm -f \$MOUSE_HUB_RUN_MARKER' EXIT; python3 $APP_FILE; exit" \

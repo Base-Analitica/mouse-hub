@@ -2018,10 +2018,11 @@ class MouseHubApp(QMainWindow):
 
 def _cleanup_run_marker():
     # Marca de instância única escrita por este processo (PID real
-    # + boottime). Remove o marcador na saída normal — o launcher
-    # confia nesse marker para detectar "já rodando" e o kernel não
-    # aceita PID reutilizado porque o boottime difere (validação em
-    # launcher.sh). Sem watcher: atexit roda quando o processo sai.
+    # + process start time). Remove o marcador na saída normal — o
+    # launcher confia nesse marker para detectar "já rodando" e o
+    # kernel não aceita PID reutilizado porque o starttime difere
+    # (validação em launcher.sh). Sem watcher: atexit roda quando o
+    # processo sai.
     marker = os.environ.get("MOUSE_HUB_RUN_MARKER", "")
     if marker:
         try:
@@ -2046,15 +2047,16 @@ def main():
     display_name = os.environ.get("DISPLAY", ":0")
     run_marker = f"/tmp/mouse-hub-native-{display_name}.pid"
     try:
-        # campo 22 de /proc/self/stat, lido sem dependência nova
+        # process start time (campo 22 de /proc/self/stat, clock ticks
+        # desde o boot) — anti-reuso de PID: lido sem dependência nova
         _stat = open("/proc/self/stat", "rb").read().decode("ascii")
-        # campos: pid (comm) ... — comm pode conter ')'; achar o
-        # último ')' e o campo 22 depois dele
+        # comm pode conter ')'; achar o último ')' e o campo 22 depois
+        # dele: campos 3..21 antes do starttime → índice 19 (0-based)
         _last = _stat.rfind(")")
         _fields = _stat[_last + 2:].split()
-        _boottime = _fields[19]  # índice 22 no arquivo = 20 no array
+        _starttime = _fields[19]
         with open(run_marker, "w") as _fh:
-            _fh.write(f"{os.getpid()}\n{_boottime}\n")
+            _fh.write(f"{os.getpid()}\n{_starttime}\n")
         os.environ["MOUSE_HUB_RUN_MARKER"] = run_marker
         import atexit
         atexit.register(_cleanup_run_marker)
