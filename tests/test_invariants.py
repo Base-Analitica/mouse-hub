@@ -1,22 +1,28 @@
 """Regressão das invariantes centrais do Mouse Hub (issue #9).
 
 Suíte nova, nomeada por invariante, que protege as regras que as
-suítes existentes ainda não cobriam diretamente:
+suítes existentes ainda não cobriam diretamente.
 
-* clamp + step do DPI no PIPELINE completo (controller), não só na
-  função pura;
-* separação estrita DPI físico × sensibilidade do sistema em todos os
+Testes marcados "REGRESSÃO CONHECIDA" reproduzem bugs reais da
+implementação atual (documentados para correção em issues próprias)
+— quando o bug for corrigido, os asserts correspondentes devem mudar
+para o comportamento esperado descrito na própria docstring. NENHUM
+desses testes deve ser removido enquanto o bug existir: eles são a
+única evidência determinística de que a correção aconteceu.
+
+Cobertura (40 testes):
+- clamp + step do DPI no pipeline completo (controller);
+- separação estrita DPI físico × sensibilidade do sistema em todos os
   caminhos (inclusive o de falha);
-* criação/carregamento/remoção de perfis com reload do disco (roundtrip
-  real, não apenas o objeto em memória);
-* serialização/desserialização de macros com perda de precisão
-  conhecida do delta_ms (arredondamento a 2 casas) e entradas parciais;
-* reprodução de macros com ordem preservada, repeat exato e falha que
-  vira FAILED com release defensivo — nunca sucesso falso;
-* limites e configuração do auto-clicker (CPS [1,50], idempotência,
-  bloqueio por foco, falha de backend vira FAILED);
-* scheduler com timing controlável (validação, cancelamento imediato);
-* comportamento sem G403 / sem HID / fonte indisponível.
+- persistência fail-closed da configuração e do DPI aplicado;
+- criação/carregamento/remoção de perfis com reload real do disco;
+- serialização/desserialização de macros (perda limitada do delta_ms,
+  entradas parciais, falsos positivos ausentes);
+- reprodução de macros com ordem, repeat e falha → FAILED;
+- limites e configuração do auto-clicker (CPS [1,50], idempotência,
+  bloqueio por foco, falha → FAILED);
+- scheduler com timing controlável;
+- comportamento sem G403 / sem HID / capability indisponível.
 
 Determinística: nenhum teste abre Display X, toca hidraw real ou spawna
 subprocesso. Usa apenas fakes já existentes em tests/fakes.py — sem
@@ -128,6 +134,9 @@ def test_pipeline_normalizes_dpi_by_step(controller):
     assert result.details["applied"] == 850
     assert hid.written_reports
     payload = hid.written_reports[-1]
+    # O report escrito ao hidraw é o efeito externo observável: os bytes
+    # 6-7 do payload carregam o DPI que o HARDWARE efetivamente receberia
+    # — não é um detalhe de implementação arbitrário.
     assert (payload[5] << 8 | payload[6]) == 850
 
 
@@ -395,11 +404,12 @@ def test_macro_mouse_events_lost_on_reload(macro_store):
     _validate_event chama int() sobre ele — a macro inteira de mouse
     é descartada no reload (load==0) SEM qualquer aviso ou evidência:
     o get() volta None como se a macro nunca tivesse existido. Isto
-    CONTRADIZ as invariantes "evidência" e "falha nunca vira sucesso
-    falso": a gravação diz que persistiu, o reload diz que nada
-    existia. Quando o bug for corrigido (serializar o id numérico do
-    botão e/ou reportar entradas descartadas), este assert deve mudar
-    para o roundtrip completo.
+    CONTRADIZ as invariantes 5 (falha nunca vira sucesso falso) e 7
+    (persistência fail-closed com evidência): a gravação diz que
+    persistiu, o reload diz que nada existia. Quando o bug for
+    corrigido (serializar o id numérico do botão e/ou reportar
+    entradas descartadas), este assert deve mudar para o roundtrip
+    completo.
     """
     events = [
         RecordedEvent(EventType.MOUSE_PRESS, button=MouseButton.LEFT.value, keycode=0, delta_ms=0.0),
@@ -481,10 +491,10 @@ def test_recorder_load_handles_file_in_store_v1_format(macro_store):
     macros:{name: [...]}}), mas o MacroRecorder.load espera um dicionário
     raiz {nome: [eventos]} — o load do recorder retorna None para macros
     gravadas pelo store, sem aviso. Os dois consumidores NÃO compartilham
-    a mesma fonte de verdade, o que contradiz a invariante de separação
-    DPI físico × sensibilidade? NÃO — contradiz "evidência": a gravação
-    e a leitura reportam verdades diferentes. Quando o bug for corrigido,
-    este assert deve mudar para o roundtrip completo."""
+    a mesma fonte de verdade, o que contradiz a invariante "evidência":
+    a gravação e a leitura reportam verdades diferentes sobre o mesmo
+    arquivo. Quando o bug for corrigido, este assert deve mudar para o
+    roundtrip completo."""
     events = [
         RecordedEvent(EventType.KEY_PRESS, button=0, keycode=38, delta_ms=0.0),
         RecordedEvent(EventType.KEY_RELEASE, button=0, keycode=38, delta_ms=33.33),
