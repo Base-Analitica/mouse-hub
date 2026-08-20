@@ -4,12 +4,22 @@ Hub dedicada para o **Logitech G403 HERO** com controle de DPI, Sensibilidade, M
 
 ## 🚀 Como Usar
 
+**App nativo (fluxo padrão):**
+
 ```bash
 cd ~/mouse-hub
 ./start.sh
 ```
 
-Acesse no navegador: **http://localhost:7777**
+Abre a interface desktop PyQt5. Não há servidor HTTP no fluxo normal —
+`start.sh`/`launcher.sh` da raiz lançam o app nativo.
+
+**App web legado (porta 7777, descontinuado na issue #10):**
+
+```bash
+cd ~/mouse-hub
+python3 mouse_hub.py
+```
 
 ## ⚙️ Funcionalidades
 
@@ -92,3 +102,44 @@ O Auto-Clicker **NÃO funciona** fora do Minecraft/Lunar Client. O detector veri
 - "Badlion"
 - "Feather"
 - "Hypixel"
+
+## 📊 Performance
+
+Hardware de referência: **Lenovo IdeaPad S145, Intel Core i5, 8 GB RAM,
+Linux Mint padrão**. Performance é requisito funcional — o app controla
+um mouse, não é uma plataforma pesada. Metodologia completa em
+[`docs/performance/metodologia.md`](docs/performance/metodologia.md).
+
+**Orçamentos de projeto** (validados fisicamente no S145 quando o
+executor tiver acesso ao equipamento):
+
+| Métrica | Orçamento |
+| --- | --- |
+| CPU idle (60 s, sem automações) | ≤ 1% de um núcleo |
+| RSS idle | ≤ 150 MB |
+| Subprocessos em idle | 0 |
+| Crescimento de memória (sessão prolongada) | < 10% sobre baseline |
+| Auto-clicker (1–50 CPS) | ≤ `max(2,0; CPS × 0,05)` % CPU |
+| Inicialização | sem regressão > 20% sobre baseline |
+
+**Evidências medidas** (Ubuntu 24.04, Python 3.12, PyQt5 5.15.11,
+display virtual Xvfb — ambiente do CI; não são medições no S145):
+
+| Métrica | Resultado |
+| --- | --- |
+| Inicialização (janela) | ~174 ms |
+| RSS estabilizado | ~64 MB |
+| Threads / subprocessos em idle | 1 / 0 |
+| CPU idle (10 s) | 0,1% |
+| Auto-clicker 1 CPS | 0,0% CPU (4/3 cliques entregues) |
+| Auto-clicker 20 CPS | 0,0% CPU (60/60) |
+| Auto-clicker 50 CPS | 0,67% CPU (149/150) |
+| Macro playback 10 s | 0,1% CPU; `play()` retorna em 0,25 ms |
+| Memória em 120 s | 0,0% de crescimento |
+
+Repetir as medições:
+
+```bash
+QT_QPA_PLATFORM=offscreen python3 -m unittest \
+  tests.bench_perf tests.test_memory_stability tests.test_playback_cost -v
+```

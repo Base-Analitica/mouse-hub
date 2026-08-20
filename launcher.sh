@@ -1,42 +1,66 @@
 #!/bin/bash
-# ─── Mouse Hub Launcher ────────────────────────────────
-# Launcher便捷 para o Mouse Hub
+# ─── Mouse Hub Launcher ──────────────────────────────────
+# Launcher para o app NATIVO (PyQt5): abre a janela em segundo plano
+# sem travar o terminal. Uma instância por display — se o app já
+# estiver rodando no mesmo $DISPLAY, apenas avisa e sai. O app web
+# legado (mouse_hub.py, porta 7777) não é carregado neste fluxo — a
+# descontinuação formal dele pertence à issue #10.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PORT=7777
-LOG="/tmp/mouse_hub.log"
+LOG="/tmp/mouse_hub_native.log"
 
-# Verifica se já está rodando
-if ss -tlnp | grep -q ":${PORT}"; then
-    xdg-open "http://localhost:${PORT}" 2>/dev/null &
-    exit 0
+# Verifica Python
+if ! command -v python3 &> /dev/null; then
+    echo "❌ Python3 nao encontrado!" >&2
+    exit 1
 fi
 
-# Mata processos antigos
-pkill -f "mouse_hub.py" 2>/dev/null
-sleep 1
+# Uma instância por display: o PID da janela é rastreado por DISPLAY
+RUN_MARKER="/tmp/mouse-hub-native-${DISPLAY:-:0}.pid"
+if [ -f "$RUN_MARKER" ]; then
+    OLD_PID=$(cat "$RUN_MARKER" 2>/dev/null)
+    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+        echo "🖱️  Mouse Hub já está rodando (PID $OLD_PID em $DISPLAY)"
+        exit 0
+    fi
+    rm -f "$RUN_MARKER"
+fi
 
-# Verifica permissão HID
+# Verifica DISPLAY (a UI precisa de um display X)
+if [ -z "$DISPLAY" ]; then
+    echo "❌ DISPLAY nao definido. Execute em um terminal grafico." >&2
+    exit 1
+fi
+
+# Verifica dependencias Python do app nativo
+python3 -c "from PyQt5.QtWidgets import QApplication" 2>/dev/null
+if [ $? -ne 0 ]; then
+    echo "⚠️  PyQt5 nao encontrado. Instalando..."
+    python3 -m pip install --user --break-system-packages PyQt5 PyQt5-sip PyQt5-Qt5 2>/dev/null
+fi
+
+python3 -c "from Xlib import display" 2>/dev/null
+if [ $? -ne 0 ]; then
+    echo "⚠️  python3-xlib nao encontrado. Instalando..."
+    python3 -m pip install --user --break-system-packages python-xlib 2>/dev/null
+fi
+
+# Verifica permissão HID (DPI via HID++, opcional)
 HIDRAW="/dev/hidraw0"
 if [ -e "$HIDRAW" ] && [ ! -w "$HIDRAW" ]; then
-    if sudo -n chmod 666 "$HIDRAW" 2>/dev/null; then
-        echo "Permissão HID atualizada"
-    fi
+    sudo -n chmod 666 "$HIDRAW" 2>/dev/null && echo "Permissão HID atualizada"
 fi
 
-# Inicia o servidor
+# Inicia o app em segundo plano
 cd "$SCRIPT_DIR"
-python3 mouse_hub.py --port "$PORT" > "$LOG" 2>&1 &
-SERVER_PID=$!
+nohup python3 app/mouse_hub_app.py > "$LOG" 2>&1 &
+APP_PID=$!
+echo "$APP_PID" > "$RUN_MARKER"
 
-# Espera o servidor iniciar
-for i in {1..10}; do
-    if ss -tlnp | grep -q ":${PORT}"; then
-        break
-    fi
-    sleep 0.5
-done
+# Mantém o marcador enquanto o processo existir (cleanup simples)
+(
+    wait "$APP_PID"
+    rm -f "$RUN_MARKER"
+) >/dev/null 2>&1 &
 
-# Abre o navegador
-sleep 1
-xdg-open "http://localhost:${PORT}" 2>/dev/null &
+echo "🖱️  Mouse Hub iniciado (PID $APP_PID, log em $LOG)"
