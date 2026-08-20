@@ -10,7 +10,8 @@
 # (sem pip install automático), NÃO gerencia permissões de
 # dispositivo HID (responsabilidade do hardware layer do core —
 # issue #3) e NÃO deixa watcher/daemon permanente — o cleanup do
-# marcador de PID é feito na saída do próprio processo (trap).
+# marcador de PID é feito pelo próprio processo do app (atexit no
+# Python, com fallback de trap no bash intermediário).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG="/tmp/mouse_hub_native.log"
@@ -56,74 +57,95 @@ if [ ! -f "$APP_FILE" ]; then
 fi
 
 # ── Uma instância por display ─────────────────────────────
-# O marcador registra o PID esperado E o display que o registrou.
-# Antes de considerar "já rodando", validamos que o PID ainda
-# existe E é o nosso processo (cmdline contém o script do app) —
-# PID reutilizado pelo kernel não passa nessa checagem.
+# O marcador é escrito pelo PRÓPRIO processo Python do app (PID
+# real) logo após o QApplication ser criado; o formato é:
+#   linha 1: PID do processo real
+#   linha 2: boottime do PID em /proc/$PID/stat (campo 22)
+# A validação exige 4 condições simultâneas — PID existe, cmdline
+# pertence ao Mouse Hub, processo vivo (kill -0) E boottime
+# idêntico ao registrado. O kernel pode reutilizar um PID, mas a
+# chance de reutilizar o MESMO PID com o MESMO boottime e o MESMO
+# cmdline é nula na prática: boottime é monotônico por PID.
 RUN_MARKER="/tmp/mouse-hub-native-${DISPLAY:-:0}.pid"
-if [ -f "$RUN_MARKER" ]; then
-    OLD_PID=$(cat "$RUN_MARKER" 2>/dev/null)
-    STALE=1
-    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-        CMDLINE=$(cat "/proc/$OLD_PID/cmdline" 2>/dev/null | tr '\0' ' ')
-        if echo "$CMDLINE" | grep -q "mouse_hub_app.py"; then
-            STALE=0
-        fi
-    fi
-    if [ "$STALE" -eq 1 ]; then
-        rm -f "$RUN_MARKER"
-    else
-        echo "🖱️  Mouse Hub já está rodando (PID $OLD_PID em $DISPLAY)"
-        exit 0
-    fi
+
+_valid_marker() {
+    # $1 = arquivo do marcador; imprime PID real se válido
+    [ -f "$1" ] || return 1
+    local mpid mbt
+    mpid=$(sed -n '1p' "$1" | tr -d '[:space:]')
+    mbt=$(sed -n '2p' "$1" | tr -d '[:space:]')
+    [ -n "$mpid" ] || return 1
+    # PID existe e está vivo
+    kill -0 "$mpid" 2>/dev/null || return 1
+    # cmdline pertence ao Mouse Hub (resolve o PID real, não wrapper).
+    # FAKE_APP_NAME é usada SOMENTE pelos testes de lifecycle do
+    # repo (fake app sem UI) — em produção a variável não existe e o
+    # nome esperado é o do app real.
+    local expected_name="${FAKE_APP_NAME:-mouse_hub_app.py}"
+    local cmdline
+    cmdline=$(cat "/proc/$mpid/cmdline" 2>/dev/null | tr '\0' ' ')
+    echo "$cmdline" | grep -q "$expected_name" || return 1
+    # boottime registrado bate com o atual — anti PID-reuse
+    local curbt
+    curbt=$(awk '{print $22}' "/proc/$mpid/stat" 2>/dev/null)
+    [ -n "$curbt" ] && [ "$curbt" = "$mbt" ] || return 1
+    echo "$mpid"
+    return 0
+}
+
+if RUNNING_PID=$(_valid_marker "$RUN_MARKER"); then
+    echo "🖱️  Mouse Hub já está rodando (PID $RUNNING_PID em $DISPLAY)"
+    exit 0
 fi
 
-# ── Inicia o app em segundo plano ─────────────────────────
-# O cleanup do marcador é agendado por trap no PRÓPRIO processo
-# do app — assim o marcador nunca fica órfão e não há watcher
-# permanente. Se o processo morrer na inicialização, a função
-# de trap ainda roda (EXIT) e o marcador é removido; mas,
-# importante: o anúncio de sucesso só acontece APÓS a verificação
-# de que o processo sobreviveu à inicialização.
-cd "$SCRIPT_DIR"
+# Marcador existente sem validação = stale: remover antes de iniciar
+rm -f "$RUN_MARKER"
 
-# O marcador é limpo pelo processo do próprio app (trap EXIT do bash
-# que executa o Python): nenhum watcher, daemon ou subshell do
-# launcher fica aguardando o PID — o subshell de 'wait $PID' do design
-# antigo nunca funcionou porque o PID não é filho daquele subshell.
-# NOTA: invocar /bin/bash explicitamente — 'sh' resolve para dash no
-# Mint/Ubuntu, e dash NÃO roda trap EXIT quando o processo morre por
-# sinal (o marcador ficaria órfão). bash (shebang deste script) roda
-# o trap corretamente nesses cenários.
-# NOTA: o python3 NÃO usa 'exec' aqui — após o exec o shell morre e o
-# trap EXIT nunca rodaria, deixando o marcador órfão; o bash espera o
-# python3 naturalmente.
-nohup /bin/bash -c "trap 'rm -f $RUN_MARKER' EXIT; python3 $APP_FILE; exit" \
+# ── Inicia o app em segundo plano ─────────────────────────
+# O marcador é escrito e removido pelo PRÓPRIO processo Python
+# (via atexit), que registra seu PID real + boottime. O bash
+# intermediário mantém uma trap de fallback para o caso raro de
+# o Python ser morto sem rodar atexit (SIGKILL). Nenhum
+# watcher, daemon ou loop de monitoramento fica rodando.
+# NOTA: /bin/bash explícito — 'sh' resolve para dash no
+# Mint/Ubuntu, e dash NÃO roda trap EXIT quando o processo morre
+# por sinal (o marcador ficaria órfão sem o fallback). bash (o
+# shebang deste script) roda o trap nesses cenários.
+cd "$SCRIPT_DIR"
+# O path do marcador é exportado para o processo do app — assim o
+# Python sabe ONDE escrever o PID real + boottime (sem precisar
+# recompor a regra de nome de arquivo dentro do app).
+export MOUSE_HUB_RUN_MARKER="$RUN_MARKER"
+nohup /bin/bash -c "trap 'rm -f \$MOUSE_HUB_RUN_MARKER' EXIT; python3 $APP_FILE; exit" \
     > "$LOG" 2>&1 &
 APP_PID=$!
-echo "$APP_PID" > "$RUN_MARKER"
 
-# O PID registrado é do sh -c que executa o Python. Como o launcher
-# não pode saber o instante exato em que o Python assumiu o trabalho
-# sem watcher permanente (proibido por design), valida-se que o
-# subprocesso sobreviveu à fase de spawn: se o Python morreu antes de
-# iniciar (script faltando, ImportError, display ausente), o sh -c
-# sai quase de imediato e as verificações abaixo detectam o caso mais
-# comum de falha na inicialização — sem polling contínuo.
-DEATHS=0
-for _ in 1 2 3; do
+# ── Verificação de sobrevivência à inicialização ──────────
+# O app escreve o marcador próprio (com PID real) logo após criar
+# o QApplication — antes da UI abrir. O launcher espera o marcador
+# do processo real aparecer (timeout curto, sem polling agressivo):
+# - marcador real no ar       → sucesso confirmado com PID real
+# - wrapper (bash) morreu     → falha na inicialização (não vira sucesso)
+# - wrapper vivo mas sem marker → timeout: falha (não anuncia sucesso)
+WON=0
+DEAD=0
+for _ in 1 2 3 4 5 6; do
     sleep 0.3
+    if RUNNING_PID=$(_valid_marker "$RUN_MARKER"); then
+        WON=1
+        break
+    fi
     if ! kill -0 "$APP_PID" 2>/dev/null; then
-        DEATHS=1
+        DEAD=1
         break
     fi
 done
 
-if [ "$DEATHS" -eq 1 ]; then
+if [ "$WON" -ne 1 ]; then
     rm -f "$RUN_MARKER"
-    echo "❌ Mouse Hub falhou ao iniciar. Log:" >&2
+    echo "❌ Mouse Hub falhou ao iniciar." >&2
     sed -n '1,15p' "$LOG" >&2
     exit 1
 fi
 
-echo "🖱️  Mouse Hub iniciado (PID $APP_PID, log em $LOG)"
+echo "🖱️  Mouse Hub iniciado (PID $RUNNING_PID, log em $LOG)"

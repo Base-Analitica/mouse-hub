@@ -29,14 +29,14 @@ São **METAS**, não medições:
 | Busy-wait em idle | proibido | aguardo é sempre `Event.wait` / timers do Qt |
 | Crescimento de memória (sessão prolongada) | < 10% sobre o baseline | ausência de vazamento em listeners e workers |
 | Auto-clicker | custo de CPU escalando com CPS, sem overhead fixo alto | requisito funcional da issue |
-| Inicialização (instanciação da janela) | sem regressão > 20% sobre o baseline medido | meta calibrada no ambiente de CI |
+| Construção da janela (processo já iniciado) | sem regressão > 20% sobre o baseline medido | meta calibrada no ambiente de CI |
 
 As METAS passam a ser consideradas cumpridas no S145 somente após a
 execução das medições da seção 5 no equipamento.
 
 ## 2. Como medir (reproduzível)
 
-### 2.1 Bench de fundação (startup, idle, auto-clicker)
+### 2.1 Bench de fundação (construção da janela, idle, auto-clicker)
 
 ```bash
 QT_QPA_PLATFORM=offscreen python3 -m unittest tests.bench_perf -v
@@ -46,7 +46,7 @@ Mede, no processo real do app nativo, em uma única execução:
 
 | Métrica | Fonte |
 | --- | --- |
-| `startup_ms` | `time.perf_counter` em torno de `MouseHubApp()` |
+| `window_construction_ms` | `time.perf_counter` em torno de `MouseHubApp()`, em processo já iniciado (NÃO inclui imports do PyQt5) |
 | `rss_mb` | `/proc/<pid>/status` (VmRSS) após estabilização |
 | `threads` | `/proc/<pid>/task` |
 | `children` | processos com `PPid` igual ao PID do app |
@@ -84,19 +84,19 @@ se o RSS crescer de verdade, o teste deve reprovar.
 QT_QPA_PLATFORM=offscreen python3 -m unittest tests.test_playback_cost -v
 ```
 
-### 2.4 Inicialização fria (cold startup)
+### 2.4 Process startup frio (cold startup)
 
 ```bash
 QT_QPA_PLATFORM=offscreen python3 -m unittest tests.bench_cold_startup -v
 ```
 
-Spawna um processo Python **novo** e mede o tempo até a janela estar
-utilizável: imports do app, criação do `QApplication`, `show()` e pelo
-menos uma passagem efetiva pelo event loop (marcador `READY` via
-socket TCP de loopback, enviado só depois disso). Diferente do
-`startup_ms` do bench de fundação — que instancia a janela no processo
-já aquecido do teste — esta medição inclui o custo dos imports do
-PyQt5 e do `QApplication` do zero.
+**Process startup**: novo processo Python + imports + `QApplication` +
+`show()` + event loop. Diferente da construção da janela do bench de
+fundaçao — que instancia `MouseHubApp()` no processo já aquecido do
+teste — esta medição inclui o custo dos imports do PyQt5 e do
+`QApplication` do zero. Ela mede process startup controlado: NÃO
+representa primeira instalação, filesystem frio nem boot completo do
+sistema.
 
 ### 2.5 Custo de macro recording
 
@@ -138,13 +138,26 @@ nenhuma execução de `pip install` (instalação é única e manual, com
 instruções impressas só quando falta dependência), nenhuma manipulação
 de permissões de `/dev/hidraw*` ou `sudo` (responsabilidade do hardware
 layer do core — issue #3) e lançamento do app nativo (nunca do legado
-`mouse_hub.py` / porta 7777). O comportamento de lifecycle do
-`launcher.sh` — instância única por DISPLAY com validação de que o PID
-registrado é do próprio app, cleanup do marcador de PID via trap na
-saída do processo (sem watcher/daemon permanente) e falha rápida sem
-sucesso falso quando o app morre na inicialização — foi validado
-manualmente contra o código atual e NÃO está automatizado (comando de
-repetição em `tests/test_launchers.py`).
+`mouse_hub.py` / porta 7777). O lifecycle do `launcher.sh` é AUTOMATIZADO
+e coberto por testes determinísticos (`tests/test_launchers.py`,
+`LauncherLifecycleTest`, sem UI real e sem sleep longo):
+
+1. processo inicia → marcador criado pelo PRÓPRIO processo Python do
+   app (PID real + boottime do `/proc/<pid>/stat`), PID existente,
+   cmdline do Mouse Hub, vivo e boottime idêntico ao registrado
+   (kernel que reutiliza PID não passa — boottime é monotônico);
+2. processo morre na inicialização → launcher detecta, NÃO anuncia
+   sucesso, marcador removido (falha nunca vira sucesso);
+3. marcador stale (PID inexistente) → removido, nova execução inicia.
+
+O marcador é escrito/removido pelo processo Python real (atexit, com
+fallback de trap no bash intermediário — dash não roda trap EXIT sob
+sinal, então o wrapper usa bash explícito); nenhum watcher, daemon ou
+loop de monitoramento fica rodando. Para reproduzir:
+
+```bash
+QT_QPA_PLATFORM=offscreen python3 -m unittest tests.test_launchers -v
+```
 
 ### Repetindo no IdeaPad S145 (medição futura)
 
@@ -199,10 +212,14 @@ Todas as medições abaixo foram executadas no mesmo ambiente:
   testes de CI usam guardrails com folga deliberada em vez de
   thresholds colados no medido.
 
-| Métrica | MEDIDA | Categoria da META correspondente |
+Todas as medições abaixo foram feitas **no CI / Xvfb (ubuntu-latest)**
+com `QT_QPA_PLATFORM=offscreen`, ou na sandbox local equivalente —
+**nenhuma foi feita no S145**:
+
+| Métrica | MEDIDA (CI/Xvfb/Ubuntu runner) | Categoria da META correspondente |
 | --- | --- | --- |
-| Inicialização (instanciação da janela) | 174,2 ms (164,5 ms em segunda execução; commit `aa58b88`) | ≤ baseline + 20% |
-| Cold startup (processo novo + imports + show + 1 passagem do loop) | 926–988 ms (2 execuções em cache quente; commit `1185630+`; guardrail CI < 4.000 ms) | — |
+| Construção da janela (processo já iniciado) | 174,2 ms (164,5 ms em segunda execução; commit `aa58b88`) | ≤ baseline + 20% |
+| Process startup (processo novo + imports + show + 1 passagem do loop) | 926–988 ms (2 execuções em cache quente; commit `1185630+`; guardrail CI < 4.000 ms) | — |
 | RSS estabilizado | 64,1 MB (62,5 MB na segunda execução) | ≤ 150 MB |
 | Threads / subprocessos em idle | 1 / 0 | 0 filhos |
 | CPU idle (10 s / 20 s) | 0,1% | ≤ 1% |
@@ -212,7 +229,8 @@ Todas as medições abaixo foram executadas no mesmo ambiente:
 | Macro playback 10 s | CPU adicional 0,0–0,1%; `play()` 0,18–0,36 ms; threads no baseline | — |
 | Memória em 120 s (UI viva) | 0,0% de crescimento (64204–65120 KB; pico usado como referência) | < 10% |
 | Recording: 2.000 callbacks | 2,3–3,9 ms totais (< 0,002 ms/evento); threads no baseline | — |
-| Recording: crescimento de memória 4k→8k eventos | 264 KB → 528 KB (proporcional; `VmRSS` por página) | — |
+| Recording: crescimento de memória 4k→8k eventos | 264 KB → 528 KB (proporcional; `VmRSS` como evidência secundária) | — |
+| Lifecycle do launcher | fake app determinístico: 3 casos (início com PID real + boottime, morte imediata sem sucesso falso, marker stale removido) | uma instância por display |
 
 Os valores de cold startup variam fortemente com o estado do cache de
 módulos: com o PyQt5 já importado na máquina a janela abre em

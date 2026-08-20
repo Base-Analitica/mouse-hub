@@ -6,4 +6,3 @@ macros.json
 *.log
 .DS_Store
 mouse_hub.egg-info/
-notes_analysis.md

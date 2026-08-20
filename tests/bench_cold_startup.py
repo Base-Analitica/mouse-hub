@@ -1,7 +1,13 @@
 """Cold startup real (Issue #12 — MAJOR 1).
 
-Mede o tempo desde o spawn de um processo Python NOVO até a janela
-estar utilizável:
+**Process startup** (novo processo Python + imports + QApplication +
+show + event loop). Mede o tempo desde o spawn de um processo Python
+NOVO até a janela estar utilizável:
+
+Este benchmark mede process startup controlado: o código e o bytecode
+já estão em cache no runner na segunda execução. Ele NÃO representa
+primeira instalação, filesystem frio nem boot completo do sistema —
+essas condições só são afirmáveis medidas nelas.
 
 1. processo Python novo (spawn);
 2. imports do app (PyQt5, mouse_hub_app);

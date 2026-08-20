@@ -110,20 +110,27 @@ plataforma pesada. Orçamentos de projeto (CPU idle ≤ 1%, RSS ≤ 150 MB,
 reproduzível de medição estão em
 [`docs/performance/metodologia.md`](docs/performance/metodologia.md).
 
-**Resumo das medições no ambiente do CI** (Ubuntu 24.04, Python 3.12,
-PyQt5 5.15.11, display virtual Xvfb — **não** é o IdeaPad S145; a
-validação no notebook de referência é descrita na metodologia):
+**Resumo das medições no runner do CI** (Ubuntu 24.04, Python 3.12,
+PyQt5 5.15.11, display virtual Xvfb, carga compartilhada do GitHub
+Actions). Cada número foi obtido nesse ambiente — **não** é resultado
+no IdeaPad S145; a validação no notebook de referência é descrita na
+metodologia e só é afirmada após medição física nele:
 
-| Métrica | Medido no CI |
+| Métrica | Medido (CI/Xvfb/Ubuntu runner) |
 | --- | --- |
-| Inicialização | ~164–174 ms |
-| RSS idle | ~62–64 MB |
-| Threads / subprocessos em idle | 1 / 0 |
-| CPU idle | 0,1% |
-| Auto-clicker 1–50 CPS | 0,0–0,7% CPU, dentro do esperado |
-| Memória em 120 s | 0,0% de crescimento |
-| Cold startup (processo novo) | ~926–988 ms (guardrail CI < 4.000 ms) |
-| Macro recording | < 0,002 ms/callback; memória linear com nº de eventos |
+| Construção da janela (processo já iniciado) | ~164–174 ms |
+| RSS idle (CI/Xvfb) | ~62–64 MB |
+| Threads / subprocessos em idle (CI/Xvfb) | 1 / 0 |
+| CPU idle (CI/Xvfb) | 0,1% |
+| Auto-clicker 1–50 CPS (CI/Xvfb) | 0,0–0,7% CPU, dentro do esperado |
+| Memória em 120 s (CI/Xvfb) | 0,0% de crescimento |
+| Cold startup — processo Python novo + imports + QApplication + show + event loop (CI/Xvfb) | ~926–988 ms (guardrail CI < 4.000 ms) |
+| Macro recording (CI/Xvfb, eventos sintéticos) | < 0,002 ms/callback; memória linear com nº de eventos |
+
+O cold startup acima é um **process startup** controlado: novo
+processo Python com o código e o bytecode já em cache no runner.
+Ele **não representa** primeira instalação, filesystem frio ou boot
+completo do sistema — medições nessas condições só valem feitas nelas.
 
 Repetir as medições:
 

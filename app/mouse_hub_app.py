@@ -2016,6 +2016,20 @@ class MouseHubApp(QMainWindow):
 #  ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _cleanup_run_marker():
+    # Marca de instância única escrita por este processo (PID real
+    # + boottime). Remove o marcador na saída normal — o launcher
+    # confia nesse marker para detectar "já rodando" e o kernel não
+    # aceita PID reutilizado porque o boottime difere (validação em
+    # launcher.sh). Sem watcher: atexit roda quando o processo sai.
+    marker = os.environ.get("MOUSE_HUB_RUN_MARKER", "")
+    if marker:
+        try:
+            os.unlink(marker)
+        except OSError:
+            pass
+
+
 def main():
     # High DPI
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
@@ -2023,6 +2037,32 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyleSheet(STYLESHEET)
+
+    # Marca de instância única: escrita pelo processo REAL do app
+    # (não pelo wrapper do launcher) assim que o QApplication
+    # existe. O launcher espera este arquivo para confirmar que a
+    # inicialização teve sucesso — sem ele, falha de inicialização
+    # não vira sucesso falso.
+    display_name = os.environ.get("DISPLAY", ":0")
+    run_marker = f"/tmp/mouse-hub-native-{display_name}.pid"
+    try:
+        # campo 22 de /proc/self/stat, lido sem dependência nova
+        _stat = open("/proc/self/stat", "rb").read().decode("ascii")
+        # campos: pid (comm) ... — comm pode conter ')'; achar o
+        # último ')' e o campo 22 depois dele
+        _last = _stat.rfind(")")
+        _fields = _stat[_last + 2:].split()
+        _boottime = _fields[19]  # índice 22 no arquivo = 20 no array
+        with open(run_marker, "w") as _fh:
+            _fh.write(f"{os.getpid()}\n{_boottime}\n")
+        os.environ["MOUSE_HUB_RUN_MARKER"] = run_marker
+        import atexit
+        atexit.register(_cleanup_run_marker)
+    except OSError:
+        # Sem permissão para escrever em /tmp: o launcher ainda
+        # valida o wrapper, mas perde a prova do PID real — seguir
+        # sem quebrar o app (falha do marker não mata a UI).
+        pass
 
     # Dark palette
     palette = QPalette()

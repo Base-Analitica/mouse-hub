@@ -2,7 +2,8 @@
 
 Medições de baixo custo, sem dependências extras:
 
-  1. startup aproximado (import + instanciação da janela)
+  1. construção da janela (instanciação de MouseHubApp em processo já
+     iniciado — NÃO mede cold startup nem import do módulo)
   2. RSS estabilizado
   3. threads em idle
   4. processos filhos em idle (zero subprocessos na fundação)
@@ -74,10 +75,10 @@ class PerfBenchmarkTest(unittest.TestCase):
 
         pid = os.getpid()
 
-        # 1) startup aproximado
+        # 1) construção da janela em processo já iniciado
         t0 = time.perf_counter()
         window = mouse_hub_app.MouseHubApp()
-        startup_ms = (time.perf_counter() - t0) * 1000
+        window_construction_ms = (time.perf_counter() - t0) * 1000
 
         # 2) RSS (KB)
         time.sleep(0.5)
@@ -140,7 +141,7 @@ class PerfBenchmarkTest(unittest.TestCase):
 
         # grava os resultados num arquivo para o corpo da PR
         results = {
-            "startup_ms": round(startup_ms, 1),
+            "window_construction_ms": round(window_construction_ms, 1),
             "rss_mb": round(rss_kb / 1024, 1),
             "threads": threads,
             "children": len(children),

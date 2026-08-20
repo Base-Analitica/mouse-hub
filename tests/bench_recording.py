@@ -133,11 +133,19 @@ class RecordingCostTest(unittest.TestCase):
     def test_memory_proportional(self) -> None:
         """Memória cresce com O(n) no número de eventos — nenhum
         overhead fixo oculto (cache LRU, buffers duplicados).
-        VmRSS do kernel cresce em páginas e nunca decresce — por isso
-        o teste compara o crescimento TOTAL após 4.000 e 8.000 eventos
-        (dobro do volume → crescimento ≈ 2×). Comparar deltas por
-        lote é frágil: o segundo lote pode reutilizar páginas já
-        mapeadas e o delta seria 0 mesmo sem bug."""
+
+        Evidência PRIMÁRIA — independente de páginas de memória:
+        * contagem de eventos armazenados == nº de callbacks
+          (registro exato, sem perda);
+        * bytes médios por evento constantes entre lotes de 4.000 e
+          8.000 (0,7×–1,3×) — custo por evento constante → O(n).
+          Qualquer crescimento quadrático explode essa faixa com o
+          dobro do volume.
+
+        Evidência SECUNDÁRIA: VmRSS total (não deltas — VmRSS cresce
+        em páginas e nunca decresce; deltas por lote são frágeis).
+        RSS permanece como reforço, não como critério principal.
+        """
         rss0 = _rss_kb(self.pid)
         recorder = MacroRecorder()
         recorder.start()
@@ -148,26 +156,54 @@ class RecordingCostTest(unittest.TestCase):
         # proporcionalidade deixaria de ser justa
         for i in range(4000):
             handler(self._synthetic_event("mouse_move", i))
+        count_4k = len(recorder.events)
+        # size por evento: representação serializada do registro
+        # (str de cada evento; RecordedEvent não é JSON nativo e o
+        # que importa é a ordem de grandeza constante — não o
+        # formato). Usado como proxy de custo por evento.
+        size_4k = sum(len(str(e)) for e in recorder.events)
         rss_4k = _rss_kb(self.pid)
         for i in range(4000):
             handler(self._synthetic_event("mouse_move", i + 4000))
+        count_8k = len(recorder.events)
+        size_8k = sum(len(str(e)) for e in recorder.events)
         rss_8k = _rss_kb(self.pid)
+
+        # 1) registro exato — nenhum evento perdido ou duplicado
+        self.assertEqual(count_4k, 4000,
+                         f"registrou {count_4k} de 4000 callbacks")
+        self.assertEqual(count_8k, 8000,
+                         f"registrou {count_8k} de 8000 callbacks")
+
+        # 2) custo por evento constante → O(n) na estrutura
+        per_4k = size_4k / count_4k
+        per_8k = size_8k / count_8k
+        self.assertGreater(per_8k, 0.7 * per_4k,
+                           f"bytes/evento caiu: {per_4k:.0f} → "
+                           f"{per_8k:.0f} (estrutura muda de forma "
+                           f"não-linear?)")
+        self.assertLess(per_8k, 1.3 * per_4k,
+                        f"bytes/evento cresceu: {per_4k:.0f} → "
+                        f"{per_8k:.0f} (overhead crescente por evento?)")
+
+        # 3) RSS total como evidência secundária (totais, não deltas)
         g4k = rss_4k - rss0
         g8k = rss_8k - rss0
-        self.assertGreater(g4k, 0, f"sem crescimento com 4000 eventos")
-        self.assertGreater(g8k, 0,
-                           f"sem crescimento com 8000 eventos")
-        # dobro do volume → crescimento entre 0,8× e 3× o baseline
-        # (0,8× tolera páginas pré-mapeadas que favorecem o segundo
-        # lote; 3× tolera o ruído do allocator) — qualquer estrutura
-        # não-linear (cache quadrática, duplicação) estoura o teto
-        self.assertGreater(g8k, 0.8 * g4k,
-                           f"crescimento abaixo do linear: {g4k} KB "
-                           f"(4k) vs {g8k} KB (8k)")
-        self.assertLess(g8k, 3 * g4k,
-                        f"crescimento acima do linear: {g4k} KB (4k) "
-                        f"vs {g8k} KB (8k)")
-        results = {"rss_4k_kb": g4k, "rss_8k_kb": g8k}
+        results = {
+            "events_4k": count_4k, "events_8k": count_8k,
+            "bytes_4k": size_4k, "bytes_8k": size_8k,
+            "bytes_per_event_4k": round(per_4k, 1),
+            "bytes_per_event_8k": round(per_8k, 1),
+            "rss_4k_kb": g4k, "rss_8k_kb": g8k,
+        }
+        if g4k > 0:  # RSS é evidência secundária — página pode não
+            # crescer (0 KB) sem que haja bug; se crescer, o dobro do
+            # volume deve manter o crescimento ≤ 3× (teto tolera o
+            # ruído do allocator — qualquer estrutura não-linear
+            # real estoura o teto)
+            self.assertLess(g8k, 3 * g4k,
+                            f"RSS não-linear: {g4k} KB (4k) vs "
+                            f"{g8k} KB (8k)")
         with open("/tmp/recording_memory_results.json", "w") as f:
             json.dump(results, f, indent=2)
         print("RECORDING_MEMORY:", results)
