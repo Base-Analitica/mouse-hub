@@ -179,7 +179,7 @@ class AutomationService:
             events = self._events
             self._events = []
         if not events:
-            capture.cancel() if False else None  # resources já fechados
+            # resources do capture já foram fechados pelo stop() acima
             return False
 
         try:

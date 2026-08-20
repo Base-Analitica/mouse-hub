@@ -15,6 +15,9 @@ dependências de ambiente):
 """
 
 from __future__ import annotations
+from Xlib.protocol import event as xevent
+import types
+from Xlib.ext import record as xrecord
 
 import threading
 import time
@@ -1180,3 +1183,155 @@ def test_focus_available_delegates_to_source():
 
     checker_un = WindowFocusChecker(_UnavailableSource())
     assert checker_un.is_available is False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# XRecord adversarial: servidor malicioso (validação independente —
+# round 4 de revisão). Fakes independentes do StrictFakeXRecordBackend
+# "amigável": controlam QUANDO cada categoria do protocolo RECORD é
+# entregue. Cobrem cenários que nenhum teste anterior exercitava.
+# ──────────────────────────────────────────────────────────────────────
+
+class _AdversarialXRecordBackend:
+    """Backend adversarial mínimo: enable_context bloqueante (como o
+    real) e entrega de categorias sob controle do teste."""
+
+    def __init__(self):
+        self.callback = None
+        self.started = threading.Event()
+        self.running = True
+        self.disable_count = 0
+        self.free_count = 0
+
+    def open_display(self):
+        d = types.SimpleNamespace()
+        # O _dispatch usa data_display.display como proto display:
+        # precisa de event_classes reais para parse_binary_value.
+        d.display = _FakeProtocolDisplay()
+        return d
+
+    def create_context(self, spec, data, ctl, cb):
+        self.callback = cb
+        return 42
+
+    def enable_context(self, ctx, data, ctl, cb):
+        self.callback = cb
+        self.started.set()
+        # Enable bloqueante real: o servidor entrega callbacks até o
+        # disable_context (ou até a morte do stream).
+        while self.running:
+            time.sleep(0.002)
+
+    def disable_context(self, ctx, ctl):
+        self.disable_count += 1
+        self.running = False
+
+    def free_context(self, ctx, ctl):
+        self.free_count += 1
+
+    def close_display(self, d):
+        pass
+
+
+class _FakeProtocolDisplay:
+    """Display opaco com event_classes usando structs REAIS do
+    python-xlib — idêntico ao _FakeDisplay de tests/fakes.py."""
+
+    def __init__(self):
+        self.event_classes = {
+            2: xevent.KeyPress,
+            3: xevent.KeyRelease,
+            4: xevent.ButtonPress,
+            5: xevent.ButtonRelease,
+            6: xevent.MotionNotify,
+        }
+
+    def get_resource_class(self, class_name, default=None):
+        return default
+
+
+def _adv_reply(category, data=b""):
+    r = types.SimpleNamespace()
+    r.category = category
+    r.data = data
+    return r
+
+
+def test_capture_eof_spontaneous_mid_recording():
+    """EndOfData espontâneo DURANTE recording (servidor morreu sem
+    stop) NUNCA pode deixar state='recording' — a UI leria falso
+    positivo de gravação ativa. Falha reportável via .failure."""
+    backend = _AdversarialXRecordBackend()
+    received = []
+    cap = InputCapture(received.append, backend=backend)
+
+    def feed():
+        backend.started.wait(timeout=2)
+        backend.callback(_adv_reply(xrecord.StartOfData))
+        time.sleep(0.015)
+        backend.callback(
+            _adv_reply(xrecord.FromServer, wire_key_press(37, time_ms=4000))
+        )
+        time.sleep(0.015)
+        backend.callback(_adv_reply(xrecord.EndOfData))
+
+    threading.Thread(target=feed, daemon=True).start()
+    assert cap.start()
+    time.sleep(0.05)
+    with cap._lock:
+        state = cap._state
+    assert state == "stopped", (
+        f"EndOfData espontâneo deixou state={state!r} — falso positivo "
+        "de recording (a UI acreditaria que está gravando)"
+    )
+    assert cap.failure and "EndOfData espontâneo" in cap.failure
+    assert not cap.recording
+    assert len(received) == 1
+    # stop() pós-EOF: inofensivo, sem travar (join imediato) —
+    # state já está "stopped", stop() é no-op e devolve o contador.
+    # disable/free NÃO são chamados (o servidor morreu sem stop).
+    n = cap.stop()
+    assert n == 1
+
+
+def test_capture_eof_before_handshake():
+    """EndOfData ANTES do StartOfData (servidor morreu cedo): start()
+    deve falhar com motivo legível e o worker NUNCA pode ficar preso
+    esperando _stop_event para sempre (thread daemon vazada)."""
+    backend = _AdversarialXRecordBackend()
+    cap = InputCapture(lambda e: None, backend=backend)
+
+    def feed():
+        backend.started.wait(timeout=2)
+        time.sleep(0.015)
+        backend.callback(_adv_reply(xrecord.EndOfData))
+
+    threading.Thread(target=feed, daemon=True).start()
+    result = cap.start()
+    assert result is False, "start() com EOF precoce deve falhar"
+    assert cap.failure and "EndOfData precoce" in cap.failure
+    cap._worker.join(timeout=2.0)
+    assert not cap._worker.is_alive(), (
+        "worker vazado: preso para sempre em _stop_event.wait()"
+    )
+
+
+def test_capture_startofdata_never_arrives():
+    """Servidor nunca confirma o handshake (StartOfData ausente):
+    start() retorna False APÓS timeout com failure explícito — nunca
+    um False silencioso, e o worker é liberado."""
+    backend = _AdversarialXRecordBackend()
+    cap = InputCapture(lambda e: None, backend=backend)
+    # nunca entrega nada — simula servidor morto/ausente
+    t0 = time.monotonic()
+    result = cap.start()
+    elapsed = time.monotonic() - t0
+    assert result is False
+    assert cap.failure and "StartOfData não recebido" in cap.failure, (
+        f"failure ausente no timeout de handshake: {cap.failure!r}"
+    )
+    assert elapsed < 7.0, f"start() travou por {elapsed:.1f}s"
+    cap._worker.join(timeout=2.0)
+    assert not cap._worker.is_alive(), (
+        "worker vazado após timeout de handshake"
+    )

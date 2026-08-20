@@ -209,8 +209,6 @@ class InputCapture:
         self._ready = threading.Event()
         self._stop_event = threading.Event()
 
-        self._start_mono: float = 0.0
-        self._last_at: float = 0.0
         self._first_time_ms: int = 0   # clock do servidor X do 1º evento
         self._last_at_ms: float = 0.0  # offset ms do evento anterior
         self._count: int = 0
@@ -279,7 +277,6 @@ class InputCapture:
 
         with self._lock:
             self._handles = XRecordHandles(ctl_display=ctl, data_display=data, ctx=ctx)
-            self._start_mono = time.monotonic()
             self._first_time_ms = 0
             self._last_at_ms = 0.0
             self._count = 0
@@ -292,7 +289,19 @@ class InputCapture:
         self._worker.start()
 
         # Handshake: aguarda o worker anunciar pronto ou falhar.
-        self._ready.wait(timeout=5.0)
+        if not self._ready.wait(timeout=5.0):
+            # O servidor X nunca confirmou o contexto habilitado
+            # (StartOfData não chegou em 5 s) — falha reportável
+            # à UI, nunca um False silencioso sem motivo.
+            with self._lock:
+                self._state = "stopped"
+                self._failure = (
+                    "timeout: o servidor X não confirmou o contexto "
+                    "XRecord (StartOfData não recebido em 5 s)"
+                )
+            self._stop_event.set()
+            self._cleanup_handles()
+            return False
         with self._lock:
             ok = self._state == "recording"
         if not ok:
@@ -397,20 +406,59 @@ class InputCapture:
         if handles is None:
             self._fail("contexto não criado")
             return
-        try:
-            # enable_context é bloqueante até a parada — o handshake
-            # de prontidão NÃO é declarado aqui: só no callback com
-            # categoria StartOfData o servidor confirma que o
-            # listener está ativo. Declarar antes seria uma
-            # suposição (events FromServer podem chegar antes e são
-            # descartados por estarem em estado "starting").
-            self._backend.enable_context(
-                handles.ctx, handles.data_display, handles.ctl_display, self._dispatch
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._fail(f"erro ao habilitar contexto: {exc}")
-            return
 
+        # enable_context é bloqueante até a parada — o handshake de
+        # prontidão NÃO é declarado aqui: só no callback com
+        # categoria StartOfData o servidor confirma que o listener
+        # está ativo. Declarar antes seria uma suposição (events
+        # FromServer podem chegar antes e são descartados por
+        # estarem em estado "starting").
+        #
+        # O enable roda em thread filha para que o worker possa
+        # ABORTAR caso o handshake nunca chegue (StartOfData ausente)
+        # ou o servidor encerre o stream cedo (EndOfData precoce).
+        # Sem isso, um servidor X travado vazaria a thread daemon
+        # para sempre. enable_context de um servidor real retorna
+        # após disable_context; o monitor abaixo cobre o caso em que
+        # nem isso acontece.
+        enable_done = threading.Event()
+        enable_error: list = []
+
+        def _enable():
+            try:
+                self._backend.enable_context(
+                    handles.ctx, handles.data_display,
+                    handles.ctl_display, self._dispatch,
+                )
+            except Exception as exc:  # noqa: BLE001
+                enable_error.append(exc)
+            finally:
+                enable_done.set()
+
+        threading.Thread(
+            target=_enable, name="mouse-hub-input-capture-enable",
+            daemon=True,
+        ).start()
+
+        # Monitora o lifecycle enquanto o enable bloqueia. O
+        # enable de um servidor real retorna no disable (stop()),
+        # mas o servidor também pode morrer sem nunca entregar
+        # StartOfData/EndOfData: nesse caso o monitor garante que
+        # o worker sai em vez de virar thread vazada.
+        while not enable_done.wait(timeout=0.5):
+            with self._lock:
+                dead = self._state == "stopped"
+            if dead and self._stop_event.is_set():
+                # Falha já registrada (_fail, timeout de handshake
+                # ou EndOfData precoce) e o stream está morto —
+                # desistir do enable sem esperar para sempre.
+                return
+
+        # enable retornou — qualquer falha de handshake/timeout já
+        # está registrada em _failure; o worker termina aqui.
+        if enable_error:
+            self._fail(f"erro ao habilitar contexto: {enable_error[0]}")
+            return
         # Aguarda a barrier EndOfData (o servidor encerrou o stream
         # de verdade) ou falha. O enable_context já voltou acima;
         # a espera aqui cobre o intervalo entre o handshake e o
@@ -467,9 +515,32 @@ class InputCapture:
             # nenhum evento mais será entregue pelo servidor.
             with self._lock:
                 if self._state == "stopping":
+                    # Path normal: stop() desabilitou o contexto e
+                    # o drain terminou.
                     self._state = "stopped"
+                elif self._state == "recording":
+                    # BUG adversarial: o servidor encerrou o stream
+                    # espontaneamente (morte do XRecord, cliente
+                    # registrado desligou o contexto, servidor em
+                    # shutdown) SEM que stop() tenha sido chamado.
+                    # O estado NUNCA pode continuar "recording" —
+                    # a UI acreditaria que está gravando.
+                    self._state = "stopped"
+                    self._failure = (
+                        "stream XRecord encerrado pelo servidor sem "
+                        "solicitação (EndOfData espontâneo)"
+                    )
+                elif self._state == "starting":
+                    # BUG adversarial: o servidor morreu antes mesmo
+                    # de confirmar o handshake — start() não pode
+                    # fingir sucesso nem ficar esperando para sempre.
+                    self._state = "stopped"
+                    self._failure = (
+                        "servidor encerrou o contexto antes do "
+                        "handshake (EndOfData precoce)"
+                    )
             self._ready.set()
-            self._stop_event.set()
+            self._stop_event.set()  # libera o worker em qualquer path
             return
         if category == xrecord.FromClient:
             # Confirmação do próprio enable — descartado.
@@ -560,4 +631,9 @@ class InputCapture:
                 return
             self._state = "stopped"
             self._failure = reason
+            # O worker pode ainda estar dentro do enable_context
+            # bloqueante (ou esperando _stop_event): sem liberar
+            # aqui, um _fail em "recording" deixa o worker preso
+            # para sempre (thread daemon vazada).
+            self._stop_event.set()
         self._ready.set()
