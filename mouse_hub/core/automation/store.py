@@ -175,6 +175,30 @@ class MacroStoreError(Exception):
         self.reason = reason
 
 
+def _button_id(raw: Any) -> Optional[int]:
+    """Normaliza o button gravado para o ID numérico X (1/2/3).
+
+    O store CANÔNICO grava o ID numérico (`MouseButton.button_id`);
+    arquivos antigos podem trazer o nome textual ("left", "middle",
+    "right") — ambos são aceitos aqui. Valores inconvertíveis
+    retornam None e a entrada é descartada explicitamente (com
+    evidência registrada no `discarded_entries`), nunca silenciosamente."""
+    if isinstance(raw, int):
+        if raw in (0, 1, 2, 3):
+            return raw
+        return None
+    if isinstance(raw, float) and raw.is_integer() and int(raw) in (0, 1, 2, 3):
+        return int(raw)
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized in ("left", "middle", "right"):
+            return MouseButton(normalized).button_id
+        if normalized == "":
+            return 0
+        return None
+    return None
+
+
 def _validate_event(entry: Dict[str, Any]) -> Optional[RecordedEvent]:
     if not isinstance(entry, dict):
         return None
@@ -185,8 +209,17 @@ def _validate_event(entry: Dict[str, Any]) -> Optional[RecordedEvent]:
         kind = EventType(kind_raw)
     except ValueError:
         return None
+    # MOUSE_MOVE usa o campo `button` como coordenada X da tela
+    # (o player emite `io.move(x=event.button, y=event.keycode)` —
+    # são coordenadas, não ID de botão — aceita qualquer não-negativo).
+    button = (
+        _move_coordinate(entry.get("button", 0))
+        if kind == EventType.MOUSE_MOVE
+        else _button_id(entry.get("button", 0))
+    )
+    if button is None:
+        return None
     try:
-        button = int(entry.get("button", 0))
         keycode = int(entry.get("keycode", 0))
         delta = float(entry.get("delta_ms", 0))
     except (TypeError, ValueError):
@@ -194,6 +227,19 @@ def _validate_event(entry: Dict[str, Any]) -> Optional[RecordedEvent]:
     if delta < 0:
         return None
     return RecordedEvent(kind=kind, button=button, keycode=keycode, delta_ms=delta)
+
+
+def _move_coordinate(raw: Any) -> Optional[int]:
+    """Coordenada de movimento (X/Y) como inteiro não-negativo.
+
+    Diferente do ID de botão: não há teto pequeno — um movimento
+    legítimo pode apontar qualquer pixel da tela."""
+    if isinstance(raw, int):
+        return raw if raw >= 0 else None
+    if isinstance(raw, float) and raw.is_integer():
+        i = int(raw)
+        return i if i >= 0 else None
+    return None
 
 
 def _convert_legacy(entries: List[Any]) -> List[RecordedEvent]:
@@ -336,6 +382,10 @@ class MacroStore:
         # quando a escrita falha: add/delete que não foram persistidos
         # são desfazidos contra esse snapshot.
         self._published: Dict[str, List[RecordedEvent]] = {}
+        # Evidência de entradas descartadas no último reload (issue #16):
+        # o reload nunca silencia perda — o caller consulta
+        # `discarded_entries` para reportar à UI.
+        self._discarded_entries: Dict[str, int] = {}
 
     @property
     def path(self) -> Path:
@@ -352,8 +402,7 @@ class MacroStore:
         de macros válidas carregadas; arquivos ausentes/corrompidos
         viram estado vazio (corrompido é arquivado como .bak.N)."""
         if not self._path.exists():
-            self._macros = {}
-            self._dirty = False
+            self._reset()
             return 0
 
         raw: str
@@ -362,8 +411,7 @@ class MacroStore:
         except OSError as exc:
             # Arquivo ilegível e sem chance de backup: estado vazio,
             # original intacto — o app nunca deve travar no load.
-            self._macros = {}
-            self._dirty = False
+            self._reset()
             self._read_error = str(exc)
             return 0
         try:
@@ -376,8 +424,7 @@ class MacroStore:
                 self._read_error = str(exc)
             else:
                 self._read_error = None
-            self._macros = {}
-            self._dirty = False
+            self._reset()
             return 0
         if not isinstance(data, dict):
             try:
@@ -396,42 +443,85 @@ class MacroStore:
         container = data.get("macros") if "schema_version" in data else data
         if not isinstance(container, dict):
             self._archive_corrupt("container não é um objeto JSON")
-            self._macros = {}
-            self._dirty = False
+            self._reset()
             return 0
 
         macros: Dict[str, List[RecordedEvent]] = {}
+        discarded: Dict[str, int] = {}
         for name, entries in container.items():
             if not isinstance(name, str) or not name:
                 continue
             if len(macros) >= MAX_MACROS:
                 break
-            events = self._parse_entries(entries)
+            events, dropped = self._parse_entries(entries)
             if events is not None and events:
                 macros[name] = events
+            if dropped:
+                discarded[name] = dropped
+        # Evidência do que o reload descartou: macros com entradas
+        # parcialmente inválidas entram, mas o caller (e a UI) pode
+        # consultar `discarded_entries` — nada é perdido em silêncio.
+        self._discarded_entries = discarded
         self._macros = macros
         self._published = {name: list(events) for name, events in macros.items()}
         self._dirty = False
         return len(macros)
 
-    def _parse_entries(self, entries: Any) -> Optional[List[RecordedEvent]]:
-        # Formato REAL do main legado: cada macro é um wrapper
-        # {name, events, created, count} — a lista de eventos fica
-        # em "events"; created/count são metadados descartáveis para
-        # a reprodução. O container raiz nunca traz schema_version.
+    def _parse_entries(
+        self, entries: Any
+    ) -> tuple[Optional[List[RecordedEvent]], int]:
+        """Parseia a lista de entradas de uma macro.
+
+        Retorna (eventos, descartados): `descartados` é a contagem de
+        entradas inválidas que o carregador pulou — a UI usa esse
+        número para reportar perda de dados em vez de silenciar.
+        O formato REAL do main legado é um wrapper {name, events,
+        created, count} — a lista de eventos fica em "events";
+        created/count são metadados descartáveis para a reprodução.
+        O container raiz nunca traz schema_version."""
         if isinstance(entries, dict) and "events" in entries:
             macro_events = entries["events"]
             if not isinstance(macro_events, list):
-                return None
+                return None, 0
             entries = macro_events
         if not isinstance(entries, list):
-            return None
+            return None, 0
         # Schema v1: cada entrada tem "kind"
         if entries and isinstance(entries[0], dict) and "kind" in entries[0]:
-            events = [e for e in (_validate_event(x) for x in entries) if e is not None]
-            return events[:MAX_EVENTS_PER_MACRO] if events else None
-        # Formato legado (v0/web): "type" + "t"
-        return _convert_legacy(entries) or None
+            parsed: List[RecordedEvent] = []
+            dropped = 0
+            for raw in entries:
+                event = _validate_event(raw)
+                if event is None:
+                    dropped += 1
+                    continue
+                parsed.append(event)
+            return parsed[:MAX_EVENTS_PER_MACRO] if parsed else None, dropped
+        # Formato legado (v0/web): "type" + "t" — entradas ilegíveis
+        # também contam como descartadas (evidência), mesmo que o
+        # conversor ignore a linha com `continue`.
+        total = len(entries) if isinstance(entries, list) else 0
+        legacy = _convert_legacy(entries)
+        dropped = total - len(legacy)
+        return legacy if legacy else None, dropped
+
+    @property
+    def discarded_entries(self) -> Dict[str, int]:
+        """Contagem de entradas descartadas por macro no último reload.
+
+        Um reload que carregou macros com menos eventos do que o
+        arquivo continha fica visível aqui — a UI pode reportar a
+        perda em vez de fingir que tudo voltou inteiro."""
+        return dict(self._discarded_entries)
+
+    # ── Inicialização ──────────────────────────────────────────────
+
+    def _reset(self) -> None:
+        """Estado vazio consistente — usado após falha de leitura."""
+        self._macros = {}
+        self._published = {}
+        self._discarded_entries = {}
+        self._dirty = False
 
     def _archive_corrupt(self, exc) -> None:
         """Move o arquivo corrompido para .bak.N como evidência.
@@ -529,7 +619,7 @@ class MacroStore:
                 name: [
                     {
                         "kind": event.kind.value,
-                        "button": event.button,
+                        "button": event.button,  # ID numérico X (1/2/3)
                         "keycode": event.keycode,
                         "delta_ms": round(event.delta_ms, 2),
                     }
