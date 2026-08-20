@@ -3,6 +3,11 @@
 # Inicia o app NATIVO (PyQt5). O app web legado
 # (mouse_hub.py, porta 7777) não é carregado neste fluxo — a
 # descontinuação formal dele pertence à issue #10.
+#
+# Este launcher NUNCA modifica o ambiente Python do usuário
+# (sem pip install automático) e NÃO gerencia permissões de
+# dispositivo HID — a descoberta e o acesso ao mouse correto
+# pertencem ao hardware layer do core (issue #3).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -11,42 +16,38 @@ echo ""
 
 # Verifica Python
 if ! command -v python3 &> /dev/null; then
-    echo "❌ Python3 nao encontrado!"
+    echo "❌ Python3 nao encontrado!" >&2
     exit 1
 fi
 
-# Verifica dependencias Python do app nativo
+# Verifica dependencias Python do app nativo (leitura, sem instalar)
+MISSING=0
+
 python3 -c "from PyQt5.QtWidgets import QApplication" 2>/dev/null
 if [ $? -ne 0 ]; then
-    echo "⚠️  PyQt5 nao encontrado. Instalando..."
-    python3 -m pip install --user --break-system-packages PyQt5 PyQt5-sip PyQt5-Qt5 2>/dev/null
+    echo "❌ Dependencia faltando: PyQt5" >&2
+    echo "   Instale com (uma unica vez):" >&2
+    echo "   sudo apt install python3-pyqt5" >&2
+    echo "   Ou: python3 -m pip install --user PyQt5" >&2
+    MISSING=1
 fi
 
 python3 -c "from Xlib import display" 2>/dev/null
 if [ $? -ne 0 ]; then
-    echo "⚠️  python3-xlib nao encontrado. Instalando..."
-    python3 -m pip install --user --break-system-packages python-xlib 2>/dev/null
+    echo "❌ Dependencia faltando: python3-xlib" >&2
+    echo "   Instale com (uma unica vez):" >&2
+    echo "   sudo apt install python3-xlib" >&2
+    echo "   Ou: python3 -m pip install --user python-xlib" >&2
+    MISSING=1
 fi
 
-# Verifica acesso ao hidraw (DPI via HID++, opcional)
-HIDRAW="/dev/hidraw0"
-if [ -e "$HIDRAW" ]; then
-    if [ ! -w "$HIDRAW" ]; then
-        echo "⚠️  Sem acesso de escrita a $HIDRAW"
-        echo "    Para controle completo de DPI, rode:"
-        echo "    sudo chmod 666 $HIDRAW"
-        echo "    Ou crie regra udev permanente (veja README)"
-        echo ""
-        # Tenta com sudo se disponivel
-        if sudo -n chmod 666 "$HIDRAW" 2>/dev/null; then
-            echo "✅ Permissoes atualizadas automaticamente!"
-        fi
-    fi
+if [ "$MISSING" -ne 0 ]; then
+    exit 1
 fi
 
 # Verifica DISPLAY (o app nativo precisa de um display X para a UI)
 if [ -z "$DISPLAY" ]; then
-    echo "❌ DISPLAY nao definido. Execute em um terminal grafico."
+    echo "❌ DISPLAY nao definido. Execute em um terminal grafico." >&2
     exit 1
 fi
 

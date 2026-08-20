@@ -70,9 +70,13 @@ informado como se fosse (ver seção 4).
 QT_QPA_PLATFORM=offscreen python3 -m unittest tests.test_memory_stability -v
 ```
 
-Mantém a janela viva por 120 s com `processEvents` a cada segundo,
-coletando RSS a cada 10 s. Reprova com crescimento total ≥ 10% sobre o
-baseline — cobre vazamento de listeners, workers e timers.
+Mantém a janela viva por 120 s, processando o event loop a cada 10 s
+(o event loop não fica parado — timers e callbacks registrados
+continuam rodando), coletando RSS a cada 10 s via `VmRSS`. Há um
+warm-up de 5 s antes do baseline para não contar lazy allocations
+normais do Qt como leak. O guardrail do teste de CI é crescimento
+< 10% — o MESMO critério da META (o esperado em offscreen é 0–2%);
+se o RSS crescer de verdade, o teste deve reprovar.
 
 ### 2.3 Custo de macro playback
 
@@ -80,16 +84,35 @@ baseline — cobre vazamento de listeners, workers e timers.
 QT_QPA_PLATFORM=offscreen python3 -m unittest tests.test_playback_cost -v
 ```
 
-Reproduz uma macro representativa (10 s, 40 eventos de teclas, cliques
-e movimentos) com backend mockado e mede:
+### 2.4 Inicialização fria (cold startup)
 
-* CPU **adicional** do processo sobre o fundo do mesmo processo
-  (janela de idle de 2 s antes do playback é descontada);
-* latência de `play()` na thread da UI;
-* threads após o fim do playback, comparadas ao snapshot da mesma
-  execução (cleanup do worker).
+```bash
+QT_QPA_PLATFORM=offscreen python3 -m unittest tests.bench_cold_startup -v
+```
 
-### 2.4 Smoke da UI (Xvfb)
+Spawna um processo Python **novo** e mede o tempo até a janela estar
+utilizável: imports do app, criação do `QApplication`, `show()` e pelo
+menos uma passagem efetiva pelo event loop (marcador `READY` via
+socket TCP de loopback, enviado só depois disso). Diferente do
+`startup_ms` do bench de fundação — que instancia a janela no processo
+já aquecido do teste — esta medição inclui o custo dos imports do
+PyQt5 e do `QApplication` do zero.
+
+### 2.5 Custo de macro recording
+
+```bash
+QT_QPA_PLATFORM=offscreen python3 -m unittest tests.bench_recording -v
+```
+
+`MacroRecorder` sob eventos **sintéticos** (não mede o custo físico do
+listener XRecord/display — a captura real pertence à medição futura no
+S145): overhead por callback (< 200 µs), CPU sob carga representativa
+(~400 eventos/s por 5 s), crescimento de memória proporcional ao
+volume de eventos (4.000 → 8.000 eventos; `VmRSS` cresce em páginas e
+nunca decresce — por isso o teste compara o total, não deltas por
+lote) e lifecycle `start()`/`stop()` sem threads/timers residuais.
+
+### 2.6 Smoke da UI (Xvfb)
 
 ```bash
 QT_QPA_PLATFORM=offscreen xvfb-run -a python3 -m unittest tests.smoke_ui_init
@@ -98,7 +121,7 @@ QT_QPA_PLATFORM=offscreen xvfb-run -a python3 -m unittest tests.smoke_ui_init
 Valida que a fundação constrói e permanece 100% lazy: nenhum display X,
 worker ou acesso a disco é criado antes do primeiro uso da feature.
 
-### 2.5 Suíte determinística completa
+### 2.7 Suíte determinística e invariantes dos launchers
 
 ```bash
 QT_QPA_PLATFORM=offscreen python3 -m pytest tests/
@@ -108,6 +131,20 @@ Inclui testes que provam, por mock, a ausência de subprocesso no hot
 path (`tests/test_automation_linux.py`): clique via XTest nativo com
 `subprocess.run` nunca chamado, e tick de foco do Dashboard/Auto-Clicker
 sem xdotool/xinput.
+
+Os launchers (`start.sh`/`launcher.sh`) têm invariantes de segurança
+verificados por `tests/test_launchers.py` (estático, sem subprocesso):
+nenhuma execução de `pip install` (instalação é única e manual, com
+instruções impressas só quando falta dependência), nenhuma manipulação
+de permissões de `/dev/hidraw*` ou `sudo` (responsabilidade do hardware
+layer do core — issue #3) e lançamento do app nativo (nunca do legado
+`mouse_hub.py` / porta 7777). O comportamento de lifecycle do
+`launcher.sh` — instância única por DISPLAY com validação de que o PID
+registrado é do próprio app, cleanup do marcador de PID via trap na
+saída do processo (sem watcher/daemon permanente) e falha rápida sem
+sucesso falso quando o app morre na inicialização — foi validado
+manualmente contra o código atual e NÃO está automatizado (comando de
+repetição em `tests/test_launchers.py`).
 
 ### Repetindo no IdeaPad S145 (medição futura)
 
@@ -119,7 +156,7 @@ pip3 install --user python-xlib
 git clone https://github.com/Base-Analitica/mouse-hub.git
 cd mouse-hub
 python3 -m pip install -e ".[dev]"
-QT_QPA_PLATFORM=offscreen python3 -m unittest tests.bench_perf tests.test_memory_stability tests.test_playback_cost -v
+QT_QPA_PLATFORM=offscreen python3 -m unittest tests.bench_perf tests.bench_cold_startup tests.test_memory_stability tests.test_playback_cost tests.bench_recording -v
 ```
 
 Com display físico, trocar o Xvfb do smoke por `xvfb-run -a` ou rodar
@@ -152,24 +189,38 @@ Todas as medições abaixo foram executadas no mesmo ambiente:
 * Python 3.12.3, PyQt5 5.15.11, python-xlib, pytest 8;
 * display virtual Xvfb (`QT_QPA_PLATFORM=offscreen`) — mesmo ambiente
   do CI do projeto (GitHub Actions `ubuntu-latest`);
-* commit de referência: `271d4f7` (main).
+* commit de referência desta execução: `1185630` (branch da PR) — a
+  evidência inicial da PR (revisão anterior) vem do commit
+  `aa58b88`, e as evidências das revisões subsequentes vêm de execuções
+  locais em `1185630+`; o CI do GitHub Actions executa os mesmos
+  métodos em `ubuntu-latest` em cada push da PR;
+* os valores voláteis (CPU, tempo, RSS exato) variam entre execuções
+  do mesmo ambiente — reportamos faixas, não pontos únicos, e os
+  testes de CI usam guardrails com folga deliberada em vez de
+  thresholds colados no medido.
 
 | Métrica | MEDIDA | Categoria da META correspondente |
 | --- | --- | --- |
-| Inicialização (instanciação da janela) | 174,2 ms (164,5 ms em segunda execução) | ≤ baseline + 20% |
+| Inicialização (instanciação da janela) | 174,2 ms (164,5 ms em segunda execução; commit `aa58b88`) | ≤ baseline + 20% |
+| Cold startup (processo novo + imports + show + 1 passagem do loop) | 926–988 ms (2 execuções em cache quente; commit `1185630+`; guardrail CI < 4.000 ms) | — |
 | RSS estabilizado | 64,1 MB (62,5 MB na segunda execução) | ≤ 150 MB |
 | Threads / subprocessos em idle | 1 / 0 | 0 filhos |
 | CPU idle (10 s / 20 s) | 0,1% | ≤ 1% |
 | Auto-clicker 1 CPS | 0,0% CPU do sistema (4/3 cliques entregues) | — |
 | Auto-clicker 20 CPS | 0,0–0,2% CPU do sistema (60/100 cliques) | — |
 | Auto-clicker 50 CPS | 0,4–0,7% CPU do sistema (149–249/150–250 cliques) | — |
-| Macro playback 10 s | CPU adicional 0,1–0,5%; `play()` 0,18–0,35 ms; threads no baseline | — |
-| Memória em 120 s (UI viva) | 0,0% de crescimento (64204 KB constante) | < 10% |
+| Macro playback 10 s | CPU adicional 0,0–0,1%; `play()` 0,18–0,36 ms; threads no baseline | — |
+| Memória em 120 s (UI viva) | 0,0% de crescimento (64204–65120 KB; pico usado como referência) | < 10% |
+| Recording: 2.000 callbacks | 2,3–3,9 ms totais (< 0,002 ms/evento); threads no baseline | — |
+| Recording: crescimento de memória 4k→8k eventos | 264 KB → 528 KB (proporcional; `VmRSS` por página) | — |
 
-Na segunda execução (janela do processo já aquecida) os valores de
-startup e RSS caíram para 36,7 ms e 55,5 MB no runner de CI — a
-diferença entre as duas execuções é apresentada sem escolher uma como
-"o" valor oficial; ambas são evidência do mesmo método.
+Os valores de cold startup variam fortemente com o estado do cache de
+módulos: com o PyQt5 já importado na máquina a janela abre em
+~950 ms; na primeira execução do CI (sem cache pré-carregado) o mesmo
+método tende a ser mais lento — por isso o guardrail do CI é de
+4.000 ms, não um valor fixo. As duas execuções reportadas são do mesmo
+método em cache quente e não devem ser confundidas com o caso de
+cache frio do S145.
 
 ## 5. Validação pendente no IdeaPad S145
 
@@ -184,7 +235,13 @@ referência:
    offscreen tendem a ser menores que com display físico, pois nada é
    rasterizado — a META de 150 MB foi definida com essa margem);
 4. medir o custo real da emissão XTest/XRecord sob display real, que
-   não é capturado pelos testes com emissor mockado.
+   não é capturado pelos testes com emissor mockado;
+5. medir `bench_cold_startup` com cache frio (primeira execução,
+   sem dependências pré-carregadas) — no CI o mesmo teste inclui o
+   custo do primeiro import do PyQt5;
+6. repetir o benchmark de recording (`bench_recording`) sob o
+   listener XRecord real — o custo atual é medido com eventos
+   sintéticos.
 
 Enquanto as etapas 1–4 não forem executadas, todas as afirmações sobre
 o S145 neste repositório são inválidas e devem ser ignoradas.
@@ -196,7 +253,18 @@ o S145 neste repositório são inválidas e devem ser ignoradas.
    app web legado permanece no repo (descontinuação na issue #10).
 2. `docs/performance/metodologia.md` — este documento.
 3. `tests/test_memory_stability.py` — regressão de crescimento de
-   memória em sessão prolongada.
+   memória em sessão prolongada (warm-up, event loop vivo, guardrail
+   < 10%).
 4. `tests/test_playback_cost.py` — regressão de CPU/latência/cleanup
-   do macro playback.
-5. Seção `Performance` no README com resumo de performance.
+   do macro playback (thread específica, idle descontado).
+5. `tests/bench_cold_startup.py` — inicialização fria com processo
+   novo (subprocesso + marcador READY via socket TCP).
+6. `tests/bench_recording.py` — custo de macro recording (overhead,
+   CPU, memória linear, lifecycle) com eventos sintéticos.
+7. `tests/test_launchers.py` — invariantes de segurança dos launchers
+   (sem `pip install`/`sudo`/`chmod hidraw` executados; app nativo).
+8. `launcher.sh`/`start.sh` reescritos: sem pip automático, sem
+   manipulação de HID (`/dev/hidraw0`/`chmod 666`/`sudo`), lifecycle
+   correto do marcador de PID (trap na saída, sem watcher; validação
+   de que o PID registrado é do app; falha rápida sem sucesso falso).
+9. Seção `Performance` no README com resumo de performance.

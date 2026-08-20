@@ -1,16 +1,22 @@
 """Custo de macro playback (Issue #12).
 
-Mede CPU do processo durante a reprodução de uma macro representativa
-(10 s, 40 eventos: teclas, cliques e movimentos) com o backend nativo
-mockado — o custo real do XTest é desprezível frente ao custo de
-sistema do scheduler (`Event.wait`, zero busy-wait), e o mock mantém o
-teste determinístico em qualquer CI.
+Mede a CPU **adicional** do processo durante a reprodução de uma macro
+representativa (10 s, 40 eventos de teclas, cliques e movimentos) com
+backend **fake** — o teste NÃO mede o custo físico real de emissão
+XTest: a emissão real não passa por este processo, e qualquer afirmação
+numérica sobre XTest pertence à medição no display físico (pendente na
+issue #12, a ser feita no IdeaPad S145 ou em sessão com display real).
 
-Além disso valida que:
+O que este teste protege (deterministicamente, no ambiente do CI):
 
-* o playback não bloqueia a thread principal (`play()` retorna de
-  imediato — quem executa é o worker);
-* após o playback, não restam threads de trabalho além do baseline.
+* ordem da medição: idle é medido ANTES do `play()` — a janela de
+  idle nunca "come" parte do playback;
+* o playback termina antes do deadline (deadline expirado = falha);
+* `play()` retorna de imediato (thread da UI não bloqueia);
+* a thread de trabalho `mouse-hub-macro-player` não resta após o fim
+  (cleanup completo do worker — não se aceita "threads totais do
+  processo" como proxy);
+* todos os eventos da macro são emitidos pelo worker.
 
 Executar: QT_QPA_PLATFORM=offscreen python3 -m unittest tests.test_playback_cost
 """
@@ -24,6 +30,9 @@ from mouse_hub.core.automation.macros import MacroPlayer
 from mouse_hub.core.automation.types import EventType, MouseButton, RecordedEvent
 from tests.fakes import FakeAutomationIO
 
+PLAYBACK_THREAD_NAME = "mouse-hub-macro-player"
+DEADLINE_S = 30
+
 
 def _cpu_seconds(pid: int) -> float:
     """Segundos de CPU totais (utime+stime) em ms via /proc/*/stat."""
@@ -33,6 +42,11 @@ def _cpu_seconds(pid: int) -> float:
     utime = int(parts[13]) / clk
     stime = int(parts[14]) / clk
     return (utime + stime) * 1000
+
+
+def _has_player_thread() -> bool:
+    return any(t.name == PLAYBACK_THREAD_NAME and t.is_alive()
+               for t in threading.enumerate())
 
 
 def _make_macro(duration_s: float = 10.0, n_events: int = 40):
@@ -64,59 +78,71 @@ def _make_macro(duration_s: float = 10.0, n_events: int = 40):
 
 
 class PlaybackCostTest(unittest.TestCase):
-    def test_playback_cost_and_non_blocking(self) -> None:
+    def setUp(self) -> None:
+        # Pré-condição: nenhum playback residual de outra execução do
+        # mesmo processo (macro player é mutex, mas um worker solto
+        # contaminaria a verificação de cleanup deste teste).
+        self.assertFalse(_has_player_thread(),
+                         "worker de playback de outra execução ainda vivo")
+
+    def test_playback_cost_and_cleanup(self) -> None:
         pid = os.getpid()
         fake_io = FakeAutomationIO()
         player = MacroPlayer(fake_io)
         events = _make_macro()
 
-        baseline_threads = threading.active_count()
-        # snapshot de referência: o MacroPlayer em STOPPED não adiciona
-        # threads próprias (o worker nasce no play()), então a linha de
-        # base é amostrada logo após a construção — antes de qualquer
-        # worker de outro teste do mesmo processo interferir.
+        # ── 1. Idle medido ANTES do playback (janela de fundo de 4 s) ──
+        cpu0 = _cpu_seconds(pid)
+        idle0 = time.monotonic()
+        time.sleep(4.0)
+        idle_cpu_ms = _cpu_seconds(pid) - cpu0
+        idle_s = time.monotonic() - idle0
+
+        # ── 2. Iniciar o playback DEPOIS da janela de idle ───────────
         t0 = time.perf_counter()
         started = player.play(events, repeat=1)
         call_latency_ms = (time.perf_counter() - t0) * 1000
         self.assertTrue(started, "playback não iniciou")
+        self.assertTrue(_has_player_thread(),
+                        "worker não nasceu após play()")
         # play() NÃO bloqueia a thread da UI — a emissão vive no worker
         self.assertLess(call_latency_ms, 100,
                         f"play() bloqueou por {call_latency_ms:.1f} ms")
 
-        # CPU de fundo do MESMO processo antes do playback — qualquer
-        # trabalho que o teste ou o ambiente já esteja fazendo (imports,
-        # Qt, load do CI) é descontado. Assim o número mede apenas o
-        # custo ADICIONAL do playback. A janela de idle é longa (4 s)
-        # porque em CI compartilhado o scheduler pode dar rajadas
-        # irregulares de CPU para processos não relacionados — janela
-        # curta faria o desconto ser frágil e uma única medição fora da
-        # curva reprovar o teste sem defeito real no app.
-        cpu0 = _cpu_seconds(pid)
-        fondo0 = time.monotonic()
-        time.sleep(4.0)
-        idle_cpu_ms = _cpu_seconds(pid) - cpu0
-        fundo_s = time.monotonic() - fondo0
-
-        cpu0 = _cpu_seconds(pid)
+        # ── 3. CPU medida durante o playback inteiro ────────────────
         wall0 = time.monotonic()
-        # espera o playback terminar (macro de 10s + margem)
-        deadline = wall0 + 30
-        while time.monotonic() < deadline:
+        finished_before_deadline = False
+        while time.monotonic() - wall0 < DEADLINE_S:
             if not player.playing:
+                finished_before_deadline = True
                 break
             time.sleep(0.25)
         elapsed = time.monotonic() - wall0
         cpu1 = _cpu_seconds(pid)
+
+        # ── 4/5. Playback concluído antes do deadline ────────────────
+        self.assertTrue(finished_before_deadline,
+                        f"playback não terminou em {DEADLINE_S} s")
+        # duração deve respeitar o timing da macro (10 s) com margem
+        self.assertGreater(elapsed, 9.0,
+                           f"playback terminou cedo demais ({elapsed:.2f} s)")
+        self.assertLess(elapsed, 20.0,
+                        f"playback demorou demais ({elapsed:.2f} s)")
+
         raw_cpu_pct = (cpu1 - cpu0) / (elapsed * 1000) * 100
-        idle_cpu_pct = idle_cpu_ms / (fundo_s * 1000) * 100
-        cpu_pct = raw_cpu_pct - idle_cpu_pct
-        # o adicional nunca pode ser negativo por construção — mas o
-        # ruído da medida de clock pode deixar levemente; floor em 0
-        cpu_pct = max(0.0, cpu_pct)
+        idle_cpu_pct = idle_cpu_ms / (idle_s * 1000) * 100
+        cpu_pct = max(0.0, raw_cpu_pct - idle_cpu_pct)
 
         events_played = sum(1 for e in fake_io.events if e[0] in
                             ("key_press", "key_release", "click", "press",
                              "release", "move"))
+
+        # ── 6/7. Cleanup: a thread específica não pode restar ────────
+        time.sleep(0.5)
+        self.assertFalse(_has_player_thread(),
+                         f"thread {PLAYBACK_THREAD_NAME} restou após o "
+                         f"playback (cleanup incompleto do worker)")
+
         results = {
             "duration_s": round(elapsed, 2),
             "cpu_pct": round(cpu_pct, 2),
@@ -129,32 +155,14 @@ class PlaybackCostTest(unittest.TestCase):
             json.dump(results, f, indent=2)
         print("PLAYBACK_COST:", results)
 
-        # orçamento: o playback adiciona menos de 4% de um núcleo
-        # sobre o fundo do mesmo processo. O valor observado na
-        # prática é ~0,1–0,5% (medido em duas execuções consecutivas
-        # no ambiente do CI) — o limite é 8× maior de propósito: em
-        # CI compartilhado um pico de load do host infla a medida de
-        # CPU do processo mesmo com o app idle, e um threshold apertado
-        # transformaria o teste em detector de carga do runner em vez
-        # de detector de regressão do app. Regressões reais de CPU
-        # (busy loop, timers agressivos) ainda estouram esse limite
-        # com folga; o contrato fino por regime CPS vive no
-        # `bench_perf`, que mede com o processo estabilizado.
+        # guardrail do CI: o playback adiciona < 4% de um núcleo sobre
+        # o fundo do mesmo processo (valor observado no CI: ~0,1–0,5%).
+        # O limite é folgado de propósito para tolerar pico de load do
+        # runner; regressões reais (busy loop, timer agressivo) estouram
+        # com folga. O contrato fino por regime CPS vive no `bench_perf`.
         self.assertLess(cpu_pct, 4.0, f"playback adicionou {cpu_pct}% CPU")
         self.assertGreater(events_played, 30,
                            f"apenas {events_played} eventos emitidos")
-        # threads retornam ao baseline após o playback (cleanup ok) —
-        # a comparação é contra o snapshot da MESMA execução, não contra
-        # threading.active_count() absoluto (outros componentes do
-        # processo, como o QTimer de eventos do Qt, podem crescer de
-        # forma independente deste teste).
-        time.sleep(0.5)
-        after_threads = threading.active_count()
-        self.assertLessEqual(after_threads, baseline_threads + 1,
-                             f"thread de playback vazou após o fim: "
-                             f"baseline={baseline_threads}, "
-                             f"after={after_threads}")
-        player.cancel()
 
 
 if __name__ == "__main__":

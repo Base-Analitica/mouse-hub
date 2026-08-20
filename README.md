@@ -122,10 +122,13 @@ validação no notebook de referência é descrita na metodologia):
 | CPU idle | 0,1% |
 | Auto-clicker 1–50 CPS | 0,0–0,7% CPU, dentro do esperado |
 | Memória em 120 s | 0,0% de crescimento |
+| Cold startup (processo novo) | ~926–988 ms (guardrail CI < 4.000 ms) |
+| Macro recording | < 0,002 ms/callback; memória linear com nº de eventos |
 
 Repetir as medições:
 
 ```bash
 QT_QPA_PLATFORM=offscreen python3 -m unittest \
-  tests.bench_perf tests.test_memory_stability tests.test_playback_cost -v
+  tests.bench_perf tests.bench_cold_startup tests.test_memory_stability \
+  tests.test_playback_cost tests.bench_recording -v
 ```
