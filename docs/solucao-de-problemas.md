@@ -8,7 +8,7 @@ Verifique se o cabo USB está firmemente conectado (ou se o receptor sem fio est
 
 ## DPI nao aplica
 
-Confirme que o mouse foi detectado pelo aplicativo e que o perfil desejado está selecionado: o valor de DPI enviado por HID++ só é aplicado quando existe um device válido, então teste um preset da faixa suportada (200–25600, passos de 50) e observe o indicador do app para confirmar que o comando foi aceito.
+Confirme que o mouse foi detectado pelo aplicativo e que o perfil desejado está selecionado: o valor de DPI enviado por HID++ só é aplicado quando existe um device válido, então teste um preset da faixa suportada (100–25600, passos de 50) e observe o indicador do app para confirmar que o comando foi aceito.
 
 ## Macros nao gravam
 
