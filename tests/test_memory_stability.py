@@ -10,8 +10,9 @@ Contrato (separar sempre):
   critério da meta porque o esperado em offscreen é 0–2%; NÃO
   enfraquecer o threshold para acomodar ruído.
 * RESULTADO MEDIDO (re-execução no head final desta PR, máquina do
-  executor — Linux Mint 22.3, offscreen): < 10% (guardrail passou;
-  esperado 0–2%). (Medição original do commit aa58b88: 0,0%.)
+  executor — Linux Mint 22.3, offscreen): 0,2% de crescimento em
+  120 s (62.248 → 62.372 KB) — dentro da meta. (Medição original do
+  commit aa58b88: 0,0%.)
 
 Detalhes do método:
 * warm-up de 5 s antes do baseline para não contar lazy allocations

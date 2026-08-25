@@ -120,15 +120,15 @@ metodologia e só é afirmada após medição física nele:
 
 | Métrica | Medido (head final, máquina do executor) |
 | --- | --- |
-| Construção da janela (processo já iniciado) | 117,2 ms |
-| RSS idle | 71,5 MB |
+| Construção da janela (processo já iniciado) | ~97–648 ms (3 execuções; a maior inclui o 1º import do PyQt5) |
+| RSS idle | ~60,6 MB (3 execuções) |
 | Threads / subprocessos em idle | 1 / 0 |
-| CPU idle (10 s) | 0,2% |
-| Auto-clicker 1 CPR CPS | 0,0%; 20 CPS → 0,6%; 50 CPS → 0,4% (emissor fake) |
-| Macro playback (10 s) | 0,0% CPU adicional — regressão #23 (busy-loop) não reapareceu |
-| Memória em 120 s | < 10% (passou, sem crescimento significativo) |
-| Cold startup — processo Python novo + imports + QApplication + show + event loop | 637–776 ms (3 execuções; guardrail CI < 4.000 ms) |
-| Macro recording (eventos sintéticos) | 1,7–6,0 µs/callback; bytes/evento constante → O(n) |
+| CPU idle (10 s) | 0,1–0,5% |
+| Auto-clicker 1–50 CPS | 1 CPS → 0,0–0,4%; 20 → 0,4–0,6%; 50 → 0,4–1,0% (emissor fake) |
+| Macro playback (10 s) | 0,0–0,1% CPU adicional — regressão #23 (busy-loop) não reapareceu |
+| Memória em 120 s | 0,2% de crescimento (62.248 → 62.372 KB) |
+| Cold startup — processo Python novo + imports + QApplication + show + event loop | 636–2.085 ms (4 execuções; guardrail CI < 4.000 ms) |
+| Macro recording (eventos sintéticos) | 1,3–6,9 µs/callback; bytes/evento constante → O(n) |
 
 O cold startup acima é um **process startup** controlado: novo
 processo Python com o código e o bytecode já em cache.

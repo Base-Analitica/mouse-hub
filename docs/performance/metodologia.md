@@ -224,23 +224,23 @@ medido por estes testes (ver seção 5):
 
 | Métrica | MEDIDA (re-execução no head, máquina do executor) | META correspondente (seção 1) |
 | --- | --- | --- |
-| Construção da janela (processo já iniciado) | 117,2 ms (1 execução) | sem regressão > 20% sobre baseline |
-| Process startup (processo novo + imports + show + 1ª passagem do loop) | 637–776 ms (3 execuções; guardrail CI < 4.000 ms) | — |
-| RSS estabilizado | 71,5 MB | ≤ 150 MB |
+| Construção da janela (processo já iniciado) | 96,5–647,7 ms (3 execuções; a maior inclui o 1º import do PyQt5 no processo) | sem regressão > 20% sobre baseline |
+| Process startup (processo novo + imports + show + 1ª passagem do loop) | 636–2.085 ms (4 execuções; 3 de 4 entre 636–940 ms; guardrail CI < 4.000 ms) | — |
+| RSS estabilizado | 60,6 MB (3 execuções idênticas) | ≤ 150 MB |
 | Threads / subprocessos em idle | 1 / 0 | 0 filhos |
-| CPU idle (10 s) | 0,2% | ≤ 1% |
-| Auto-clicker 1 CPS | 0,0% CPU (6/5 cliques entregues) | — |
-| Auto-clicker 20 CPS | 0,6% CPU (100/100 cliques) | — |
-| Auto-clicker 50 CPS | 0,4% CPU (249/250 cliques) | — |
-| Macro playback 10 s | CPU adicional 0,0%; `play()` 0,3 ms; 70 eventos; threads no baseline | zero busy-wait |
-| Memória em 120 s (UI viva) | < 10% (passou no guardrail; esperado 0–2%) | < 10% |
-| Recording: 2.000 callbacks | 1,7–6,0 µs/evento (varia entre execuções; sempre < 200 µs) | < 200 µs/evento |
-| Recording: crescimento de memória 4k→8k eventos | bytes/evento constante (109,5 → 109,5); RSS 304 → 876 KB | O(n) |
+| CPU idle (10 s) | 0,1–0,5% (3 execuções) | ≤ 1% |
+| Auto-clicker 1 CPS | 0,0–0,4% CPU (6/5 cliques entregues) | — |
+| Auto-clicker 20 CPS | 0,4–0,6% CPU (100/100 cliques) | — |
+| Auto-clicker 50 CPS | 0,4–1,0% CPU (247–249/250 cliques) | — |
+| Macro playback 10 s | CPU adicional 0,0–0,1%; `play()` 0,4–2,6 ms; 70 eventos; threads no baseline | zero busy-wait |
+| Memória em 120 s (UI viva) | 0,2% de crescimento (62.248 → 62.372 KB) | < 10% |
+| Recording: 2.000 callbacks | 1,3–6,9 µs/evento (4 execuções; a mais lenta é a 1ª, com import frio) | < 200 µs/evento |
+| Recording: crescimento de memória 4k→8k eventos | bytes/evento constante (109,0–109,7 → idem); RSS 288–292 → 828–856 KB | O(n) |
 | Lifecycle do launcher | fake app determinístico: 3 casos (início com PID real + process start time, morte imediata sem sucesso falso, marker stale removido) | uma instância por display |
 
 **Regressão #23 não reapareceu:** o `tests/test_playback_cost`
-(re-executado no head) mede **0,0%** de CPU adicional durante 10 s de
-playback — contra ~98% da falha original — e o
+(re-executado no head) mede **0,0–0,1%** de CPU adicional durante
+10 s de playback — contra ~98% da falha original — e o
 `AutomationScheduler.wait_next()` dorme em `Event.wait` com
 `_notify.clear()` atômico sob o mesmo lock da versão (correção da
 PR #51). Os testes determinísticos `tests/test_scheduler_regression.py`
@@ -248,11 +248,12 @@ PR #51). Os testes determinísticos `tests/test_scheduler_regression.py`
 concorrência) passam sem alteração.
 
 Os valores de cold startup variam com o estado do cache de módulos: a
-primeira execução (import do PyQt5 ainda não mapeado) é a mais lenta.
-O guardrail de CI é 4.000 ms justamente por isso; os valores deste
-ambiente (637–776 ms) e os do CI são medidos no mesmo método, em
-máquinas diferentes — não são comparáveis entre si e não representam
-cache frio do S145 (primeira instalação).
+primeira execução (import do PyQt5 ainda não mapeado) é a mais lenta
+(2.085 ms; as demais ficaram em 636–940 ms). O guardrail de CI é
+4.000 ms justamente por isso; os valores deste ambiente e os do CI
+são medidos no mesmo método, em máquinas diferentes — não são
+comparáveis entre si e não representam cache frio do S145 (primeira
+instalação).
 
 ## 5. Validação pendente no IdeaPad S145
 

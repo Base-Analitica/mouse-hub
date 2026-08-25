@@ -30,9 +30,10 @@ Guardrail do CI: cold startup < 4.000 ms em ubuntu-latest (valor
 observado: ~1.500–2.500 ms, incluindo instalação de dependências e
 primeiro import do PyQt5, que é o pior caso de máquina fria).
 Re-execução no head final desta PR (máquina do executor, Linux Mint
-22.3, offscreen): 637–776 ms (3 execuções). Este é um guardrail de
-CI, não uma medição no S145 — a validação física pertence à medição
-futura descrita na metodologia.
+22.3, offscreen): 636–2.085 ms (4 execuções; 3 de 4 entre 636–940 ms,
+a mais lenta é o 1º import do PyQt5). Este é um guardrail de CI, não
+uma medição no S145 — a validação física pertence à medição futura
+descrita na metodologia.
 
 Executar: QT_QPA_PLATFORM=offscreen python3 -m unittest tests.bench_cold_startup
 """
