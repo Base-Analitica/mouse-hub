@@ -182,9 +182,9 @@ para afirmar que as METAS da seção 1 foram cumpridas no S145.
 
 | Caminho | Custo | Natureza |
 | --- | --- | --- |
-| App nativo em idle | 0,1% CPU; 0 subprocessos filhos (MEDIDO, seção 4) | dentro da META |
-| Auto-clicker 1–50 CPS | CPU de sistema 0,0–0,7%, 1 thread, escalando com CPS (MEDIDO com emissor fake — ver seção 4) | dentro da META no CI |
-| Macro playback (10 s) | CPU adicional 0,1–0,5%; `play()` retorna em < 1 ms; threads voltam ao baseline (MEDIDO com emissor mockado) | dentro da META no CI |
+| App nativo em idle | 0,1–0,5% CPU; 0 subprocessos filhos (MEDIDO, seção 4) | dentro da META |
+| Auto-clicker 1–50 CPS | CPU de sistema 0,0–1,0%, 1 thread, escalando com CPS (MEDIDO com emissor fake — ver seção 4) | dentro da META no CI |
+| Macro playback (10 s) | CPU adicional 0,1%; `play()` retorna em 2,6 ms; threads voltam ao baseline (MEDIDO com emissor mockado) | dentro da META no CI |
 | `mouse_hub.py` (app web legado) | 2–3 subprocessos xdotool por clique, `print` por iteração, polling de 200 ms (INFERÊNCIA da leitura do código, confirmada qualitativamente) | não carregado pelo fluxo nativo |
 | `MouseController` (xinput) | subprocesso esporádico apenas em ação do usuário (DPI/sensibilidade) (MEDIDA: `children` = 0 em idle) | aceito — operação rara |
 
@@ -195,51 +195,64 @@ sistema (scheduler, timers, workers) do app nativo. O custo de
 transporte X11 permanece uma questão em aberto, a ser respondida pela
 medição no S145 (seção 5) ou por uma sessão com display real.
 
-## 4. Evidências desta PR
+## 4. Evidências desta PR (head final)
 
-Todas as medições abaixo foram executadas no mesmo ambiente:
+As medições abaixo foram **reexecutadas no head final da PR**, depois
+da reconciliação com a `main` (que incorporou a correção do busy-loop
+da issue #23 / PR #51). Nenhum número da PR antiga foi reutilizado sem
+ser reexecutado. Ambiente real da re-execução:
 
-* Ubuntu 24.04 (Linux 6.1.102 x86_64), 6 vCPU AMD EPYC, 3,8 GB RAM;
-* Python 3.12.3, PyQt5 5.15.11, python-xlib, pytest 8;
-* display virtual Xvfb (`QT_QPA_PLATFORM=offscreen`) — mesmo ambiente
-  do CI do projeto (GitHub Actions `ubuntu-latest`);
-* commit de referência desta execução: `1185630` (branch da PR) — a
-  evidência inicial da PR (revisão anterior) vem do commit
-  `aa58b88`, e as evidências das revisões subsequentes vêm de execuções
-  locais em `1185630+`; o CI do GitHub Actions executa os mesmos
-  métodos em `ubuntu-latest` em cada push da PR;
+* Linux Mint 22.3 (Zena), kernel 7.0.0-30-generic x86_64, Intel Core
+  i5-1235U, 12 threads, 32 GB RAM — **NÃO é o hardware de referência**
+  (IdeaPad S145 i5 / 8 GB): é a máquina de desenvolvimento do executor;
+* Python 3.12.3, PyQt5 5.15.11, python-xlib 0.33, pytest 9;
+* `QT_QPA_PLATFORM=offscreen` — sem display físico (Xvfb disponível
+  para o smoke da UI);
+* head da PR na re-execução: `eb67422` (merge de `main` +
+  correção #23). O CI (GitHub Actions `ubuntu-latest`) reexecuta os
+  mesmos métodos em cada push — as faixas abaixo são deste ambiente,
+  os guardrails de CI são os mesmos métodos com os mesmos limites;
 * os valores voláteis (CPU, tempo, RSS exato) variam entre execuções
   do mesmo ambiente — reportamos faixas, não pontos únicos, e os
-  testes de CI usam guardrails com folga deliberada em vez de
-  thresholds colados no medido.
+  testes usam guardrails com folga deliberada em vez de thresholds
+  colados no medido.
 
-Todas as medições abaixo foram feitas **no CI / Xvfb (ubuntu-latest)**
-com `QT_QPA_PLATFORM=offscreen`, ou na sandbox local equivalente —
-**nenhuma foi feita no S145**:
+**Nenhuma medição abaixo foi feita no S145.** Automações (clicker,
+playback, recording) foram exercitadas com `FakeAutomationIO` /
+eventos sintéticos — o custo real de emissão XTest/XRecord não é
+medido por estes testes (ver seção 5):
 
-| Métrica | MEDIDA (CI/Xvfb/Ubuntu runner) | Categoria da META correspondente |
+| Métrica | MEDIDA (re-execução no head, máquina do executor) | META correspondente (seção 1) |
 | --- | --- | --- |
-| Construção da janela (processo já iniciado) | 174,2 ms (164,5 ms em segunda execução; commit `aa58b88`) | ≤ baseline + 20% |
-| Process startup (processo novo + imports + show + 1 passagem do loop) | 926–988 ms (2 execuções em cache quente; commit `1185630+`; guardrail CI < 4.000 ms) | — |
-| RSS estabilizado | 64,1 MB (62,5 MB na segunda execução) | ≤ 150 MB |
+| Construção da janela (processo já iniciado) | 117,2 ms (1 execução) | sem regressão > 20% sobre baseline |
+| Process startup (processo novo + imports + show + 1ª passagem do loop) | 637–776 ms (3 execuções; guardrail CI < 4.000 ms) | — |
+| RSS estabilizado | 71,5 MB | ≤ 150 MB |
 | Threads / subprocessos em idle | 1 / 0 | 0 filhos |
-| CPU idle (10 s / 20 s) | 0,1% | ≤ 1% |
-| Auto-clicker 1 CPS | 0,0% CPU do sistema (4/3 cliques entregues) | — |
-| Auto-clicker 20 CPS | 0,0–0,2% CPU do sistema (60/100 cliques) | — |
-| Auto-clicker 50 CPS | 0,4–0,7% CPU do sistema (149–249/150–250 cliques) | — |
-| Macro playback 10 s | CPU adicional 0,0–0,1%; `play()` 0,18–0,36 ms; threads no baseline | — |
-| Memória em 120 s (UI viva) | 0,0% de crescimento (64204–65120 KB; pico usado como referência) | < 10% |
-| Recording: 2.000 callbacks | 2,3–3,9 ms totais (< 0,002 ms/evento); threads no baseline | — |
-| Recording: crescimento de memória 4k→8k eventos | 264 KB → 528 KB (proporcional; `VmRSS` como evidência secundária) | — |
+| CPU idle (10 s) | 0,2% | ≤ 1% |
+| Auto-clicker 1 CPS | 0,0% CPU (6/5 cliques entregues) | — |
+| Auto-clicker 20 CPS | 0,6% CPU (100/100 cliques) | — |
+| Auto-clicker 50 CPS | 0,4% CPU (249/250 cliques) | — |
+| Macro playback 10 s | CPU adicional 0,0%; `play()` 0,3 ms; 70 eventos; threads no baseline | zero busy-wait |
+| Memória em 120 s (UI viva) | < 10% (passou no guardrail; esperado 0–2%) | < 10% |
+| Recording: 2.000 callbacks | 3,5 ms totais (1,7 µs/evento) | < 200 µs/evento |
+| Recording: crescimento de memória 4k→8k eventos | bytes/evento constante (109,5 → 109,5); RSS 304 → 876 KB | O(n) |
 | Lifecycle do launcher | fake app determinístico: 3 casos (início com PID real + process start time, morte imediata sem sucesso falso, marker stale removido) | uma instância por display |
 
-Os valores de cold startup variam fortemente com o estado do cache de
-módulos: com o PyQt5 já importado na máquina a janela abre em
-~950 ms; na primeira execução do CI (sem cache pré-carregado) o mesmo
-método tende a ser mais lento — por isso o guardrail do CI é de
-4.000 ms, não um valor fixo. As duas execuções reportadas são do mesmo
-método em cache quente e não devem ser confundidas com o caso de
-cache frio do S145.
+**Regressão #23 não reapareceu:** o `tests/test_playback_cost`
+(re-executado no head) mede **0,0%** de CPU adicional durante 10 s de
+playback — contra ~98% da falha original — e o
+`AutomationScheduler.wait_next()` dorme em `Event.wait` com
+`_notify.clear()` atômico sob o mesmo lock da versão (correção da
+PR #51). Os testes determinísticos `tests/test_scheduler_regression.py`
+(9 casos: mudança de intervalo, espera bloqueante, stop, reset,
+concorrência) passam sem alteração.
+
+Os valores de cold startup variam com o estado do cache de módulos: a
+primeira execução (import do PyQt5 ainda não mapeado) é a mais lenta.
+O guardrail de CI é 4.000 ms justamente por isso; os valores deste
+ambiente (637–776 ms) e os do CI são medidos no mesmo método, em
+máquinas diferentes — não são comparáveis entre si e não representam
+cache frio do S145 (primeira instalação).
 
 ## 5. Validação pendente no IdeaPad S145
 

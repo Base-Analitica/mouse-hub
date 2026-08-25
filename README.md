@@ -110,25 +110,28 @@ plataforma pesada. Orçamentos de projeto (CPU idle ≤ 1%, RSS ≤ 150 MB,
 reproduzível de medição estão em
 [`docs/performance/metodologia.md`](docs/performance/metodologia.md).
 
-**Resumo das medições no runner do CI** (Ubuntu 24.04, Python 3.12,
-PyQt5 5.15.11, display virtual Xvfb, carga compartilhada do GitHub
-Actions). Cada número foi obtido nesse ambiente — **não** é resultado
-no IdeaPad S145; a validação no notebook de referência é descrita na
+**Resumo das medições reexecutadas no head final da PR** (Linux Mint
+22.3, Python 3.12.3, PyQt5 5.15.11, `QT_QPA_PLATFORM=offscreen`,
+máquina do executor — Intel i5-1235U / 32 GB RAM). O CI (GitHub
+Actions `ubuntu-latest`) reexecuta os mesmos métodos em cada push.
+Cada número foi obtido nesse ambiente — **não** é resultado no
+IdeaPad S145; a validação no notebook de referência é descrita na
 metodologia e só é afirmada após medição física nele:
 
-| Métrica | Medido (CI/Xvfb/Ubuntu runner) |
+| Métrica | Medido (head final, máquina do executor) |
 | --- | --- |
-| Construção da janela (processo já iniciado) | ~164–174 ms |
-| RSS idle (CI/Xvfb) | ~62–64 MB |
-| Threads / subprocessos em idle (CI/Xvfb) | 1 / 0 |
-| CPU idle (CI/Xvfb) | 0,1% |
-| Auto-clicker 1–50 CPS (CI/Xvfb) | 0,0–0,7% CPU, dentro do esperado |
-| Memória em 120 s (CI/Xvfb) | 0,0% de crescimento |
-| Cold startup — processo Python novo + imports + QApplication + show + event loop (CI/Xvfb) | ~926–988 ms (guardrail CI < 4.000 ms) |
-| Macro recording (CI/Xvfb, eventos sintéticos) | < 0,002 ms/callback; memória linear com nº de eventos |
+| Construção da janela (processo já iniciado) | 117,2 ms |
+| RSS idle | 71,5 MB |
+| Threads / subprocessos em idle | 1 / 0 |
+| CPU idle (10 s) | 0,2% |
+| Auto-clicker 1 CPR CPS | 0,0%; 20 CPS → 0,6%; 50 CPS → 0,4% (emissor fake) |
+| Macro playback (10 s) | 0,0% CPU adicional — regressão #23 (busy-loop) não reapareceu |
+| Memória em 120 s | < 10% (passou, sem crescimento significativo) |
+| Cold startup — processo Python novo + imports + QApplication + show + event loop | 637–776 ms (3 execuções; guardrail CI < 4.000 ms) |
+| Macro recording (eventos sintéticos) | 1,7 µs/callback; 109,5 bytes/evento constante → O(n) |
 
 O cold startup acima é um **process startup** controlado: novo
-processo Python com o código e o bytecode já em cache no runner.
+processo Python com o código e o bytecode já em cache.
 Ele **não representa** primeira instalação, filesystem frio ou boot
 completo do sistema — medições nessas condições só valem feitas nelas.
 
