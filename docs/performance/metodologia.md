@@ -235,7 +235,7 @@ medido por estes testes (ver seção 5):
 | Macro playback 10 s | CPU adicional 0,0–0,1%; `play()` 0,4–2,6 ms; 70 eventos; threads no baseline | zero busy-wait |
 | Memória em 120 s (UI viva) | 0,2% de crescimento (62.248 → 62.372 KB) | < 10% |
 | Recording: 2.000 callbacks | 1,3–6,9 µs/evento (4 execuções; a mais lenta é a 1ª, com import frio) | < 200 µs/evento |
-| Recording: crescimento de memória 4k→8k eventos | bytes/evento constante (109,0–109,7 → idem); RSS 288–292 → 828–856 KB | O(n) |
+| Recording: crescimento de memória 4k→8k eventos | bytes/evento constante (109,0–109,7 → idem); RSS 256–304 → 820–876 KB (4 execuções) | O(n) |
 | Lifecycle do launcher | fake app determinístico: 3 casos (início com PID real + process start time, morte imediata sem sucesso falso, marker stale removido) | uma instância por display |
 
 **Regressão #23 não reapareceu:** o `tests/test_playback_cost`
