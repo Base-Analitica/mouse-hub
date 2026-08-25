@@ -208,10 +208,11 @@ ser reexecutado. Ambiente real da re-execução:
 * Python 3.12.3, PyQt5 5.15.11, python-xlib 0.33, pytest 9;
 * `QT_QPA_PLATFORM=offscreen` — sem display físico (Xvfb disponível
   para o smoke da UI);
-* head da PR na re-execução: `eb67422` (merge de `main` +
-  correção #23). O CI (GitHub Actions `ubuntu-latest`) reexecuta os
-  mesmos métodos em cada push — as faixas abaixo são deste ambiente,
-  os guardrails de CI são os mesmos métodos com os mesmos limites;
+* head da PR na re-execução: `1a6392d` (que contém o merge
+  `eb67422` de `main` + correção #23). O CI (GitHub Actions
+  `ubuntu-latest`) reexecuta os mesmos métodos em cada push — as
+  faixas abaixo são deste ambiente, os guardrails de CI são os mesmos
+  métodos com os mesmos limites;
 * os valores voláteis (CPU, tempo, RSS exato) variam entre execuções
   do mesmo ambiente — reportamos faixas, não pontos únicos, e os
   testes usam guardrails com folga deliberada em vez de thresholds
