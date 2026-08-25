@@ -103,6 +103,18 @@ class AutomationScheduler:
             # (_notify) — nunca gira esperando (Event.wait, não loop).
             self._notify.wait(remaining)
             with self._lock:
+                # Consome a notificação ATOMICAMENTE com a checagem de
+                # versão (mesmo lock do setter). Sem o clear, o Event
+                # permanece sinalizado e o próximo wait() retorna na
+                # hora — o loop interno gira até o deadline (busy-loop
+                # da issue #23). O clear é seguro contra race:
+                #  * mudança ANTES do clear -> a versão nova é visível
+                #    na checagem abaixo (setter usa o mesmo lock);
+                #  * mudança DEPOIS do unlock -> o setter faz
+                #    `_notify.set()` e o próximo wait() acorda para
+                #    recalcular — nada é perdido, `_version` é a fonte
+                #    autoritativa (regressão #18 preservada).
+                self._notify.clear()
                 if self._version != version:
                     # A configuração mudou durante o sono: recalcular
                     # deadline com o NOVO intervalo e continuar
