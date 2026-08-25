@@ -128,7 +128,7 @@ metodologia e só é afirmada após medição física nele:
 | Macro playback (10 s) | 0,0% CPU adicional — regressão #23 (busy-loop) não reapareceu |
 | Memória em 120 s | < 10% (passou, sem crescimento significativo) |
 | Cold startup — processo Python novo + imports + QApplication + show + event loop | 637–776 ms (3 execuções; guardrail CI < 4.000 ms) |
-| Macro recording (eventos sintéticos) | 1,7 µs/callback; 109,5 bytes/evento constante → O(n) |
+| Macro recording (eventos sintéticos) | 1,7–6,0 µs/callback; bytes/evento constante → O(n) |
 
 O cold startup acima é um **process startup** controlado: novo
 processo Python com o código e o bytecode já em cache.

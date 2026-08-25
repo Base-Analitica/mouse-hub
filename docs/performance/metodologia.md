@@ -234,7 +234,7 @@ medido por estes testes (ver seção 5):
 | Auto-clicker 50 CPS | 0,4% CPU (249/250 cliques) | — |
 | Macro playback 10 s | CPU adicional 0,0%; `play()` 0,3 ms; 70 eventos; threads no baseline | zero busy-wait |
 | Memória em 120 s (UI viva) | < 10% (passou no guardrail; esperado 0–2%) | < 10% |
-| Recording: 2.000 callbacks | 3,5 ms totais (1,7 µs/evento) | < 200 µs/evento |
+| Recording: 2.000 callbacks | 1,7–6,0 µs/evento (varia entre execuções; sempre < 200 µs) | < 200 µs/evento |
 | Recording: crescimento de memória 4k→8k eventos | bytes/evento constante (109,5 → 109,5); RSS 304 → 876 KB | O(n) |
 | Lifecycle do launcher | fake app determinístico: 3 casos (início com PID real + process start time, morte imediata sem sucesso falso, marker stale removido) | uma instância por display |
 
