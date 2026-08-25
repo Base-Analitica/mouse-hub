@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from typing import Optional
 
 from mouse_hub.core.automation.autoclicker import (
     AutoClickerEngine,
@@ -71,6 +72,51 @@ def _focus(title: str) -> WindowFocusChecker:
     return WindowFocusChecker(_Title(), ttl_ms=500)
 
 
+class _WaitEnterEvent(threading.Event):
+    """Event observável: sinaliza `entered` no momento em que uma thread
+    entra em `wait()`. Instrumentação controlada de teste (não replica
+    lógica do scheduler) — permite sincronizar o interleaving "thread
+    DENTRO do Event.wait" sem depender de sleep como prova de ordenação."""
+
+    def __init__(self, entered: threading.Event) -> None:
+        super().__init__()
+        self._entered = entered
+
+    def wait(self, timeout: Optional[float] = None) -> bool:
+        self._entered.set()
+        return super().wait(timeout)
+
+
+class _ObservableScheduler(AutomationScheduler):
+    """AutomationScheduler com `_notify` observável.
+
+    `entered` fica setado assim que uma thread chama `Event.wait()`
+    dentro de `wait_next()` — o teste espera esse sinal ANTES de
+    alterar o intervalo, garantindo de forma determinística que a
+    alteração acontece durante um aguardo já bloqueado."""
+
+    def __init__(self, interval: float) -> None:
+        super().__init__(interval)
+        self.entered = threading.Event()
+        self._notify = _WaitEnterEvent(self.entered)
+
+
+def _start_waiter_in_wait(scheduler: _ObservableScheduler):
+    """Inicia um waiter em `wait_next()` e só retorna DEPOIS que a
+    thread entrou no `Event.wait` (bloqueada) — handshake explícito,
+    sem sleep como prova de ordenação entre threads."""
+    done = threading.Event()
+    results: dict = {}
+    thread = threading.Thread(
+        target=_waiter, args=(scheduler, results, done), daemon=True
+    )
+    thread.start()
+    assert scheduler.entered.wait(timeout=2.0), (
+        "waiter não entrou no Event.wait (timeout)"
+    )
+    return thread, results, done
+
+
 # ── Scheduler: contrato de reconfiguração (issue #23) ───────────────
 
 
@@ -78,20 +124,20 @@ def test_interval_change_wakes_waiting_wait_next():
     """REGRESSÃO #23: alterar `interval` durante o aguardo acorda o
     wait em curso e o deadline é recalculado com o NOVO valor — o wait
     retorna True (hot config, nunca cancelamento) bem antes do
-    intervalo original de 60 s."""
-    scheduler = AutomationScheduler(60.0)
-    done = threading.Event()
-    results: dict = {}
-    threading.Thread(
-        target=_waiter, args=(scheduler, results, done), daemon=True
-    ).start()
-    time.sleep(0.05)  # o waiter está dormindo em wait(60 s)
+    intervalo original de 60 s.
+
+    Determinístico: o handshake (`scheduler.entered`) garante que a
+    alteração acontece SOMENTE depois que a thread entrou no
+    `Event.wait` — sem sleep como prova de ordenação (review PR #51)."""
+    scheduler = _ObservableScheduler(60.0)
+    thread, results, done = _start_waiter_in_wait(scheduler)
     t0 = time.monotonic()
-    scheduler.interval = 0.05  # 60 s -> 50 ms
+    scheduler.interval = 0.05  # 60 s -> 50 ms, com o wait JÁ bloqueado
     assert done.wait(timeout=2.0)
     elapsed = time.monotonic() - t0
     assert results["ok"] is True  # reconfiguração NÃO é cancelamento
     assert elapsed < 1.0  # acordou cedo; não esperou os 60 s
+    thread.join(timeout=1.0)
 
 
 def test_wait_after_interval_change_blocks_not_busy_loop():
@@ -120,24 +166,21 @@ def test_wait_after_interval_change_blocks_not_busy_loop():
 
 
 def test_consecutive_interval_changes_keep_latest():
-    """REGRESSÃO #23: duas alterações próximas durante o aguardo não
-    perdem a mais recente — o deadline final respeita o ÚLTIMO
-    intervalo (30 ms), não o anterior (500 ms) nem o original (60 s)."""
-    scheduler = AutomationScheduler(60.0)
-    done = threading.Event()
-    results: dict = {}
-    threading.Thread(
-        target=_waiter, args=(scheduler, results, done), daemon=True
-    ).start()
-    time.sleep(0.05)
+    """REGRESSÃO #23: duas alterações consecutivas durante o mesmo
+    aguardo (sem sleep entre elas) não perdem a mais recente — o
+    deadline final respeita o ÚLTIMO intervalo (30 ms), não o anterior
+    (500 ms) nem o original (60 s). Determinístico: handshake + zero
+    timing entre as mudanças (review PR #51)."""
+    scheduler = _ObservableScheduler(60.0)
+    thread, results, done = _start_waiter_in_wait(scheduler)
     t0 = time.monotonic()
-    scheduler.interval = 0.5
-    time.sleep(0.02)
-    scheduler.interval = 0.03  # a mais recente vence
+    scheduler.interval = 0.5     # 1.ª mudança
+    scheduler.interval = 0.03    # 2.ª mudança imediata — a mais recente vence
     assert done.wait(timeout=2.0)
     elapsed = time.monotonic() - t0
     assert results["ok"] is True
     assert elapsed < 0.25  # aplicou 30 ms, não 500 ms nem 60 s
+    thread.join(timeout=1.0)
 
 
 def test_concurrent_interval_changes_are_never_lost():
@@ -174,20 +217,19 @@ def test_concurrent_interval_changes_are_never_lost():
 
 def test_stop_wakes_wait_next_immediately():
     """REGRESSÃO #23: `stop()` interrompe o aguardo IMEDIATAMENTE
-    (sem esperar o tick de 60 s) e `wait_next()` retorna False."""
-    scheduler = AutomationScheduler(60.0)
-    done = threading.Event()
-    results: dict = {}
-    threading.Thread(
-        target=_waiter, args=(scheduler, results, done), daemon=True
-    ).start()
-    time.sleep(0.05)
+    (sem esperar o tick de 60 s) e `wait_next()` retorna False.
+
+    Determinístico: o stop só é chamado depois que a thread entrou no
+    `Event.wait` (handshake) — prova o wake com o aguardo bloqueado."""
+    scheduler = _ObservableScheduler(60.0)
+    thread, results, done = _start_waiter_in_wait(scheduler)
     t0 = time.monotonic()
     scheduler.stop()
     assert done.wait(timeout=2.0)
     elapsed = time.monotonic() - t0
     assert results["ok"] is False
     assert elapsed < 1.0
+    thread.join(timeout=1.0)
 
 
 def test_reset_allows_scheduler_reuse_after_stop():
@@ -235,21 +277,27 @@ def test_hot_cps_keeps_engine_running_and_state_coherent():
 
 
 def test_macro_playback_preserves_order_and_timing():
-    """REGRESSÃO #23: o playback preserva ordem e timing — cada
-    delta_ms altera `scheduler.interval` (o caminho do notify), e o
-    player segue emitindo na ordem correta e no ritmo certo, sem
-    busy-wait."""
+    """REGRESSÃO #23: o playback preserva ordem, keycodes E timing —
+    cada delta_ms altera `scheduler.interval` (o caminho do notify).
+    Além da ordem, a DURAÇÃO observada (wall-clock com margem) prova
+    que os deltas foram respeitados: deltas zerados/encolhidos
+    terminariam o playback cedo demais; deltas inflados estourariam o
+    teto (review PR #51)."""
     io = FakeAutomationIO()
     player = MacroPlayer(io)
+    # Soma dos deltas = 500 ms (300 ms + 200 ms) — escala bem acima do
+    # ruído de scheduling para medir timing de forma confiável.
     events = [
         _press(38),
-        _release(38, delta_ms=40.0),
+        _release(38, delta_ms=300.0),
         _press(60),
-        _release(60, delta_ms=20.0),
+        _release(60, delta_ms=200.0),
     ]
+    t0 = time.monotonic()
     assert player.play(events, repeat=1)
     while player.playing:
         time.sleep(0.005)
+    elapsed = time.monotonic() - t0
     assert player.state == PlaybackState.STOPPED
     assert [e[0] for e in io.events] == [
         "key_press",
@@ -258,6 +306,10 @@ def test_macro_playback_preserves_order_and_timing():
         "key_release",
     ]
     assert [e[1] for e in io.events] == [38, 38, 60, 60]
+    # Timing: 500 ms de deltas. Piso 0,45 s (deltas respeitados) e
+    # teto 1,5 s (deltas inflados / regressão de duração).
+    assert elapsed >= 0.45, f"playback terminou cedo demais ({elapsed:.3f} s)"
+    assert elapsed < 1.5, f"playback demorou demais ({elapsed:.3f} s)"
 
 
 def test_macro_playback_cancel_still_works():
