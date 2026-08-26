@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="assets/mouse-gaymer-banner.webp" alt="Mouse Hub para Linux" width="100%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/mouse-gaymer-banner-dark.webp">
+    <source media="(prefers-color-scheme: light)" srcset="assets/mouse-gaymer-banner-light.webp">
+    <img src="assets/mouse-gaymer-banner-light.webp" alt="Mouse Gaymer — Auto-click e macros no Linux" width="100%">
+  </picture>
 </p>
 
 <h1 align="center">Mouse Hub</h1>
