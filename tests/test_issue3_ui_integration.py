@@ -462,3 +462,92 @@ class TestRequestedVsApplied:
         assert state.applied_dpi == 1000
         assert page.dpi_value.text() == "1000"
         assert page.dpi_value.text() != "2000"
+
+# ---------------------------------------------------------------------------
+# 8. Falha real de SetSensorDPI invalida hardware_dpi_available
+#    (revisão 5029857669 — BLOCKER do mantenedor).
+
+class TestDpiSetFailureInvalidatesCapability:
+    """Revisão do mantenedor (review 5029857669): timeout e erro de
+    protocolo do PRÓPRIO SetSensorDPI deixam hardware_dpi_available=False
+    com causa distinta — hid_available permanece separado (transporte
+    acessível); recuperação só com nova evidência (re-probe)."""
+
+    @staticmethod
+    def _healthy(qapp, monkeypatch):
+        """State com probe saudável e página de DPI pronta."""
+        hid = FakeHidAccess()
+        state, core, hid2, si = _make_state(hid=hid)
+        monkeypatch.setattr(app_module, "discover", lambda: _discovered())
+        state.refresh()
+        page = DPIPage(MouseController(), state=state)
+        assert page.slider.isEnabled()
+        caps = state.capability_state()
+        assert caps.is_available("hid_available")
+        assert caps.is_available("hardware_dpi_available")
+        return state, core, hid, page
+
+    def test_timeout_on_set_kills_hardware_dpi_available(self, qapp, monkeypatch):
+        state, core, hid, page = self._healthy(qapp, monkeypatch)
+        hid.ack_timeout = True  # timeout APENAS no SetSensorDPI
+        page.dpi_input.setText("1200")
+        page.apply_btn.click()
+
+        # Falha: nada aplicado; capability morta com reason=timeout;
+        # hid_available segue viva.
+        assert state.applied_dpi is None
+        caps = state.capability_state()
+        assert not caps.is_available("hardware_dpi_available")
+        assert "timeout" in caps.reason_for("hardware_dpi_available").lower()
+        assert caps.is_available("hid_available")
+        # UI não permanece com hint verde.
+        assert "Sem acesso" not in page.hid_hint.text() or "DPI" in page.hid_hint.text()
+        # O valor solicitado NÃO é apresentado como aplicado.
+        assert page.dpi_value.text() != "1200"
+        assert page.dpi_value.text() == UNKNOWN_VALUE_TEXT
+
+    def test_protocol_error_on_set_kills_hardware_dpi_available(self, qapp, monkeypatch):
+        state, core, hid, page = self._healthy(qapp, monkeypatch)
+        hid.dpi_set_rejected = True  # FAP no SetSensorDPI
+        page.dpi_input.setText("1200")
+        page.apply_btn.click()
+
+        assert state.applied_dpi is None
+        caps = state.capability_state()
+        assert not caps.is_available("hardware_dpi_available")
+        assert "protocolo" in caps.reason_for("hardware_dpi_available").lower() or             "rejeitado" in caps.reason_for("hardware_dpi_available").lower()
+        assert caps.is_available("hid_available")
+        assert page.dpi_value.text() == UNKNOWN_VALUE_TEXT
+
+    def test_reprobe_recovers_hardware_dpi_available(self, qapp, monkeypatch):
+        state, core, hid, page = self._healthy(qapp, monkeypatch)
+        hid.ack_timeout = True
+        page.dpi_input.setText("1200")
+        page.apply_btn.click()
+        caps = state.capability_state()
+        assert not caps.is_available("hardware_dpi_available")
+
+        # Nova evidência: re-probe saudável recupera a capability.
+        hid.ack_timeout = False
+        state.refresh()
+        caps = state.capability_state()
+        assert caps.is_available("hardware_dpi_available")
+        assert caps.is_available("hid_available")
+
+    def test_success_clears_previous_set_error(self, qapp, monkeypatch):
+        """Após um timeout, um SetSensorDPI bem-sucedido (ACK) recupera
+        a capability por evidência nova."""
+        state, core, hid, page = self._healthy(qapp, monkeypatch)
+        hid.ack_timeout = True
+        page.dpi_input.setText("1200")
+        page.apply_btn.click()
+        caps = state.capability_state()
+        assert not caps.is_available("hardware_dpi_available")
+
+        hid.ack_timeout = False
+        page.dpi_input.setText("1400")
+        page.apply_btn.click()
+        assert state.applied_dpi == 1400
+        caps = state.capability_state()
+        assert caps.is_available("hardware_dpi_available")
+        assert page.dpi_value.text() == "1400"

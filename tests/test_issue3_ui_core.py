@@ -210,6 +210,41 @@ class TestIssue3AckTimeout:
         dpi = core.set_hardware_dpi(800)
         assert dpi.status.ok is False
 
+    def test_timeout_on_set_kills_hardware_dpi_available(self):
+        """Probe saudável, mas SetSensorDPI timeout: hardware_dpi_available
+        deixa de ser True — hid_available permanece separado (transporte
+        acessível). Re-probe recupera."""
+        hid = FakeHidAccess()
+        core, _ = _make_controller_with(hid=hid)
+        core.refresh_device(_discovered())
+        core.probe_endpoint()
+        # Estado saudável após probe.
+        caps = core.capability_model().evaluate()
+        assert caps.is_available("hid_available")
+        assert caps.is_available("hardware_dpi_available")
+
+        # Timeout APENAS no SetSensorDPI (ack_timeout após probe).
+        hid.ack_timeout = True
+        result = core.set_hardware_dpi(800)
+        assert result.status.ok is False
+        assert core.applied_dpi is None  # nada aplicado
+        assert "dpi_set_error" in result.details
+        assert result.details["dpi_set_error"] == "timeout"
+
+        # Capability: hardware_dpi_available morto, hid_available vivo.
+        caps = core.capability_model().evaluate()
+        assert not caps.is_available("hardware_dpi_available")
+        reason = caps.reason_for("hardware_dpi_available")
+        assert "timeout" in reason.lower()
+        assert caps.is_available("hid_available")
+
+        # Re-probe saudável recupera.
+        hid.ack_timeout = False
+        core.probe_endpoint()
+        caps = core.capability_model().evaluate()
+        assert caps.is_available("hardware_dpi_available")
+        assert caps.is_available("hid_available")
+
 
 # ---------------------------------------------------------------------------
 # 6. Erro de protocolo.
@@ -237,6 +272,11 @@ class TestIssue3ProtocolError:
         core, _ = _make_controller_with(hid=hid)
         core.refresh_device(_discovered())
         core.probe_endpoint()
+        # Antes do set: capabilities saudáveis.
+        caps = core.capability_model().evaluate()
+        assert caps.is_available("hid_available")
+        assert caps.is_available("hardware_dpi_available")
+
         result = core.set_hardware_dpi(800)
         assert result.status.ok is False
         # O dispositivo REJEITOU o comando (FAP 0x02) — o controller
@@ -244,6 +284,19 @@ class TestIssue3ProtocolError:
         # considerado efetivo, ainda que o request tenha saído no fio.
         assert core.applied_dpi is None
         assert core._applied_dpi is None
+
+        # APÓS a falha: hardware_dpi_available deixa de ser True.
+        # hid_available permanece True (transporte acessível).
+        caps = core.capability_model().evaluate()
+        assert not caps.is_available("hardware_dpi_available")
+        assert caps.is_available("hid_available")
+
+        # Re-probe saudável recupera a capability.
+        hid.dpi_set_rejected = False
+        core.probe_endpoint()
+        caps = core.capability_model().evaluate()
+        assert caps.is_available("hardware_dpi_available")
+        assert caps.is_available("hid_available")
 
 
 # ---------------------------------------------------------------------------
