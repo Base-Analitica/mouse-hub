@@ -10,6 +10,7 @@ jobs:
   test:
     name: Lint de sintaxe e testes determinísticos
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
