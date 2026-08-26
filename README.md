@@ -23,9 +23,11 @@
 
 O produto principal é a aplicação PyQt5 em `app/`. O foco atual é exclusivamente o Logitech G403 HERO (VID `046d`, PID `c08f`) no Linux Mint; o projeto não tenta ser uma suíte universal de periféricos.
 
-O core já diferencia dispositivo detectado, acesso HID, DPI físico, sensibilidade do sistema e demais capabilities. Operações de hardware só são consideradas bem-sucedidas quando há evidência do protocolo; falha não é convertida em sucesso visual ou persistido.
+O core diferencia dispositivo detectado, acesso HID, DPI físico, sensibilidade do sistema e demais capabilities. Operações de hardware só são consideradas bem-sucedidas quando há evidência do protocolo; falha não é convertida em sucesso visual ou persistido.
 
 A suíte automatizada usa fakes/adapters e não substitui validação física. O caminho HID++ de DPI está implementado e testado deterministicamente, mas ainda não deve ser descrito como fisicamente validado no G403 até o teste ser executado no hardware real.
+
+O antigo servidor HTTP e a interface web foram removidos após a consolidação do fluxo nativo. O Mouse Hub não precisa de navegador ou porta local para funcionar.
 
 ## Capacidades atuais
 
@@ -38,7 +40,7 @@ A suíte automatizada usa fakes/adapters e não substitui validação física. O
 | **Polling rate** | Indisponível no stack atual | A UI não simula sucesso nem marca frequência ativa sem capacidade confirmada. |
 | **Auto-clicker** | Funcional, em hardening | 1–50 CPS, três botões e restrição por janela em foco; a consolidação final permanece acompanhada pela issue correspondente. |
 | **Macros — persistência/playback** | Implementados | Modelo, armazenamento e reprodução existem no core. |
-| **Macros — captura real** | Ainda incompleta | A gravação real de teclado/mouse no app nativo ainda é trabalho pendente; não é apresentada aqui como feature concluída. |
+| **Macros — captura** | Implementada no software | Backend XRecord captura teclado/cliques e possui lifecycle/testes determinísticos; validação end-to-end em sessão X11 real ainda deve ser tratada como evidência separada. |
 
 ## Requisitos
 
@@ -62,13 +64,21 @@ source .venv/bin/activate
 python3 -m pip install -e .
 ```
 
-Execute diretamente o aplicativo nativo:
+Execute pelo entrypoint nativo:
 
 ```bash
+./start.sh
+```
+
+ou diretamente:
+
+```bash
+./app/run_app.sh
+# ou
 python3 app/mouse_hub_app.py
 ```
 
-Os launchers legados ainda existentes no repositório estão sendo eliminados/ajustados durante a consolidação do produto nativo. O fluxo suportado não depende de servidor HTTP.
+`start.sh` e `launcher.sh` são launchers nativos de compatibilidade. Nenhum deles inicia servidor HTTP, abre navegador ou seleciona `/dev/hidraw0`.
 
 ## Dados e configuração
 
@@ -143,7 +153,7 @@ A regressão conhecida de busy-loop do scheduler possui teste dedicado e não de
 O CI executa sintaxe/imports, suíte determinística, benchmark mínimo, benchmarks complementares e smoke da UI:
 
 ```bash
-python3 -m compileall -q mouse_hub tests mouse_hub.py app
+python3 -m compileall -q mouse_hub tests app
 python3 -c "import mouse_hub.core, mouse_hub.platform.linux"
 QT_QPA_PLATFORM=offscreen python3 -m pytest tests/
 QT_QPA_PLATFORM=offscreen BENCH_IDLE_SECONDS=10 BENCH_ACTIVE_SECONDS=5 \
@@ -154,7 +164,7 @@ QT_QPA_PLATFORM=offscreen xvfb-run -a \
   python3 -m unittest tests.smoke_ui_init
 ```
 
-Testes com fakes provam comportamento do software; não são evidência de validação física do G403.
+Testes com fakes provam comportamento do software; não são evidência de validação física do G403 nem substituem uma sessão X11 real quando esse detalhe é relevante.
 
 ## Contribuição
 
