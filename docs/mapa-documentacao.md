@@ -8,6 +8,7 @@ documento `.md` neste diretório, inclua-o na lista abaixo.
 - `docs/mapa-documentacao.md` — este arquivo: índice vivo da documentação em `docs/`.
 - `docs/solucao-de-problemas.md` — guia de orientação para os problemas mais comuns do Mouse Hub com o G403 HERO no Linux.
 - `docs/registro-v213-corrida.md` — registro documental da corrida entre a conclusão das checks de CI e o despertar da lane de revisão (fixture V2.1.3 rodada 2).
+- `docs/performance/metodologia.md` — metodologia e limites das medições de performance da issue #12.
 
 Observações: os demais materiais de referência do repositório ficam na raiz
 (`README.md`, visão geral do projeto; `AGENTS.md`, convenções para agentes) e,

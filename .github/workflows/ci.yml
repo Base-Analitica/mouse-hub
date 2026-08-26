@@ -10,6 +10,7 @@ jobs:
   test:
     name: Lint de sintaxe e testes determinísticos
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -18,7 +19,7 @@ jobs:
           python-version: "3.12"
 
       - name: Validar sintaxe/imports de todo o repositório
-        run: python3 -m compileall -q mouse_hub tests mouse_hub.py app && python3 -c "import mouse_hub.core, mouse_hub.platform.linux"
+        run: python3 -m compileall -q mouse_hub tests app && python3 -c "import mouse_hub.core, mouse_hub.platform.linux"
 
       - name: Instalar dependências de teste
         run: python3 -m pip install --user -e ".[dev]" PyQt5==5.15.11
@@ -28,6 +29,9 @@ jobs:
 
       - name: Benchmark mínimo (startup, idle, CPS) — versão encurtada do CI
         run: QT_QPA_PLATFORM=offscreen BENCH_IDLE_SECONDS=10 BENCH_ACTIVE_SECONDS=5 python3 -m unittest tests.bench_perf -v
+
+      - name: Benchmarks complementares (cold startup e gravação)
+        run: QT_QPA_PLATFORM=offscreen python3 -m unittest tests.bench_cold_startup tests.bench_recording -v
 
   ui_smoke:
     name: Smoke da UI (Xvfb)

@@ -1,7 +1,10 @@
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
+.venv/
 config.json
 macros.json
 *.log
 .DS_Store
+mouse_hub.egg-info/

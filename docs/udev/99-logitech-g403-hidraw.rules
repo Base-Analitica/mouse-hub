@@ -3,7 +3,7 @@
 # Concede ao grupo "plugdev" acesso de leitura/escrita à interface
 # hidraw do G403 HERO (VID 046d, PID c08f), permitindo que o aplicativo
 # ajuste o DPI físico via HID++ sem chmod manual e sem abrir o nó para
-# todos os usuários (MODE=0666).
+# todos os usuários (MODE=0660).
 #
 # Instalação (uma única vez):
 #

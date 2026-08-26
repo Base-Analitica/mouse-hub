@@ -379,30 +379,12 @@ class TestPollingRateUnavailable:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestWebLegacyNoConcurrentSource:
-    """O codigo web legado nao mantem lista funcional divergente."""
+    """A fonte concorrente web foi removida integralmente pela issue #10."""
 
-    def test_web_html_no_hardcoded_profiles_or_presets(self):
-        """O HTML nao contem arrays PROFILES nem PRESETS."""
-        html = Path("static/index.html").read_text(encoding="utf-8")
-        assert "const PROFILES" not in html
-        assert "const PRESETS" not in html
-        assert "loadProfile" not in html
-        assert "renderProfiles" not in html
-        assert "renderPresets" not in html
+    def test_web_html_source_is_absent(self):
+        """Não existe mais HTML web capaz de manter perfis/presets próprios."""
+        assert not Path("static/index.html").exists()
 
-    def test_web_polling_no_active_default(self):
-        """Nenhum botao de polling tem classe 'active' e todos estao
-        desabilitados."""
-        html = Path("static/index.html").read_text(encoding="utf-8")
-        assert 'onclick="setPolling(1000)' not in html
-        assert 'class="btn-option" disabled>1000 Hz' in html
-
-    def test_web_server_no_profile_endpoints(self):
-        """O servidor web nao possui endpoints de perfil funcionais."""
-        src = Path("mouse_hub.py").read_text(encoding="utf-8")
-        # Nenhum handler nem branch de dispatch de perfil permanece
-        # (comentarios podem citar a issue, mas nao o codigo funcional).
-        assert "_handle_profile_load" not in src
-        assert "_handle_profile_save" not in src
-        assert 'elif path == "/api/profile/load"' not in src
-        assert 'elif path == "/api/profile/save"' not in src
+    def test_web_server_source_is_absent(self):
+        """Não existe mais servidor web capaz de expor endpoints paralelos."""
+        assert not Path("mouse_hub.py").exists()
