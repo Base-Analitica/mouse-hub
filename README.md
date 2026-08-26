@@ -1,94 +1,83 @@
 <p align="center">
-  <img src="assets/mouse-gaymer-banner.webp" alt="Mouse Gamer — Mouse Hub para Linux" width="100%">
+  <img src="assets/mouse-gaymer-banner.webp" alt="Mouse Hub para Linux" width="100%">
 </p>
 
 <h1 align="center">Mouse Hub</h1>
 
 <p align="center">
-  Aplicativo nativo para controlar o <strong>Logitech G403 HERO</strong> no Linux.
-  <br>
-  DPI, sensibilidade, perfis, macros e auto-clicker com foco em uma experiência desktop integrada.
+  Aplicativo desktop nativo para o <strong>Logitech G403 HERO</strong> no Linux Mint.
 </p>
 
 <p align="center">
   <a href="https://github.com/Base-Analitica/mouse-hub/actions/workflows/ci.yml"><img src="https://github.com/Base-Analitica/mouse-hub/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10 ou superior">
-  <img src="https://img.shields.io/badge/Linux-X11-FCC624?logo=linux&logoColor=111111" alt="Linux com X11">
-  <img src="https://img.shields.io/badge/UI-PyQt5-41CD52?logo=qt&logoColor=white" alt="Interface PyQt5">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/Linux-X11-FCC624?logo=linux&logoColor=111111" alt="Linux X11">
+  <img src="https://img.shields.io/badge/UI-PyQt5-41CD52?logo=qt&logoColor=white" alt="PyQt5">
 </p>
 
-> **Estado do projeto:** o aplicativo desktop em `app/` é o caminho principal. O servidor web na raiz (`mouse_hub.py`) e seus launchers permanecem no repositório por compatibilidade, mas estão em processo de descontinuação e não devem receber novas funcionalidades.[^1]
+## Estado do projeto
 
-## Visão geral
+O produto principal é a aplicação PyQt5 em `app/`. O foco atual é exclusivamente o Logitech G403 HERO (VID `046d`, PID `c08f`) no Linux Mint; o projeto não tenta ser uma suíte universal de periféricos.
 
-O Mouse Hub é um controlador nativo para Linux direcionado ao Logitech G403 HERO. A aplicação separa as regras de domínio, o acesso ao protocolo HID++ e a interface PyQt5, permitindo testar a maior parte do comportamento sem depender de um mouse físico conectado. O controle de DPI físico usa HID++ quando o dispositivo e as permissões estão disponíveis; a sensibilidade do sistema é tratada como uma configuração independente.[^1] [^2]
+O core já diferencia dispositivo detectado, acesso HID, DPI físico, sensibilidade do sistema e demais capabilities. Operações de hardware só são consideradas bem-sucedidas quando há evidência do protocolo; falha não é convertida em sucesso visual ou persistido.
 
-O projeto foi pensado para uso em ambientes Linux com X11, especialmente Linux Mint. A automação de cliques e macros é inicializada sob demanda e possui uma verificação centralizada de foco, evitando emitir cliques quando a janela ativa não pertence ao contexto reconhecido pelo aplicativo.[^1]
+A suíte automatizada usa fakes/adapters e não substitui validação física. O caminho HID++ de DPI está implementado e testado deterministicamente, mas ainda não deve ser descrito como fisicamente validado no G403 até o teste ser executado no hardware real.
 
-## Funcionalidades
+## Capacidades atuais
 
-| Área | O que está disponível | Observações de escopo |
+| Área | Estado | Observação |
 | --- | --- | --- |
-| **DPI** | Ajuste de 100 a 25.600 DPI em passos de 50, presets para FPS, Minecraft PvP e flick shots. | O ajuste físico depende do acesso ao endpoint HID++ do G403 HERO. |
-| **Sensibilidade** | Controle da sensibilidade do ponteiro do sistema de 0% a 100%. | É independente do DPI físico do mouse. |
-| **Perfis** | Perfis para Minecraft PvP, CS:GO e configurações personalizadas. | As configurações são persistidas pelo aplicativo. |
-| **Auto-clicker** | CPS configurável, seleção do botão e estados visíveis na interface. | O motor bloqueia a emissão quando o foco não está em uma janela reconhecida. |
-| **Macros** | Gravação, armazenamento e reprodução de eventos de teclado e mouse. | A automação usa a camada nativa de input do Linux/X11. |
-| **Interface** | Dashboard e páginas dedicadas para DPI, sensibilidade, auto-clicker, macros, perfis e configurações. | Interface desktop construída com PyQt5. |
-
-> **Limitação conhecida:** a interface apresenta opções de *polling rate* de 125, 250, 500 e 1.000 Hz, mas o modelo de capacidades atual não declara o ajuste de polling rate como disponível no hardware. Portanto, essa opção não deve ser interpretada como uma garantia de alteração física do dispositivo.[^1] [^2]
+| **Detecção do G403** | Implementada | Identidade do dispositivo é validada; não depende de `/dev/hidraw0` nem da ordem de enumeração. |
+| **DPI físico** | Implementado no software | HID++ com validação de identidade/feature e tratamento separado de timeout, erro de protocolo, permissão e remoção; validação física ainda pendente. |
+| **Sensibilidade** | Implementada | É independente do DPI físico. |
+| **Perfis e presets** | Implementados | Fonte de verdade no core; aplicação de DPI e sensibilidade ocorre como operações independentes. |
+| **Polling rate** | Indisponível no stack atual | A UI não simula sucesso nem marca frequência ativa sem capacidade confirmada. |
+| **Auto-clicker** | Funcional, em hardening | 1–50 CPS, três botões e restrição por janela em foco; a consolidação final permanece acompanhada pela issue correspondente. |
+| **Macros — persistência/playback** | Implementados | Modelo, armazenamento e reprodução existem no core. |
+| **Macros — captura real** | Ainda incompleta | A gravação real de teclado/mouse no app nativo ainda é trabalho pendente; não é apresentada aqui como feature concluída. |
 
 ## Requisitos
 
-O caminho principal exige:
+- Linux, com foco em Linux Mint;
+- sessão X11 para as integrações nativas atuais de input/foco;
+- Python 3.10+;
+- PyQt5 5.15+;
+- `python-xlib`.
 
-| Requisito | Versão ou condição |
-| --- | --- |
-| Sistema operacional | Linux com sessão gráfica X11 |
-| Python | 3.10 ou superior |
-| Interface | PyQt5 5.15 ou superior |
-| Input e foco | `python-xlib` 0.17 ou superior |
-| Hardware suportado | Logitech G403 HERO USB, VID `046d` e PID `c08f` |
+As dependências Python estão declaradas em [`pyproject.toml`](pyproject.toml).
 
-As dependências de execução e de desenvolvimento estão declaradas em [`pyproject.toml`](pyproject.toml).[^2]
+## Instalação para desenvolvimento/uso a partir do repositório
 
-## Instalação
-
-A instalação em um ambiente virtual evita conflitos com o gerenciador de pacotes da distribuição:
+Use um ambiente virtual; o aplicativo não precisa alterar os pacotes Python do sistema:
 
 ```bash
 git clone https://github.com/Base-Analitica/mouse-hub.git
 cd mouse-hub
-
 python3 -m venv .venv
 source .venv/bin/activate
-python3 -m pip install --upgrade pip
 python3 -m pip install -e .
 ```
 
-Se `venv` não estiver disponível na distribuição, instale o pacote correspondente ao Python antes de repetir os comandos acima. O aplicativo também precisa ser executado dentro de uma sessão gráfica X11 com acesso ao display atual.
-
-## Execução
-
-Com o ambiente virtual ativado, inicie a aplicação nativa pela raiz do repositório:
-
-```bash
-./app/run_app.sh
-```
-
-O launcher verifica a presença do PyQt5 e inicia `app/mouse_hub_app.py`. Para executar diretamente, use:
+Execute diretamente o aplicativo nativo:
 
 ```bash
 python3 app/mouse_hub_app.py
 ```
 
-Os arquivos de configuração e os dados de macros são armazenados em `~/mouse-hub/`, conforme a configuração atual do aplicativo.[^1]
+Os launchers legados ainda existentes no repositório estão sendo eliminados/ajustados durante a consolidação do produto nativo. O fluxo suportado não depende de servidor HTTP.
 
-## Permissão para ajustar o DPI físico
+## Dados e configuração
 
-Sem uma regra udev adequada, o Mouse Hub pode executar sem acesso de escrita ao dispositivo HID e não conseguirá aplicar o DPI físico via HID++. A configuração versionada em [`docs/udev/99-logitech-g403-hidraw.rules`](docs/udev/99-logitech-g403-hidraw.rules) concede acesso ao grupo `plugdev` sem abrir o dispositivo para todos os usuários.
+O core usa diretórios XDG:
 
-Instale a regra uma única vez:
+- configuração: `${XDG_CONFIG_HOME:-~/.config}/mouse-hub/`;
+- dados: `${XDG_DATA_HOME:-~/.local/share}/mouse-hub/`.
+
+Existe migração não destrutiva do layout legado em `~/mouse-hub/`. Configuração existente porém ilegível/corrompida não deve ser sobrescrita silenciosamente.
+
+## Permissão HID do G403 HERO
+
+A regra versionada em [`docs/udev/99-logitech-g403-hidraw.rules`](docs/udev/99-logitech-g403-hidraw.rules) concede acesso ao grupo `plugdev` com `MODE="0660"`, sem abrir o dispositivo para todos os usuários.
 
 ```bash
 sudo cp docs/udev/99-logitech-g403-hidraw.rules /etc/udev/rules.d/
@@ -97,37 +86,35 @@ sudo udevadm trigger --action=add --subsystem-match=hidraw
 sudo usermod -aG plugdev "$USER"
 ```
 
-Depois, encerre e inicie novamente a sessão do usuário para que a associação ao grupo tenha efeito. A regra usa permissões `0660`; não é necessário nem recomendado executar `chmod 666` no dispositivo `hidraw`.[^3]
+Depois de adicionar o usuário ao grupo, encerre e inicie a sessão novamente. Não use `chmod 666` em `/dev/hidrawX` como fluxo normal.
 
-Para confirmar a descoberta do dispositivo, substitua `hidrawN` pelo endpoint identificado no seu sistema:
-
-```bash
-udevadm info /dev/hidrawN | grep -i logitech
-ls -l /dev/hidrawN
-```
+A descoberta do endpoint é feita pelo aplicativo; não escolha manualmente `/dev/hidraw0`.
 
 ## Arquitetura
 
-A separação de responsabilidades atual é a seguinte:
-
 | Caminho | Responsabilidade |
 | --- | --- |
-| [`app/`](app/) | Interface desktop PyQt5 e composição das páginas da aplicação. |
-| [`mouse_hub/core/`](mouse_hub/core/) | Regras de domínio: DPI, sensibilidade, perfis, configuração, descoberta e automação. |
-| [`mouse_hub/platform/`](mouse_hub/platform/) | Protocolo HID++ e integração com o backend Linux/X11. |
-| [`tests/`](tests/) | Testes determinísticos, fakes de hardware, benchmark e smoke test da UI. |
-| [`docs/udev/`](docs/udev/) | Regra udev específica para o Logitech G403 HERO. |
-| `mouse_hub.py`, `static/`, `start.sh` e `launcher.sh` | Caminho web legado, mantido congelado enquanto a migração para o app nativo é concluída. |
+| [`app/`](app/) | UI desktop PyQt5 e composição das páginas. |
+| [`mouse_hub/core/`](mouse_hub/core/) | Estado, DPI, sensibilidade, perfis, configuração e automações. |
+| [`mouse_hub/platform/`](mouse_hub/platform/) | HID++ e integrações de plataforma. |
+| [`tests/`](tests/) | Regressões determinísticas, fakes, benchmarks e smoke da UI. |
+| [`docs/`](docs/) | Documentação técnica, regras udev e metodologia de performance. |
 
-A regra arquitetural central é que a lógica de domínio deve permanecer em `mouse_hub/core/`; a interface e a camada de plataforma não devem duplicar regras de DPI, sensibilidade ou perfis.[^1]
+A UI projeta o estado do core; não é fonte de verdade sobre o hardware.
 
-## Testes e desenvolvimento
+## Performance
 
-A suíte é executada sem hardware físico por meio de fakes e cobre o core, o protocolo HID++, a descoberta do dispositivo, a persistência, a automação Linux e a inicialização da UI. Para reproduzir localmente o ambiente de CI:
+O hardware de referência do projeto é um Lenovo IdeaPad S145, Intel Core i5, 8 GB RAM, Linux Mint. As metas iniciais incluem CPU idle próxima de zero (alvo ≤ 1% de um núcleo), RSS ≤ 150 MB, nenhum busy-wait e nenhum subprocesso recorrente em idle.
+
+Resultados obtidos em outras máquinas devem ser identificados como medições daquele ambiente e não como resultados do S145. A metodologia reproduzível fica em [`docs/performance/metodologia.md`](docs/performance/metodologia.md) quando presente na `main`.
+
+A regressão conhecida de busy-loop do scheduler possui teste dedicado e não deve ser mascarada por thresholds enfraquecidos.
+
+## Testes
+
+O CI executa sintaxe/imports, suíte determinística, benchmark mínimo e smoke da UI:
 
 ```bash
-python3 -m pip install -e ".[dev]" PyQt5==5.15.11
-
 python3 -m compileall -q mouse_hub tests mouse_hub.py app
 python3 -c "import mouse_hub.core, mouse_hub.platform.linux"
 QT_QPA_PLATFORM=offscreen python3 -m pytest tests/
@@ -137,15 +124,8 @@ QT_QPA_PLATFORM=offscreen xvfb-run -a \
   python3 -m unittest tests.smoke_ui_init
 ```
 
-O workflow [`ci.yml`](.github/workflows/ci.yml) executa os testes determinísticos e o smoke test da UI com Python 3.12.[^4]
+Testes com fakes provam comportamento do software; não são evidência de validação física do G403.
 
 ## Contribuição
 
-Antes de abrir uma alteração, leia [`AGENTS.md`](AGENTS.md). O fluxo esperado é criar uma branch `feat/<tema>` ou `fix/<tema>`, manter o escopo da mudança restrito, incluir testes para correções de comportamento e abrir um pull request para revisão do mantenedor. Commits seguem o padrão convencional em inglês, como `docs: improve project README`.[^1]
-
-## Referências
-
-[^1]: [AGENTS.md — convenções de arquitetura, execução e contribuição](AGENTS.md)
-[^2]: [`pyproject.toml` — metadados, dependências e limites de compatibilidade](pyproject.toml)
-[^3]: [`docs/udev/99-logitech-g403-hidraw.rules` — regra de permissões do Logitech G403 HERO](docs/udev/99-logitech-g403-hidraw.rules)
-[^4]: [`.github/workflows/ci.yml` — jobs de testes e smoke test da interface](.github/workflows/ci.yml)
+Leia [`AGENTS.md`](AGENTS.md) antes de alterar o projeto. Mudanças devem preservar, nesta ordem: correção de hardware, segurança, comportamento verificável, simplicidade e performance.
