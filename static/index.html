@@ -767,10 +767,6 @@
              onchange="setDPI(this.value)">
     </div>
 
-    <div style="margin-top:1rem;">
-      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:600;">⚡ PRESETS</div>
-      <div class="preset-grid" id="presetGrid"></div>
-    </div>
   </div>
 
   <!-- Sensitivity Card -->
@@ -803,22 +799,18 @@
       <span style="font-size:0.7rem;color:var(--text-muted);">100%</span>
     </div>
 
-    <!-- Polling Rate -->
+    <!-- Polling Rate (issue #6) -->
     <div style="margin-top:1.5rem;">
       <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:600;">📡 POLLING RATE</div>
+      <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">Indisponível no stack HID++ atual — nenhuma frequência é exibida como ativa, nenhum comando é enviado ao hardware.</div>
       <div class="button-selector" id="pollingSelector">
-        <button class="btn-option" onclick="setPolling(125)">125 Hz</button>
-        <button class="btn-option" onclick="setPolling(250)">250 Hz</button>
-        <button class="btn-option" onclick="setPolling(500)">500 Hz</button>
-        <button class="btn-option active" onclick="setPolling(1000)">1000 Hz</button>
+        <button class="btn-option" disabled>125 Hz</button>
+        <button class="btn-option" disabled>250 Hz</button>
+        <button class="btn-option" disabled>500 Hz</button>
+        <button class="btn-option" disabled>1000 Hz</button>
       </div>
     </div>
 
-    <!-- Profiles -->
-    <div style="margin-top:1rem;">
-      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:600;">👤 PERFIS</div>
-      <div class="profile-grid" id="profileGrid"></div>
-    </div>
   </div>
 
   <!-- Auto-Clicker Card -->
@@ -925,21 +917,6 @@ let state = {
   connected: false,
 };
 
-const PRESETS = {
-  "CS:GO AWP": 400,
-  "FPS Geral": 800,
-  "Minecraft PvP": 1200,
-  "Flick Shots": 1600,
-  "Máximo": 25600,
-};
-
-const PROFILES = [
-  { name: "Minecraft", emoji: "⛏️", key: "minecraft" },
-  { name: "CS:GO", emoji: "🔫", key: "csgo" },
-  { name: "Default", emoji: "⚙️", key: "default" },
-  { name: "Custom", emoji: "✨", key: "custom" },
-];
-
 // ─── API Helpers ────────────────────────────────────────
 async function api(method, path, data = null) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
@@ -985,19 +962,6 @@ function updatePresetHighlight(dpi) {
   });
 }
 
-function renderPresets() {
-  const grid = document.getElementById('presetGrid');
-  grid.innerHTML = '';
-  for (const [name, dpi] of Object.entries(PRESETS)) {
-    const btn = document.createElement('button');
-    btn.className = 'preset-btn';
-    btn.dataset.dpi = dpi;
-    btn.onclick = () => setDPI(dpi);
-    btn.innerHTML = `<div class="preset-dpi">${dpi}</div><div class="preset-name">${name}</div>`;
-    grid.appendChild(btn);
-  }
-}
-
 // ─── Sensitivity ────────────────────────────────────────
 function updateSensitivity(value) {
   value = parseInt(value);
@@ -1012,46 +976,16 @@ function updateSensitivity(value) {
   }, 200);
 }
 
-// ─── Polling Rate (UI only - Logitech G403 on-board) ───
+// ─── Polling Rate (issue #6) ───
+// O G403 HERO não tem alteração de polling rate confirmável pelo stack
+// HID++ atual (feature Report Rate 0x8060 não implementada; sem
+// validação em hardware real). Nenhuma frequência é exibida como ativa
+// e nenhuma chamada gera sucesso falso ou efeito HID.
 function setPolling(hz) {
-  document.querySelectorAll('#pollingSelector .btn-option').forEach(btn => {
-    btn.classList.toggle('active', btn.textContent.includes(hz));
-  });
-  toast(`Polling rate definido para ${hz} Hz`, 'success');
+  // Não executado: os botões estão desabilitados e não simulam sucesso.
 }
 
 // ─── Profiles ───────────────────────────────────────────
-function renderProfiles() {
-  const grid = document.getElementById('profileGrid');
-  grid.innerHTML = '';
-  PROFILES.forEach(p => {
-    const card = document.createElement('div');
-    card.className = 'profile-card';
-    card.onclick = () => loadProfile(p.key);
-    card.innerHTML = `
-      <div class="profile-emoji">${p.emoji}</div>
-      <div class="profile-name">${p.name}</div>
-    `;
-    grid.appendChild(card);
-  });
-}
-
-async function loadProfile(name) {
-  const result = await api('POST', '/api/profile/load', { name });
-  if (result && result.ok) {
-    const profile = result.profile;
-    setDPI(profile.dpi);
-    updateSensitivity(profile.sensitivity);
-    document.getElementById('sensSlider').value = profile.sensitivity;
-    toast(`Perfil "${name}" carregado!`, 'success');
-
-    document.querySelectorAll('.profile-card').forEach(c => c.classList.remove('active'));
-    event.currentTarget.classList.add('active');
-  } else {
-    toast('Perfil não encontrado', 'error');
-  }
-}
-
 // ─── Auto-Clicker ───────────────────────────────────────
 function updateCPS(value) {
   value = parseInt(value);
@@ -1205,8 +1139,6 @@ function toast(message, type = 'success') {
 
 // ─── Init ───────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  renderPresets();
-  renderProfiles();
   loadMacros();
   pollStatus();
 
