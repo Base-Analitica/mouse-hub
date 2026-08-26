@@ -38,8 +38,9 @@ from mouse_hub.core.mouse_controller import (
     MouseController as CoreMouseController,
     make_linux_controller,
 )
-from mouse_hub.core.config import ConfigPaths
+from mouse_hub.core.config import ConfigError, ConfigPaths
 from mouse_hub.core.capabilities import CapabilityState
+from mouse_hub.core.profiles import ProfileStore
 from mouse_hub.platform.linux import LinuxHidAccess
 from mouse_hub.platform.linux.input import LinuxSystemInput
 
@@ -1181,12 +1182,14 @@ class DPIPage(QWidget):
         presets = QHBoxLayout()
         presets.setSpacing(12)
 
+        # Presets com valores vindos da fonte unica de verdade
+        # (DPI_PRESETS em core/constants) — issue #6.
         preset_data = [
-            ("🎯 CS:GO AWP", 400, COLORS["success"]),
-            ("🔫 FPS Geral", 800, COLORS["accent"]),
-            ("⛏️ Minecraft PvP", 1200, COLORS["warning"]),
-            ("⚡ Flick Shots", 1600, COLORS["danger"]),
-            ("🚀 Máximo", 25600, COLORS["text_muted"]),
+            ("🎯 CS:GO AWP", DPI_PRESETS["Low (CS:GO AWP)"], COLORS["success"]),
+            ("🔫 FPS Geral", DPI_PRESETS["Medium (FPS Geral)"], COLORS["accent"]),
+            ("⛏️ Minecraft PvP", DPI_PRESETS["High (Minecraft PvP)"], COLORS["warning"]),
+            ("⚡ Flick Shots", DPI_PRESETS["Ultra (Flick Shots)"], COLORS["danger"]),
+            ("🚀 Max Speed", DPI_PRESETS["Max Speed"], COLORS["text_muted"]),
         ]
 
         # Botões expostos para a suíte de integração (QTest/direct emit).
@@ -1429,36 +1432,98 @@ class SensitivityPage(QWidget):
 
         layout.addStretch()
 
-        # Polling rate
-        pr_title = QLabel("📡  Polling Rate")
-        pr_title.setStyleSheet(f"font-size: 16px; font-weight: 700; background: transparent;")
+        
+        # Polling rate — issue #6. O G403 HERO não tem alteração de
+        # polling rate confirmável pelo stack HID++ atual (feature
+        # Report Rate 0x8060 não implementada na descoberta de
+        # features; sem validação em hardware real). A capacidade
+        # permanece indisponível: nenhuma frequência é apresentada
+        # como ativa e os botões não executam NENHUM comando — sem
+        # sucesso falso nem simulação visual.
+        pr_title = QLabel("U0001f4e1  Polling Rate")
+        pr_title.setStyleSheet("font-size: 16px; font-weight: 700; background: transparent;")
         layout.addWidget(pr_title)
 
+        self.polling_hint = QLabel("")
+        self.polling_hint.setWordWrap(True)
+        self.polling_hint.setStyleSheet(
+            "color: %s; font-size: 12px; background: transparent;"
+            % COLORS["text_muted"]
+        )
+        layout.addWidget(self.polling_hint)
+
+        self.polling_buttons = []
         pr_row = QHBoxLayout()
         pr_row.setSpacing(12)
         for hz in ["125 Hz", "250 Hz", "500 Hz", "1000 Hz"]:
             btn = QPushButton(hz)
             btn.setFixedHeight(44)
             btn.setCursor(QCursor(Qt.PointingHandCursor))
-            active = hz == "1000 Hz"
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {COLORS['accent'] if active else COLORS['bg_card']};
-                    color: {'white' if active else COLORS['text_secondary']};
-                    border: 1px solid {COLORS['accent'] if active else COLORS['border']};
+            # Nenhuma frequência é apresentada como ativa; os botões
+            # ficam desabilitados até haver capacidade confirmada.
+            btn.setEnabled(False)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: %s;
+                    color: %s;
+                    border: 1px solid %s;
                     border-radius: 10px;
                     font-size: 13px;
                     font-weight: 700;
-                }}
-                QPushButton:hover {{
-                    border-color: {COLORS['accent']};
-                }}
-            """)
+                }
+            """ % (COLORS["bg_card"], COLORS["text_dim"], COLORS["border"]))
             pr_row.addWidget(btn)
+            self.polling_buttons.append(btn)
         pr_row.addStretch()
         layout.addLayout(pr_row)
 
         layout.addStretch()
+
+        # Estado real de polling rate refletido no build (issue #6).
+        self._sync_polling()
+
+    def _sync_polling(self):
+        """Reflete o estado REAL da capacidade polling_rate_available
+        (issue #6): indisponível → razão precisa exibida, botões
+        desabilitados, nenhuma frequência ativa. Chamado no build e no
+        showEvent (refresh explícito, sem polling periódico)."""
+        if self.state is None:
+            self.polling_hint.setText(
+                "🔴 Polling rate indisponível: o stack HID++ atual não "
+                "implementa a feature Report Rate do G403."
+            )
+            self.polling_hint.setStyleSheet(
+                "color: %s; font-size: 12px; background: transparent;"
+                % COLORS["danger"]
+            )
+            for btn in self.polling_buttons:
+                btn.setEnabled(False)
+            return
+        caps = self.state.capability_state()
+        available = caps.is_available("polling_rate_available")
+        reason = caps.reason_for("polling_rate_available")
+        if available:
+            self.polling_hint.setText("🟢 Polling rate disponível")
+            self.polling_hint.setStyleSheet(
+                "color: %s; font-size: 12px; background: transparent;"
+                % COLORS["mc_green"]
+            )
+            for btn in self.polling_buttons:
+                btn.setEnabled(True)
+        else:
+            summary = (
+                reason if reason else
+                "capacidade não disponível no ambiente atual"
+            )
+            self.polling_hint.setText(
+                "🔴 Polling rate indisponível: %s" % summary
+            )
+            self.polling_hint.setStyleSheet(
+                "color: %s; font-size: 12px; background: transparent;"
+                % COLORS["danger"]
+            )
+            for btn in self.polling_buttons:
+                btn.setEnabled(False)
 
     def _on_slider_preview(self, val):
         """PREVIEW apenas: altera somente o display. O efeito no
@@ -1505,6 +1570,7 @@ class SensitivityPage(QWidget):
                 self.slider.setValue(confirmed)
             else:
                 self.sens_value.setText(UNKNOWN_VALUE_TEXT)
+        self._sync_polling()
 
 
 class AutoClickerPage(QWidget):
@@ -2047,11 +2113,31 @@ class MacrosPage(QWidget):
         self._refresh_list()
 
 class ProfilesPage(QWidget):
-    """Pagina de Perfis"""
-    def __init__(self, mc, state=None):
+    """Pagina de Perfis
+
+    Fonte unica de verdade: ProfileStore do core (config.json XDG).
+    A pagina NUNCA mantem lista propria de perfis/presets — consulta o
+    store e aplica perfis pelos MESMOS servicos das telas de DPI
+    (set_hardware_dpi) e sensibilidade (set_sensitivity), como duas
+    operacoes independentes (issue #3/#6).
+
+    Regras (issue #6):
+    * arquivo corrompido/ilegivel → estado de erro visivel, sem
+      sobrescrever nada;
+    * perfil ativo so e indicado quando o estado confirmado do
+      sistema/hardware corresponde ao perfil (quando determinavel);
+    * falha de DPI nunca vira sucesso global nem altera sensibilidade
+      automaticamente; estado parcial explicito quando apenas parte
+      pode ser confirmada.
+    """
+
+    def __init__(self, mc, state=None, store=None):
         super().__init__()
         self.mc = mc
         self.state = state
+        self.store = store if store is not None else ProfileStore(ConfigPaths.xdg())
+        self.profiles = []
+        self.profile_cards = {}  # name -> dict de widgets do card
         self._build()
 
     def _build(self):
@@ -2060,102 +2146,329 @@ class ProfilesPage(QWidget):
         layout.setSpacing(12)
 
         title = QLabel("👤  Perfis")
-        title.setStyleSheet(f"font-size: 24px; font-weight: 900; background: transparent;")
+        title.setStyleSheet("font-size: 24px; font-weight: 900; background: transparent;")
         layout.addWidget(title)
 
-        profiles = [
-            ("⛏️", "Minecraft PvP", 1200, 60, COLORS["mc_green"]),
-            ("🔫", "CS:GO", 400, 30, COLORS["accent"]),
-            ("⚙️", "Default", 800, 50, COLORS["text_secondary"]),
-            ("✨", "Fortnite", 1600, 70, COLORS["warning"]),
-        ]
+        # Estado da configuracao (fonte de verdade).
+        self.config_hint = QLabel("")
+        self.config_hint.setWordWrap(True)
+        self.config_hint.setStyleSheet(
+            "color: %s; font-size: 12px; background: transparent;" % COLORS["text_muted"]
+        )
+        layout.addWidget(self.config_hint)
 
-        grid = QGridLayout()
-        grid.setSpacing(16)
+        # Feedback de aplicacao de perfil (desfecho confirmado).
+        self.apply_hint = QLabel("")
+        self.apply_hint.setWordWrap(True)
+        self.apply_hint.setStyleSheet(
+            "color: %s; font-size: 12px; background: transparent;" % COLORS["text_muted"]
+        )
+        layout.addWidget(self.apply_hint)
 
-        for i, (icon, name, dpi, sens, color) in enumerate(profiles):
-            card = QFrame()
-            card.setFixedSize(180, 140)
-            card.setCursor(QCursor(Qt.PointingHandCursor))
-            card.setStyleSheet(f"""
-                QFrame {{
-                    background: {COLORS['bg_card']};
-                    border: 2px solid {COLORS['border']};
-                    border-radius: 16px;
-                    padding: 16px;
-                }}
-                QFrame:hover {{
-                    border-color: {color};
-                }}
-            """)
-            cl = QVBoxLayout(card)
+        # Grid de perfis (recarregado do ProfileStore a cada refresh).
+        self.grid = QGridLayout()
+        self.grid.setSpacing(16)
+        layout.addLayout(self.grid)
 
-            ic = QLabel(icon)
-            ic.setStyleSheet(f"font-size: 32px; background: transparent;")
-            cl.addWidget(ic)
+        # ── Criacao/edicao de perfil customizado ────────────────────
+        form_label = QLabel("✏️  Criar / Editar Perfil")
+        form_label.setStyleSheet("font-size: 16px; font-weight: 700; background: transparent;")
+        layout.addWidget(form_label)
 
-            nm = QLabel(name)
-            nm.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {color}; background: transparent;")
-            cl.addWidget(nm)
+        form = QHBoxLayout()
+        form.setSpacing(10)
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("Nome do perfil")
+        self.name_input.setFixedWidth(180)
+        self.name_input.setStyleSheet(
+            "QLineEdit { background: %s; border: 1px solid %s;"
+            "border-radius: 8px; padding: 8px; font-size: 13px; }"
+            % (COLORS["bg_input"], COLORS["border"])
+        )
+        self.dpi_input = QSpinBox()
+        self.dpi_input.setRange(DPI_MIN, DPI_MAX)
+        self.dpi_input.setSingleStep(DPI_STEP)
+        self.dpi_input.setValue(DPI_DEFAULT)
+        self.dpi_input.setSuffix(" DPI")
+        self.sens_input = QSpinBox()
+        self.sens_input.setRange(0, 100)
+        self.sens_input.setValue(SENSITIVITY_DEFAULT)
+        self.sens_input.setSuffix("%")
+        self.save_btn = AccentButton("💾 Salvar Perfil")
+        self.save_btn.clicked.connect(self._save_custom)
+        self.clear_btn = QPushButton("✖ Cancelar")
+        self.clear_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.clear_btn.clicked.connect(self._clear_form)
+        form.addWidget(self.name_input)
+        form.addWidget(self.dpi_input)
+        form.addWidget(self.sens_input)
+        form.addWidget(self.save_btn)
+        form.addWidget(self.clear_btn)
+        form.addStretch()
+        layout.addLayout(form)
 
-            det = QLabel(f"DPI: {dpi}  •  Sens: {sens}%")
-            det.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
-            cl.addWidget(det)
-
-            cl.addStretch()
-
-            # Button
-            apply = QPushButton("Aplicar")
-            apply.setCursor(QCursor(Qt.PointingHandCursor))
-            apply.setStyleSheet(f"""
-                QPushButton {{
-                    background: {color};
-                    color: white;
-                    border: none;
-                    border-radius: 8px;
-                    padding: 6px;
-                    font-size: 12px;
-                    font-weight: 700;
-                }}
-                QPushButton:hover {{ opacity: 0.8; }}
-            """)
-            apply.clicked.connect(lambda _, d=dpi, s=sens: self._apply(d, s))
-            cl.addWidget(apply)
-
-            grid.addWidget(card, i // 2, i % 2)
-
-        layout.addLayout(grid)
         layout.addStretch()
 
+        # Fonte de verdade carregada somente depois de o formulario
+        # existir (o estado de erro da config desabilita os campos).
+        self._reload()
+
+    def _reload(self):
+        """Rele a fonte unica (ProfileStore). Config corrompida ou
+        ilegivel → estado de erro visivel, sem sobrescrever o arquivo
+        nem apresentar valores nao confirmados."""
+        while self.grid.count():
+            item = self.grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.profile_cards = {}
+        self.profiles = []
+        try:
+            profiles = self.store.list_profiles()
+        except ConfigError as exc:
+            self.config_hint.setText(
+                "🔴 Nao foi possivel ler os perfis: %s "
+                "O arquivo de configuracao NAO foi alterado." % str(exc)
+            )
+            self.config_hint.setStyleSheet(
+                "color: %s; font-size: 12px; background: transparent;" % COLORS["danger"]
+            )
+            self._set_form_enabled(False)
+            return
+        self._set_form_enabled(True)
+        self.config_hint.setText("")
+        self.profiles = profiles
+        for i, profile in enumerate(profiles):
+            self._add_card(profile, i)
+        self._refresh_active()
+
+    def _set_form_enabled(self, enabled):
+        """Desabilita o formulario quando a configuracao nao e
+        legivel (mutacao bloqueada por config corrompida/ilegivel)."""
+        for widget in (self.name_input, self.dpi_input,
+                       self.sens_input, self.save_btn):
+            widget.setEnabled(enabled)
+
+    def _add_card(self, profile, index):
+        """Cria o card de um perfil lido do store."""
+        color = COLORS["accent"]
+        if profile.name == "minecraft":
+            color = COLORS["mc_green"]
+        elif profile.name == "csgo":
+            color = COLORS["accent"]
+        elif profile.name == "default":
+            color = COLORS["text_secondary"]
+        elif profile.name == "fortnite":
+            color = COLORS["warning"]
+
+        card = QFrame()
+        card.setFixedSize(200, 185)
+        card.setCursor(QCursor(Qt.PointingHandCursor))
+        card.setObjectName("profileCard")
+        card.setStyleSheet(
+            "QFrame#profileCard { background: %s; border: 2px solid %s;"
+            "border-radius: 16px; padding: 12px; }"
+            "QFrame#profileCard:hover { border-color: %s; }"
+            % (COLORS["bg_card"], COLORS["border"], color)
+        )
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(12, 10, 12, 10)
+        cl.setSpacing(4)
+
+        top = QHBoxLayout()
+        ic = QLabel("🖱️")
+        ic.setStyleSheet("font-size: 22px; background: transparent;")
+        top.addWidget(ic)
+        top.addStretch()
+        active_badge = QLabel("")
+        active_badge.setStyleSheet("font-size: 11px; font-weight: 700; background: transparent;")
+        top.addWidget(active_badge)
+        cl.addLayout(top)
+
+        nm = QLabel(profile.name)
+        nm.setStyleSheet(
+            "font-size: 15px; font-weight: 700; color: %s; background: transparent;" % color
+        )
+        cl.addWidget(nm)
+
+        det = QLabel("DPI: %d  •  Sens: %d%%" % (profile.dpi, profile.sensitivity))
+        det.setStyleSheet(
+            "color: %s; font-size: 11px; background: transparent;" % COLORS["text_muted"]
+        )
+        cl.addWidget(det)
+
+        cl.addStretch()
+
+        apply = QPushButton("Aplicar")
+        apply.setCursor(QCursor(Qt.PointingHandCursor))
+        apply.setStyleSheet(
+            "QPushButton { background: %s; color: white; border: none;"
+            "border-radius: 8px; padding: 5px; font-size: 12px; font-weight: 700; }"
+            "QPushButton:hover { opacity: 0.8; }" % color
+        )
+        apply.clicked.connect(lambda _, p=profile: self._apply(p))
+        cl.addWidget(apply)
+
+        edit = QPushButton("Editar")
+        edit.setCursor(QCursor(Qt.PointingHandCursor))
+        edit.setStyleSheet(
+            "QPushButton { background: transparent; color: %s;"
+            "border: 1px solid %s; border-radius: 8px; padding: 4px;"
+            "font-size: 11px; font-weight: 600; }"
+            "QPushButton:hover { border-color: %s; color: %s; }"
+            % (COLORS["text_secondary"], COLORS["border"], color, color)
+        )
+        edit.clicked.connect(lambda _, p=profile: self._start_edit(p))
+        cl.addWidget(edit)
+
+        self.grid.addWidget(card, index // 2, index % 2)
+        self.profile_cards[profile.name] = {
+            "card": card,
+            "active_badge": active_badge,
+        }
+
+    def _refresh_active(self):
+        """Marca o card do perfil ativo (estado confirmado corresponde
+        ao perfil) ou limpa todos quando nao determinavel."""
+        active = self.active_profile()
+        for name, widgets in self.profile_cards.items():
+            badge = widgets["active_badge"]
+            card = widgets["card"]
+            if name == active:
+                badge.setText("✔ Ativo")
+                badge.setStyleSheet(
+                    "color: %s; font-size: 11px; font-weight: 700; background: transparent;"
+                    % COLORS["mc_green"]
+                )
+                card.setStyleSheet(
+                    "QFrame#profileCard { background: %s; border: 2px solid %s;"
+                    "border-radius: 16px; padding: 12px; }"
+                    % (COLORS["bg_card"], COLORS["mc_green"])
+                )
+            else:
+                badge.setText("")
+                card.setStyleSheet(
+                    "QFrame#profileCard { background: %s; border: 2px solid %s;"
+                    "border-radius: 16px; padding: 12px; }"
+                    "QFrame#profileCard:hover { border-color: %s; }"
+                    % (COLORS["bg_card"], COLORS["border"], COLORS["accent"])
+                )
+
+    def active_profile(self):
+        """Nome do perfil ativo, ou None quando nao determinavel.
+
+        Um perfil so e considerado ativo quando o estado CONFIRMADO do
+        sistema/hardware corresponde exatamente ao perfil: applied_dpi
+        == profile.dpi E applied_sensitivity == profile.sensitivity.
+        Se qualquer valor confirmado for None (desconhecido), nao ha
+        como afirmar que o perfil esta ativo."""
+        if self.state is None:
+            return None
+        dpi = self.state.applied_dpi
+        sens = self.state.applied_sensitivity
+        if dpi is None or sens is None:
+            return None
+        for profile in self.profiles:
+            if profile.dpi == dpi and profile.sensitivity == sens:
+                return profile.name
+        return None
+
+    def _apply(self, profile):
+        """Aplica um perfil: DPI fisico e sensibilidade como operacoes
+        INDEPENDENTES (issue #3/#6).
+
+        A sensibilidade nunca e alterada como fallback de falha de
+        DPI; falha de DPI nao vira sucesso global; estado parcial
+        explicito quando apenas parte e confirmada."""
+        if self.state is None:
+            self.mc.set_dpi(profile.dpi)
+            self.mc.set_sensitivity(profile.sensitivity)
+            return
+        dpi_result = self.state.set_hardware_dpi(profile.dpi)
+        sens_result = self.state.set_sensitivity(profile.sensitivity)
+        self._render_apply_feedback(profile, dpi_result, sens_result)
+        self._refresh_active()
+
+    def _render_apply_feedback(self, profile, dpi_result, sens_result):
+        """Exibe o desfecho confirmado da aplicacao do perfil.
+
+        * ambos confirmados → sucesso;
+        * apenas um confirmado → estado parcial explicito;
+        * ambos falharam → falha, nunca sucesso."""
+        dpi_ok = dpi_result.status.ok
+        sens_ok = sens_result.status.ok
+        if dpi_ok and sens_ok:
+            text = "✔ Perfil '%s' aplicado: DPI e sensibilidade confirmados." % profile.name
+            color = COLORS["mc_green"]
+        elif dpi_ok:
+            text = ("⚠ Perfil '%s' aplicado PARCIALMENTE: DPI "
+                    "confirmado; sensibilidade falhou (%s)." %
+                    (profile.name, _result_text(sens_result)))
+            color = COLORS["warning"]
+        elif sens_ok:
+            text = ("⚠ Perfil '%s' aplicado PARCIALMENTE: "
+                    "sensibilidade confirmada; DPI falhou (%s)." %
+                    (profile.name, _result_text(dpi_result)))
+            color = COLORS["warning"]
+        else:
+            text = ("✘ Perfil '%s' NAO aplicado: DPI falhou "
+                    "(%s); sensibilidade falhou (%s)." %
+                    (profile.name, _result_text(dpi_result),
+                     _result_text(sens_result)))
+            color = COLORS["danger"]
+        self.apply_hint.setText(text)
+        self.apply_hint.setStyleSheet(
+            "color: %s; font-size: 12px; background: transparent;" % color
+        )
+
+    def _save_custom(self):
+        """Cria/atualiza um perfil atraves do ProfileStore (fonte
+        persistente real). Falha (incluindo config corrompida ou
+        ilegivel) nunca vira sucesso e nunca sobrescreve o arquivo."""
+        name = self.name_input.text().strip()
+        if not name:
+            self.apply_hint.setText("⚠ Informe um nome para o perfil.")
+            self.apply_hint.setStyleSheet(
+                "color: %s; font-size: 12px; background: transparent;" % COLORS["warning"]
+            )
+            return
+        outcome = self.store.save_profile(
+            name, self.dpi_input.value(), self.sens_input.value()
+        )
+        if not outcome.success:
+            self.apply_hint.setText(
+                "✘ Nao foi possivel salvar o perfil '%s': %s" % (name, outcome.message)
+            )
+            self.apply_hint.setStyleSheet(
+                "color: %s; font-size: 12px; background: transparent;" % COLORS["danger"]
+            )
+            return
+        self.apply_hint.setText("✔ Perfil '%s' salvo na configuracao." % name)
+        self.apply_hint.setStyleSheet(
+            "color: %s; font-size: 12px; background: transparent;" % COLORS["mc_green"]
+        )
+        self._clear_form()
+        self._reload()
+
+    def _start_edit(self, profile):
+        """Carrega os valores do perfil no formulario de edicao."""
+        self.name_input.setText(profile.name)
+        self.dpi_input.setValue(profile.dpi)
+        self.sens_input.setValue(profile.sensitivity)
+
+    def _clear_form(self):
+        self.name_input.clear()
+        self.dpi_input.setValue(DPI_DEFAULT)
+        self.sens_input.setValue(SENSITIVITY_DEFAULT)
+
     def showEvent(self, event):
-        """Refresh explícito das capacidades ao abrir a página
-        (revisão PR #21 — sem polling periódico)."""
+        """Refresh explicito das capacidades e da fonte de perfis ao
+        abrir a pagina (revisao PR #21 — sem polling periodico)."""
         super().showEvent(event)
         if self.state is not None:
             self.state.refresh()
-
-    def _apply(self, dpi, sens):
-        """Aplica um perfil: DPI físico e sensibilidade como operações
-        INDEPENDENTES (issue #3) — a sensibilidade nunca é alterada
-        como fallback de uma falha de DPI.
-
-        Cada operação usa seu próprio caminho real no core e reporta
-        o desfecho confirmado; nenhuma falha é apresentada como
-        sucesso."""
-        if self.state is not None:
-            dpi_result = self.state.set_hardware_dpi(dpi)
-            sens_result = self.state.set_sensitivity(sens)
-            self._log_profile(dpi, dpi_result, "DPI")
-            self._log_profile(sens, sens_result, "Sensibilidade")
-        else:
-            self.mc.set_dpi(dpi)
-            self.mc.set_sensitivity(sens)
-
-    @staticmethod
-    def _log_profile(value, result, label):
-        """Registra o desfecho confirmado de cada aplicação de perfil."""
-        marker = "✔" if result.ok else "✘"
-        print(f"[{label} {value}] {marker} {_result_text(result)}")
+        self._reload()
 
 
 class SettingsPage(QWidget):
@@ -2404,7 +2717,7 @@ class MouseHubApp(QMainWindow):
         self.sens_page = SensitivityPage(self.mc, state=self.mouse_state)
         self.clicker_page = AutoClickerPage(self.mc, self.ac, self.svc)
         self.macros_page = MacrosPage(self.me, self.svc)
-        self.profiles_page = ProfilesPage(self.mc, state=self.mouse_state)
+        self.profiles_page = ProfilesPage(self.mc, state=self.mouse_state, store=ProfileStore(ConfigPaths.xdg()))
         self.settings_page = SettingsPage(self.mc, self.ac, self.me, self.svc)
 
         # Sem thread de estado do mouse (revisão PR #21): o refresh
