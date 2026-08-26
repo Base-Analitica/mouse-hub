@@ -125,6 +125,12 @@ class MouseController:
         # para nunca colapsar permission_denied/device_not_found/falha
         # genérica em um único accessible=False).
         self._probe_access_status: Optional[OperationStatus] = None
+        # Causa da ÚLTIMA falha do próprio comando SetSensorDPI
+        # (timeout/protocol_error). None = sem falha ou recuperado por
+        # re-probe. Capability: hardware_dpi_available deixa de ser True
+        # após falha real da operação de DPI mesmo com transporte
+        # acessível (revisão PR #21) — hid_available permanece separado.
+        self._dpi_set_error_reason: Optional[str] = None
         # Persister do DPI: quem chama injeta (tests: NeverDpiPersister;
         # produção: DpiConfigPersister via make_linux_controller).
         self._dpi_persister = dpi_persister or NeverDpiPersister()
@@ -171,6 +177,7 @@ class MouseController:
             self._dpi_feature_index = None
             self._probe_accessible = None
             self._probe_access_status = None
+            self._dpi_set_error_reason = None
             if device is None:
                 return OperationResult.device_not_found(
                     "Nenhum dispositivo registrado"
@@ -184,6 +191,7 @@ class MouseController:
         self._dpi_feature_index = None
         self._probe_accessible = None
         self._probe_access_status = None
+        self._dpi_set_error_reason = None
         if device.hidraw_path is None:
             return OperationResult.unsupported(
                 "Dispositivo sem interface hidraw acessível"
@@ -201,6 +209,7 @@ class MouseController:
         self._probe_access_status = status
         self._probe_accessible = False
         self._dpi_feature_index = None
+        self._dpi_set_error_reason = None
 
     def probe_endpoint(self) -> OperationResult:
         """Valida o dispositivo registrado no protocolo HID++ 2.0.
@@ -245,6 +254,7 @@ class MouseController:
         self._dpi_feature_index = None
         self._probe_accessible = None
         self._probe_access_status = None
+        self._dpi_set_error_reason = None
 
         selection = HydppEndpointSelection(self._hid)
         try:
@@ -455,24 +465,36 @@ class MouseController:
                     "(descritor hidraw indisponível na leitura)"
                 )
             if ack_result.kind == AckResultKind.TIMEOUT:
+                # Falha real da PRÓPRIA operação de DPI (endpoint mudo):
+                # a capability hardware_dpi_available deixa de ser True —
+                # hid_available permanece separado (transporte acessível).
+                # Recuperação: apenas nova evidência (re-probe confirmado).
+                self._dpi_set_error_reason = "timeout"
                 return OperationResult.failed(
                     "Comando de DPI enviado sem ACK do dispositivo "
-                    "(nenhuma resposta dentro da janela de espera)"
+                    "(nenhuma resposta dentro da janela de espera)",
+                    dpi_set_error="timeout",
                 )
             if ack_result.kind == AckResultKind.PROTOCOL_ERROR:
                 # Erro FAP correlacionado: report longo com feature_index
                 # 0xFF e function do request ecoada — pertence a ESTE
                 # request, não a evento assíncrono de outro cliente.
+                # Falha real da operação de DPI: hardware_dpi_available
+                # deixa de ser True (hid_available permanece separado).
+                self._dpi_set_error_reason = "protocol_error"
                 return OperationResult.failed(
                     f"Comando de DPI rejeitado pelo dispositivo "
                     f"(erro HID++ 2.0 {ack_result.error_code:#04x})",
                     hidpp_error=ack_result.error_code,
+                    dpi_set_error="protocol_error",
                 )
         finally:
             if opened:
                 self._hid.close()
 
-        # Só agora o efeito é considerado confirmado.
+        # Só agora o efeito é considerado confirmado — e a falha da
+        # operação de DPI (se houve) é recuperada por evidência nova.
+        self._dpi_set_error_reason = None
         self._applied_dpi = effective
         persist_result = _persist_applied_dpi(
             effective, self._device, self._dpi_persister
@@ -631,6 +653,24 @@ class MouseController:
                 return False, "endpoint nunca probeado; feature index desconhecido"
             if not feature_supported:
                 return False, "feature Adjustable DPI (0x2201) ausente no dispositivo"
+            if self._dpi_set_error_reason is not None:
+                # Falha real da própria operação SetSensorDPI (timeout ou
+                # erro de protocolo correlacionado): a capability NÃO
+                # permanece afirmativa sem nova evidência (re-probe).
+                # hid_available permanece separado — o transporte segue
+                # comprovadamente acessível.
+                if self._dpi_set_error_reason == "timeout":
+                    return (
+                        False,
+                        "comando SetSensorDPI terminou em timeout — "
+                        "execute refresh/re-probe para nova evidência",
+                    )
+                return (
+                    False,
+                    "comando SetSensorDPI rejeitado pelo dispositivo "
+                    "(erro de protocolo HID++) — execute refresh/re-probe "
+                    "para nova evidência",
+                )
             return True
 
         def _sensitivity_available() -> object:
