@@ -49,30 +49,37 @@ class MemoryStabilityTest(unittest.TestCase):
         qt = QApplication.instance() or QApplication(sys.argv)
         pid = os.getpid()
         window = mouse_hub_app.MouseHubApp()
+        window.show()
+        qt.processEvents()
 
-        # Warm-up: lazy allocations do Qt (temas, fontes, ícones)
-        # acontecem nas primeiras interações do event loop. Sem o
-        # warm-up, esse crescimento normal seria contado como leak.
-        for _ in range(5):
-            time.sleep(1)
-            qt.processEvents()
+        try:
+            # Warm-up: lazy allocations do Qt (temas, fontes, ícones)
+            # acontecem nas primeiras interações do event loop. Sem o
+            # warm-up, esse crescimento normal seria contado como leak.
+            for _ in range(5):
+                time.sleep(1)
+                qt.processEvents()
 
-        baseline = rss_kb(pid)
-        samples = []
-        t0 = time.monotonic()
-        deadline = t0 + 120
-        while time.monotonic() < deadline:
-            time.sleep(10)
-            # O event loop continua sendo processado durante toda a
-            # sessão (imersão a cada 10 s) — timers e callbacks
-            # registrados seguem rodando.
-            qt.processEvents()
-            samples.append({
-                "t_s": round(time.monotonic() - t0, 1),
-                "rss_kb": rss_kb(pid),
-            })
-        window.close()
-        rss_final = rss_kb(pid)
+            baseline = rss_kb(pid)
+            samples = []
+            t0 = time.monotonic()
+            deadline = t0 + 120
+            while time.monotonic() < deadline:
+                time.sleep(10)
+                # O event loop continua sendo processado durante toda a
+                # sessão (imersão a cada 10 s) — timers e callbacks
+                # registrados seguem rodando.
+                qt.processEvents()
+                samples.append({
+                    "t_s": round(time.monotonic() - t0, 1),
+                    "rss_kb": rss_kb(pid),
+                })
+            # Medir enquanto a janela continua viva; fechar antes desta
+            # leitura poderia liberar recursos e esconder crescimento.
+            rss_final = rss_kb(pid)
+        finally:
+            window.close()
+
         growth_kb = rss_final - baseline
         growth_pct = growth_kb / baseline * 100 if baseline else 0
 

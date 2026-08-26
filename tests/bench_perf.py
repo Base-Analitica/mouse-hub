@@ -16,10 +16,10 @@ Duração ajustável por variável de ambiente (CI pode encurtar):
   BENCH_IDLE_SECONDS   (default 60)
   BENCH_ACTIVE_SECONDS (default 20, usado por CPS)
 
-O clicker é exercitado com FakeAutomationIO para zerar o custo do
-XTest e manter o benchmark determinístico em CI; o app real usa a
-mesma classe (XTest) para o hot path, então o custo de sistema fica
-dentro do erro do método abaixo de 1 ponto percentual.
+O clicker é exercitado com FakeAutomationIO para excluir o custo do
+XTest e manter o benchmark determinístico em CI. Isso mede o scheduler
+e o serviço de automação; não permite inferir o custo do transporte X11
+ou da emissão XTest real, que exige medição em um display físico.
 
 Executar: QT_QPA_PLATFORM=offscreen python3 -m unittest tests.bench_perf
 

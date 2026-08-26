@@ -29,6 +29,9 @@ jobs:
       - name: Benchmark mínimo (startup, idle, CPS) — versão encurtada do CI
         run: QT_QPA_PLATFORM=offscreen BENCH_IDLE_SECONDS=10 BENCH_ACTIVE_SECONDS=5 python3 -m unittest tests.bench_perf -v
 
+      - name: Benchmarks complementares (cold startup e gravação)
+        run: QT_QPA_PLATFORM=offscreen python3 -m unittest tests.bench_cold_startup tests.bench_recording -v
+
   ui_smoke:
     name: Smoke da UI (Xvfb)
     runs-on: ubuntu-latest
