@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 # Bootstrap: o launcher executa este script a partir de app/;
 # o pacote mouse_hub (automation) vive no repositório raiz.
@@ -51,7 +52,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import (
     Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize,
-    pyqtSignal, QObject, QThread, QPoint, QRect
+    pyqtSignal, QObject, QPoint, QRect
 )
 # ── Core único de automação (arquitetura PR #14) ─────────────
 # O AutomationService centraliza foco, gravação, playback e clicker —
@@ -334,8 +335,14 @@ class MouseController:
     # cache TTL), compartilhado por Dashboard, Auto-Clicker e Macros.
 
 
+# Valor exibido quando o estado físico NÃO é conhecido (nenhum ACK
+# confirmou o valor). Unknown NUNCA vira default na UI (revisão PR #21):
+# requested != applied != persisted; sem confirmação, não há valor a exibir.
+UNKNOWN_VALUE_TEXT = "—"
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-#  CORE STATE + MOUSE SERVICE (issue #3)
+#  CORE STATE (issue #3)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class MouseCoreState:
@@ -359,23 +366,26 @@ class MouseCoreState:
 
     def __init__(self, core: CoreMouseController):
         self._core = core
+        # Lock único de acesso ao controller (revisão PR #21): refresh/
+        # probe e operações nunca executam simultaneamente. RLock porque
+        # _evaluate() percorre capability_model() dentro do mesmo ciclo.
+        self._lock = threading.RLock()
         self._caps: CapabilityState = self._evaluate()
 
     # ── Valores confirmados ─────────────────────────────────────
 
     @property
-    def applied_dpi(self) -> int:
-        """DPI físico confirmado pelo hardware, ou default se ainda
-        desconhecido (estado físico real não é conhecido antes do ACK)."""
-        return self._core.applied_dpi if self._core.applied_dpi else DPI_DEFAULT
+    def applied_dpi(self) -> Optional[int]:
+        """DPI físico confirmado pelo hardware, ou None = desconhecido.
+
+        A UI NUNCA converte unknown em default (revisão PR #21):
+        requested != applied != persisted — sem ACK confirmado, não há
+        valor aplicado a exibir."""
+        return self._core.applied_dpi
 
     @property
-    def applied_sensitivity(self) -> int:
-        return (
-            self._core.applied_sensitivity
-            if self._core.applied_sensitivity is not None
-            else SENSITIVITY_DEFAULT
-        )
+    def applied_sensitivity(self) -> Optional[int]:
+        return self._core.applied_sensitivity
 
     # ── Descoberta / probe / capacidades ────────────────────────
 
@@ -385,23 +395,24 @@ class MouseCoreState:
         Nunca lança exceção para a UI: falhas de discovery/probe ficam
         refletidas nas capacidades (mouse_detected/hid_available etc.)
         e nos OperationResult das operações."""
-        try:
-            device = discover()
-            register = self._core.refresh_device(device)
-            if register.status == OperationStatus.UNSUPPORTED and device is not None:
-                # Dispositivo do G403 presente mas sem interface hidraw
-                # — não é falha de discovery, é capacidade ausente.
-                pass
+        with self._lock:
             try:
-                self._core.probe_endpoint()
+                device = discover()
+                register = self._core.refresh_device(device)
+                if register.status == OperationStatus.UNSUPPORTED and device is not None:
+                    # Dispositivo do G403 presente mas sem interface hidraw
+                    # — não é falha de discovery, é capacidade ausente.
+                    pass
+                try:
+                    self._core.probe_endpoint()
+                except OSError:
+                    # Falha real de acesso durante o probe: o core já
+                    # invalidou hid_available/hardware_dpi_available.
+                    pass
             except OSError:
-                # Falha real de acesso durante o probe: o core já
-                # invalidou hid_available/hardware_dpi_available.
+                # Ambiente sem /sys/hidraw legível: core fica sem device.
                 pass
-        except OSError:
-            # Ambiente sem /sys/hidraw legível: core fica sem device.
-            pass
-        self._caps = self._evaluate()
+            self._caps = self._evaluate()
 
     def capability_state(self) -> CapabilityState:
         # Última avaliação granular de capacidades (imutável).
@@ -420,21 +431,34 @@ class MouseCoreState:
 
         Nunca toca na sensibilidade: o core.set_hardware_dpi não altera
         nem consulta pointer_sensitivity (separação issue #3)."""
-        try:
-            return self._core.set_hardware_dpi(value)
-        except OSError:
-            return OperationResult.failed(
-                "Falha de transporte no descritor hidraw"
-            )
+        with self._lock:
+            try:
+                result = self._core.set_hardware_dpi(value)
+            except OSError:
+                result = OperationResult.failed(
+                    "Falha de transporte no descritor hidraw"
+                )
+            # Snapshot de capacidades reavaliado IMEDIATAMENTE após a
+            # operação (revisão PR #21): falha real de acesso invalida
+            # hid_available/hardware_dpi_available na hora — a UI nunca
+            # continua alegando disponibilidade antiga.
+            self._caps = self._evaluate()
+            return result
 
     def set_sensitivity(self, value: int) -> OperationResult:
         """Ação separada: altera SOMENTE a sensibilidade do ponteiro.
 
-        Operacao independente — não consulta nem altera o DPI físico."""
-        try:
-            return self._core.set_sensitivity(value)
-        except OSError:
-            return OperationResult.failed("Falha ao aplicar sensibilidade")
+        Operacao independente — não consulta nem altera o DPI físico.
+        Capacidades reavaliadas imediatamente após a operação."""
+        with self._lock:
+            try:
+                result = self._core.set_sensitivity(value)
+            except OSError:
+                result = OperationResult.failed(
+                    "Falha ao aplicar sensibilidade"
+                )
+            self._caps = self._evaluate()
+            return result
 
     # ── Internos ────────────────────────────────────────────────
 
@@ -442,40 +466,21 @@ class MouseCoreState:
         return self._core.capability_model().evaluate()
 
 
-class MouseService(QThread):
-    """Thread de background que mantém o core sincronizado com o hardware.
-
-    Roda discovery + probe em intervalo (independentemente de a UI estar
-    aberta na página de DPI) e reavalia as capacidades — a UI consulta o
-    MouseCoreState, que reflete sempre a última avaliação real.
-    """
-
-    def __init__(self, state: MouseCoreState, interval_ms: int = 3000):
-        super().__init__()
-        self._state = state
-        self._interval = interval_ms
-        self._stop = threading.Event()
-
-    def run(self):
-        while not self._stop.is_set():
-            self._state.refresh()
-            self._stop.wait(self._interval / 1000.0)
-
-    def stop(self):
-        self._stop.set()
-        self.wait(5000)
-
-
-def build_mouse_service():
+def build_mouse_state() -> MouseCoreState:
     """Composição de produção: discovery real + controller do core.
 
     Usa a infraestrutura existente da main: LinuxHidAccess/SystemInput
     Linux, make_linux_controller (persister real XDG) e probe_endpoint
-    antes de qualquer efeito HID."""
+    antes de qualquer efeito HID.
+
+    SEM thread de background (revisão PR #21): discovery+probe rodam no
+    startup, após operações (reavaliação de capacidades) e por refresh
+    EXPLÍCITO (ex.: abrir uma página de hardware) — nunca em loop
+    periódico, sem polling HID++ permanente."""
     hid = LinuxHidAccess()
     system_input = LinuxSystemInput()
     core = make_linux_controller(hid, system_input)
-    return MouseService(MouseCoreState(core))
+    return MouseCoreState(core)
 
 
 # Formatação de OperationResult para a UI (texto curto legível).
@@ -953,11 +958,27 @@ class DashboardPage(QWidget):
 
         self._update()
 
+    def showEvent(self, event):
+        """Refresh explícito do estado do hardware ao abrir a página
+        (revisão PR #21 — sem polling periódico)."""
+        super().showEvent(event)
+        if self.state is not None:
+            self.state.refresh()
+            self._update()
+
     def _update(self):
         self._sync_subtitle()
         if self.state is not None:
-            self.dpi_card.set_value(str(self.state.applied_dpi))
-            self.sens_card.set_value(f"{self.state.applied_sensitivity}%")
+            # Unknown NUNCA vira default (revisão PR #21): sem valor
+            # confirmado pelo hardware, exibe UNKNOWN.
+            dpi = self.state.applied_dpi
+            sens = self.state.applied_sensitivity
+            self.dpi_card.set_value(
+                UNKNOWN_VALUE_TEXT if dpi is None else str(dpi)
+            )
+            self.sens_card.set_value(
+                UNKNOWN_VALUE_TEXT if sens is None else f"{sens}%"
+            )
         else:
             self.dpi_card.set_value(str(self.mc.current_dpi))
             self.sens_card.set_value(f"{self.mc.current_sensitivity}%")
@@ -1075,14 +1096,18 @@ class DPIPage(QWidget):
 
         layout.addWidget(display)
 
-        # Slider
+        # Slider (revisão PR #21): valueChanged é APENAS preview visual;
+        # o efeito físico acontece no commit (sliderReleased/Aplicar/
+        # preset) — uma ação do usuário gera no MÁXIMO uma operação HID,
+        # e arrastar o slider nunca spamma HID++.
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setMinimum(DPI_MIN)
         self.slider.setMaximum(DPI_MAX)
         self.slider.setSingleStep(DPI_STEP)
         self.slider.setPageStep(200)
         self.slider.setValue(self.mc.current_dpi)
-        self.slider.valueChanged.connect(self._on_slider)
+        self.slider.valueChanged.connect(self._on_slider_preview)
+        self.slider.sliderReleased.connect(self._commit_slider)
         layout.addWidget(self.slider)
 
         # Indicador de capacidade HID/DPI (issue #3)
@@ -1092,34 +1117,17 @@ class DPIPage(QWidget):
         layout.addWidget(self.hid_hint)
         if self.state is not None:
             initial = self.state.applied_dpi
-            self.dpi_value.setText(str(initial))
-            self.slider.setValue(initial)
-            self.mc.current_dpi = initial
+            if initial is None:
+                # Desconhecido: exibe UNKNOWN; o slider fica em posição
+                # NEUTRA (controle de entrada — não alega estado aplicado).
+                self.dpi_value.setText(UNKNOWN_VALUE_TEXT)
+                self.slider.setValue(DPI_DEFAULT)
+            else:
+                self.dpi_value.setText(str(initial))
+                self.slider.setValue(initial)
+                self.mc.current_dpi = initial
 
-    def _sync_hint(self):
-        """Exibe o estado real da capacidade HID/DPI no hardware."""
-        if self.state is None:
-            self.hid_hint.setText("")
-            return
-        caps = self.state.capability_state()
-        hid = caps.is_available("hid_available")
-        hw_dpi = caps.is_available("hardware_dpi_available")
-        if hid and hw_dpi:
-            self.hid_hint.setText("🟢 DPI físico aplicável no hardware do mouse (HID++)")
-            self.hid_hint.setStyleSheet(f"color: {COLORS['mc_green']}; font-size: 12px; background: transparent;")
-            self.slider.setEnabled(True)
-            self.dpi_input.setEnabled(True)
-        elif hid:
-            self.hid_hint.setText("🟡 Endpoint HID conhecido, mas DPI físico não confirmado — a configuração do sensor pode exigir nova detecção")
-            self.hid_hint.setStyleSheet(f"color: {COLORS['warning']}; font-size: 12px; background: transparent;")
-            self.slider.setEnabled(True)
-            self.dpi_input.setEnabled(True)
-        else:
-            self.hid_hint.setText("🔴 Sem acesso HID ao mouse — controles de DPI físico indisponíveis")
-            self.hid_hint.setStyleSheet(f"color: {COLORS['danger']}; font-size: 12px; background: transparent;")
-            self.slider.setEnabled(False)
-            self.dpi_input.setEnabled(False)
-
+        # Range labels
         range_row = QHBoxLayout()
         min_l = QLabel(f"Min: {DPI_MIN}")
         min_l.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
@@ -1145,19 +1153,22 @@ class DPIPage(QWidget):
                 border-radius: 10px;
             }}
         """)
-        apply_btn = AccentButton("Aplicar")
-        apply_btn.setFixedWidth(120)
-        apply_btn.clicked.connect(self._apply_manual)
+        self.apply_btn = AccentButton("Aplicar")
+        self.apply_btn.setFixedWidth(120)
+        self.apply_btn.clicked.connect(self._apply_manual)
         input_row.addWidget(input_label)
         input_row.addWidget(self.dpi_input)
-        input_row.addWidget(apply_btn)
+        input_row.addWidget(self.apply_btn)
         input_row.addStretch()
         layout.addLayout(input_row)
 
         # Valores iniciais refletidos no state confirmado pelo hardware
         # (após a criação do dpi_input, que o _sync_hint desabilita).
         if self.state is not None:
-            self.dpi_input.setText(str(self.state.applied_dpi))
+            initial = self.state.applied_dpi
+            self.dpi_input.setText(
+                UNKNOWN_VALUE_TEXT if initial is None else str(initial)
+            )
         # Aplicado depois da criação de slider/dpi_input (o indicador os
         # desabilita quando não há acesso HID).
         self._sync_hint()
@@ -1178,6 +1189,8 @@ class DPIPage(QWidget):
             ("🚀 Máximo", 25600, COLORS["text_muted"]),
         ]
 
+        # Botões expostos para a suíte de integração (QTest/direct emit).
+        self.preset_buttons = []
         for name, dpi, color in preset_data:
             btn = QPushButton(f"{name}\n{dpi} DPI")
             btn.setFixedHeight(70)
@@ -1198,79 +1211,133 @@ class DPIPage(QWidget):
                 }}
             """)
             btn.clicked.connect(lambda _, d=dpi: self._set_preset(d))
+            self.preset_buttons.append((name, dpi, btn))
             presets.addWidget(btn)
         layout.addLayout(presets)
 
         layout.addStretch()
 
-    def _on_slider(self, val):
-        """Slider do DPI físico: atualiza o display imediatamente, mas
-        o efeito no hardware passa por set_hardware_dpi do core.
+    def _sync_hint(self):
+        """Exibe o estado real da capacidade HID/DPI no hardware.
 
-        Se não houver acesso HID, o valor exibido permanece local e o
-        usuário é avisado pelo indicador de capacidade — nunca se
-        reporta sucesso de hardware quando a capacidade está ausente."""
+        (Correção estrutural da revisão PR #21: este método SÓ atualiza o
+        indicador — a construção da página vive inteira em _build; antes,
+        a construção estava aqui e o método nunca era chamado no build,
+        deixando input manual e presets fora da página.)"""
+        if self.state is None:
+            self.hid_hint.setText("")
+            return
+        caps = self.state.capability_state()
+        hid = caps.is_available("hid_available")
+        hw_dpi = caps.is_available("hardware_dpi_available")
+        if hid and hw_dpi:
+            self.hid_hint.setText("🟢 DPI físico aplicável no hardware do mouse (HID++)")
+            self.hid_hint.setStyleSheet(f"color: {COLORS['mc_green']}; font-size: 12px; background: transparent;")
+            self.slider.setEnabled(True)
+            self.dpi_input.setEnabled(True)
+        elif hid:
+            self.hid_hint.setText("🟡 Endpoint HID conhecido, mas DPI físico não confirmado — a configuração do sensor pode exigir nova detecção")
+            self.hid_hint.setStyleSheet(f"color: {COLORS['warning']}; font-size: 12px; background: transparent;")
+            self.slider.setEnabled(True)
+            self.dpi_input.setEnabled(True)
+        else:
+            self.hid_hint.setText("🔴 Sem acesso HID ao mouse — controles de DPI físico indisponíveis")
+            self.hid_hint.setStyleSheet(f"color: {COLORS['danger']}; font-size: 12px; background: transparent;")
+            self.slider.setEnabled(False)
+            self.dpi_input.setEnabled(False)
+
+    def _on_slider_preview(self, val):
+        """PREVIEW apenas (revisão PR #21): atualiza o display com o
+        valor em consideração. NENHUM efeito físico aqui — o commit
+        acontece em sliderReleased/Aplicar/preset. Arrastar o slider
+        nunca gera dezenas de comandos HID++."""
         val = round(val / DPI_STEP) * DPI_STEP
         self.dpi_value.setText(str(val))
         self.dpi_input.setText(str(val))
+
+    def _commit_slider(self):
+        """sliderReleased: exatamente UMA operação HID por gesto."""
         if self.state is None or not self.slider.isEnabled():
             return
+        val = round(self.slider.value() / DPI_STEP) * DPI_STEP
         result = self.state.set_hardware_dpi(val)
+        self._render_result(result, val)
+
+    def _render_result(self, result: OperationResult, requested: int) -> None:
+        """Renderiza o desfecho CONFIRMADO da operação (revisão PR #21).
+
+        * sucesso → exibe o valor aplicado confirmado (details.applied);
+        * falha   → exibe o último valor confirmado ou UNKNOWN — nunca o
+          solicitado como se fosse aplicado; nenhum sucesso falso."""
+        ok = result.status.ok
         self.dpi_value.setStyleSheet(f"""
-            color: {COLORS['accent_light'] if result.ok else COLORS['danger']};
+            color: {COLORS['accent_light'] if ok else COLORS['danger']};
             font-size: 56px;
             font-weight: 900;
             background: transparent;
         """)
         applied = result.details.get("applied")
-        if applied is not None and applied != val:
+        if ok and applied is not None:
+            self.dpi_value.setText(str(applied))
             self.dpi_input.setText(str(applied))
+            # setValue programático dispara valueChanged → preview sem
+            # efeito físico (uma ação = uma operação).
             self.slider.setValue(applied)
+        else:
+            confirmed = (
+                None if self.state is None else self.state.applied_dpi
+            )
+            if confirmed is not None:
+                self.dpi_value.setText(str(confirmed))
+                self.dpi_input.setText(str(confirmed))
+                self.slider.setValue(confirmed)
+            else:
+                self.dpi_value.setText(UNKNOWN_VALUE_TEXT)
         self._sync_hint()
 
     def _apply_manual(self):
-        """Valor manual: mesma via do slider (hardware DPI), sem
-        qualquer ajuste automático de sensibilidade (issue #3)."""
+        """Valor manual: exatamente UMA operação de hardware (issue #3),
+        sem qualquer ajuste automático de sensibilidade."""
         try:
             val = int(self.dpi_input.text())
         except ValueError:
             return
         if self.state is not None:
             result = self.state.set_hardware_dpi(val)
-            self.dpi_value.setStyleSheet(f"""
-                color: {COLORS['accent_light'] if result.ok else COLORS['danger']};
-                font-size: 56px;
-                font-weight: 900;
-                background: transparent;
-            """)
-            applied = result.details.get("applied")
-            if applied is not None and applied != val:
-                self.dpi_input.setText(str(applied))
-            self._sync_hint()
+            self._render_result(result, val)
         else:
             self.mc.set_dpi(val)
-        self.slider.setValue(val)
-        self.dpi_value.setText(str(val))
+            self.dpi_value.setText(str(val))
 
     def _set_preset(self, dpi):
-        """Preset de DPI físico — via set_hardware_dpi do core."""
+        """Preset de DPI físico — exatamente UMA operação via core."""
         if self.state is not None:
             result = self.state.set_hardware_dpi(dpi)
-            self.dpi_value.setStyleSheet(f"""
-                color: {COLORS['accent_light'] if result.ok else COLORS['danger']};
-                font-size: 56px;
-                font-weight: 900;
-                background: transparent;
-            """)
-            applied = result.details.get("applied")
-            if applied is not None and applied != dpi:
-                self.dpi_input.setText(str(applied))
-            self._sync_hint()
+            self._render_result(result, dpi)
         else:
             self.mc.set_dpi(dpi)
-        self.slider.setValue(dpi)
-        self.dpi_value.setText(str(dpi))
-        self.dpi_input.setText(str(dpi))
+            self.dpi_value.setText(str(dpi))
+
+    def showEvent(self, event):
+        """Refresh explícito ao abrir a página (revisão PR #21 — sem
+        polling periódico)."""
+        super().showEvent(event)
+        if self.state is not None:
+            self.state.refresh()
+            self._sync_from_state()
+            self._sync_hint()
+
+    def _sync_from_state(self) -> None:
+        """Sincroniza display/slider com o valor confirmado (ou UNKNOWN)."""
+        if self.state is None:
+            return
+        confirmed = self.state.applied_dpi
+        if confirmed is not None:
+            self.dpi_value.setText(str(confirmed))
+            self.dpi_input.setText(str(confirmed))
+            self.slider.setValue(confirmed)
+        else:
+            self.dpi_value.setText(UNKNOWN_VALUE_TEXT)
 
 
 class SensitivityPage(QWidget):
@@ -1305,8 +1372,11 @@ class SensitivityPage(QWidget):
         initial = self.mc.current_sensitivity
         if self.state is not None:
             initial = self.state.applied_sensitivity
-            self.mc.current_sensitivity = initial
-        self.sens_value = QLabel(f"{initial}%")
+            if initial is not None:
+                self.mc.current_sensitivity = initial
+        self.sens_value = QLabel(
+            f"{initial}%" if initial is not None else UNKNOWN_VALUE_TEXT
+        )
         self.sens_value.setAlignment(Qt.AlignCenter)
         self.sens_value.setStyleSheet(f"""
             color: {COLORS['success']};
@@ -1323,12 +1393,17 @@ class SensitivityPage(QWidget):
 
         layout.addWidget(display)
 
-        # Slider
+        # Slider (revisão PR #21): valueChanged = preview; commit
+        # (set_sensitivity) apenas em sliderReleased — um gesto gera no
+        # máximo uma operação, sem spammar libinput.
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setMinimum(0)
         self.slider.setMaximum(100)
-        self.slider.setValue(initial)
-        self.slider.valueChanged.connect(self._on_slider)
+        self.slider.setValue(
+            initial if initial is not None else SENSITIVITY_DEFAULT
+        )
+        self.slider.valueChanged.connect(self._on_slider_preview)
+        self.slider.sliderReleased.connect(self._commit_slider)
         layout.addWidget(self.slider)
 
         hint = QHBoxLayout()
@@ -1385,15 +1460,51 @@ class SensitivityPage(QWidget):
 
         layout.addStretch()
 
-    def _on_slider(self, val):
-        """Ação SEPARADA: altera apenas a sensibilidade do ponteiro
-        (libinput). Nunca toca no DPI físico — a operação de DPI
-        físico é exclusiva da página de DPI (set_hardware_dpi)."""
+    def _on_slider_preview(self, val):
+        """PREVIEW apenas: altera somente o display. O efeito no
+        ponteiro (libinput) acontece no commit (sliderReleased) — um
+        gesto gera no máximo uma operação de sensibilidade."""
         self.sens_value.setText(f"{val}%")
-        if self.state is not None:
-            self.state.set_sensitivity(val)
+
+    def _commit_slider(self):
+        """sliderReleased: uma operação de sensibilidade por gesto.
+        Nunca toca no DPI físico — operação separada (issue #3)."""
+        if self.state is None:
+            self.mc.set_sensitivity(self.slider.value())
+            return
+        val = self.slider.value()
+        result = self.state.set_sensitivity(val)
+        ok = result.status.ok
+        self.sens_value.setStyleSheet(f"""
+            color: {COLORS['success'] if ok else COLORS['danger']};
+            font-size: 48px;
+            font-weight: 900;
+            background: transparent;
+        """)
+        applied = result.details.get("applied")
+        if ok and applied is not None:
+            self.sens_value.setText(f"{applied}%")
+            self.slider.setValue(applied)
         else:
-            self.mc.set_sensitivity(val)
+            confirmed = self.state.applied_sensitivity
+            if confirmed is not None:
+                self.sens_value.setText(f"{confirmed}%")
+                self.slider.setValue(confirmed)
+            else:
+                self.sens_value.setText(UNKNOWN_VALUE_TEXT)
+
+    def showEvent(self, event):
+        """Refresh explícito ao abrir a página (revisão PR #21 — sem
+        polling periódico)."""
+        super().showEvent(event)
+        if self.state is not None:
+            self.state.refresh()
+            confirmed = self.state.applied_sensitivity
+            if confirmed is not None:
+                self.sens_value.setText(f"{confirmed}%")
+                self.slider.setValue(confirmed)
+            else:
+                self.sens_value.setText(UNKNOWN_VALUE_TEXT)
 
 
 class AutoClickerPage(QWidget):
@@ -2016,6 +2127,13 @@ class ProfilesPage(QWidget):
         layout.addLayout(grid)
         layout.addStretch()
 
+    def showEvent(self, event):
+        """Refresh explícito das capacidades ao abrir a página
+        (revisão PR #21 — sem polling periódico)."""
+        super().showEvent(event)
+        if self.state is not None:
+            self.state.refresh()
+
     def _apply(self, dpi, sens):
         """Aplica um perfil: DPI físico e sensibilidade como operações
         INDEPENDENTES (issue #3) — a sensibilidade nunca é alterada
@@ -2163,15 +2281,15 @@ class MouseHubApp(QMainWindow):
         self.mc = MouseController()  # stub legado inerte (issue #3)
 
         # Controle real do mouse (issue #3): discovery por identidade
-        # (VID 046d / PID c08f), core seguro da main e thread de
-        # atualização periódica do estado. O serviço não abre nenhum
-        # recurso de automação no startup — o timer de refresh roda
-        # apenas discovery/probe do core (sysfs/hidraw, sem X).
-        self.mouse_service = build_mouse_service()
-        self.mouse_state = self.mouse_service._state
+        # (VID 046d / PID c08f) + core seguro da main. Sem thread de
+        # atualização periódica (revisão PR #21): o refresh roda no
+        # startup, após operações (reavaliação de capacidades) e por
+        # evento explícito (ex.: abrir página de hardware) — nunca em
+        # polling HID++ permanente.
+        self.mouse_state = build_mouse_state()
         try:
             # Primeira avaliação síncrona para o dashboard exibir o
-            # estado real imediatamente (sem esperar o timer).
+            # estado real imediatamente.
             self.mouse_state.refresh()
         except Exception:  # noqa: BLE001
             pass
@@ -2289,12 +2407,9 @@ class MouseHubApp(QMainWindow):
         self.profiles_page = ProfilesPage(self.mc, state=self.mouse_state)
         self.settings_page = SettingsPage(self.mc, self.ac, self.me, self.svc)
 
-        # Thread de atualização do estado do mouse (3 s): descoberta e
-        # capacidades reais, nunca mexe com automação.
-        try:
-            self.mouse_service.start()
-        except RuntimeError:
-            pass
+        # Sem thread de estado do mouse (revisão PR #21): o refresh
+        # roda no startup, após operações e em evento explícito — nunca
+        # em loop periódico.
 
         self.stack.addWidget(self.dashboard_page)
         self.stack.addWidget(self.dpi_page)
@@ -2315,11 +2430,10 @@ class MouseHubApp(QMainWindow):
             btn.set_active(i == index)
 
     def closeEvent(self, event):
-        # Encerramento completo: thread do estado do mouse (issue #3)
-        # + captura, playback e worker do clicker (o mutex do serviço
-        # garante a parada sem corrida; a chamada é idempotente quando
-        # nada foi usado).
-        self.mouse_service.stop()
+        # Encerramento completo: captura, playback e worker do clicker
+        # (o mutex do serviço garante a parada sem corrida; a chamada é
+        # idempotente quando nada foi usado). Não há thread de estado
+        # do mouse para parar (revisão PR #21 — sem polling periódico).
         self.me.cleanup()
         self.ac.cleanup()
         self.svc.cleanup()
