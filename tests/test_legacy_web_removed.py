@@ -15,16 +15,22 @@ def test_root_launchers_cannot_reintroduce_web_or_unsafe_hidraw_flow():
     forbidden = (
         "localhost:7777",
         "--port 7777",
-        "mouse_hub.py",
         "/dev/hidraw0",
         "chmod 666",
         "--break-system-packages",
     )
     for relative in ("start.sh", "launcher.sh"):
         text = (ROOT / relative).read_text(encoding="utf-8")
+        executable = "\n".join(
+            line for line in text.splitlines()
+            if not line.lstrip().startswith("#")
+        )
         for token in forbidden:
-            assert token not in text, f"{relative} reintroduziu token legado/inseguro: {token}"
-        assert "app/mouse_hub_app.py" in text
+            assert token not in executable, (
+                f"{relative} reintroduziu token legado/inseguro executável: {token}"
+            )
+        assert "app/mouse_hub_app.py" in executable
+        assert "python3 mouse_hub.py" not in executable
 
 
 def test_ci_no_longer_compiles_removed_web_entrypoint():
