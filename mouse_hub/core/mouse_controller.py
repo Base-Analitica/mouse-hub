@@ -689,8 +689,24 @@ class MouseController:
             hid_available=_hid_access_available,
             hardware_dpi_available=_hardware_dpi_available,
             sensitivity_available=_sensitivity_available,
+            # Polling rate do G403 HERO — issue #6. O padrão HID++ 2.0
+            # especifica a feature Report Rate (0x8060,
+            # "adjustableReportRate", documentada pelo OpenLogi em
+            # https://openlogi.org/hidpp/features/x8060-report-rate), mas
+            # o stack atual do Mouse Hub NÃO implementa a descoberta
+            # dessa feature, não define suas funções nem suporta o
+            # comando de alteração com confirmação. Sem hardware real
+            # (G403 HERO físico) para validar feature index, taxas
+            # suportadas e ACK, implementar seria inventar contrato —
+            # proibido pela issue #6. A capacidade permanece
+            # indisponível e a UI deve refletir isso sem simular valores.
             polling_rate_available=lambda: (
-                False, "feature de polling rate não implementada"
+                False,
+                "polling rate do G403 não é alterável/confirmável pelo "
+                "stack HID++ atual: a feature Report Rate (0x8060) não "
+                "está implementada na descoberta de features do projeto, "
+                "e alteração segura exigiria validação em hardware real "
+                "(G403 HERO físico) — vide issue #6",
             ),
             macro_capture_available=lambda: (
                 False, "fronteira: automações são de outra instância"

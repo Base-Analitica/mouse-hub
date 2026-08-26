@@ -616,10 +616,9 @@ class MouseHubHandler(SimpleHTTPRequestHandler):
             self._handle_autoclicker_stop()
         elif path == "/api/autoclicker/config":
             self._handle_autoclicker_config(data)
-        elif path == "/api/profile/load":
-            self._handle_profile_load(data)
-        elif path == "/api/profile/save":
-            self._handle_profile_save(data)
+        # Endpoints de perfil do web removidos na issue #6: perfis
+        # agora usam ProfileStore do core como fonte unica de verdade
+        # (config.json XDG), nao o config legado de ~/mouse-hub/.
         else:
             self.send_error(404)
 
@@ -720,26 +719,8 @@ class MouseHubHandler(SimpleHTTPRequestHandler):
             "button": self.hub.clicker.button,
         })
 
-    def _handle_profile_load(self, data):
-        profile_name = data.get("name", "default")
-        profiles = self.hub.config.get("profiles", {})
-        if profile_name in profiles:
-            profile = profiles[profile_name]
-            self.hub.hid.set_dpi(profile.get("dpi", 800))
-            self.hub.hid.set_sensitivity(profile.get("sensitivity", 50))
-            self._json_response({"ok": True, "profile": profile})
-        else:
-            self._json_response({"ok": False, "error": "Perfil nao encontrado"}, 404)
-
-    def _handle_profile_save(self, data):
-        name = data.get("name", "custom")
-        profiles = self.hub.config.get("profiles", {})
-        profiles[name] = {
-            "dpi": self.hub.hid.current_dpi,
-            "sensitivity": self.hub.hid.get_sensitivity(),
-        }
-        self.hub.config.set("profiles", profiles)
-        self._json_response({"ok": True})
+    # Handlers de perfil do web removidos na issue #6. Perfis agora
+    # usam ProfileStore do core como fonte unica de verdade.
 
 
 # ─── Main Hub ────────────────────────────────────────────────────────────────
