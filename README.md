@@ -52,23 +52,19 @@ O antigo servidor HTTP e a interface web foram removidos após a consolidação 
 
 As dependências Python estão declaradas em [`pyproject.toml`](pyproject.toml).
 
-## Instalação nativa (Linux Mint)
+## Instalação no Linux Mint (usuário final)
 
-O formato oficial de distribuição é o **instalador `install.sh`**: ele verifica dependências via `apt`, instala a regra udev do G403, copia o app para `/opt/mouse-hub`, registra o atalho e o ícone no menu de aplicativos e adiciona o usuário ao grupo `plugdev`. Um `.deb`/AppImage não é necessário neste estágio; essa decisão vale até que o volume de usuários justifique empacotamento formal.
+O formato oficial de distribuição é o **pacote `.deb`**: instala pela Central de Programas ou com `apt`, registra o atalho no menu, instala a regra udev do G403 e adiciona o usuário que instalou ao grupo `plugdev`. Desinstalação e atualização ficam a cargo do gerenciador de pacotes; seus dados em `~/.config/mouse-hub/` e `~/.local/share/mouse-hub/` sobrevivem a upgrade e remoção.
 
-```bash
-git clone https://github.com/Base-Analitica/mouse-hub.git
-cd mouse-hub
-./install.sh
-```
-
-Depois, execute pelo menu de aplicativos (**Mouse Hub**) ou por `/opt/mouse-hub/launcher.sh`.
-
-Para remover (preserva seus dados em `~/.config/mouse-hub/` e `~/.local/share/mouse-hub/`):
+Baixe o `mouse-hub_<versão>_all.deb` mais recente (o CI gera o artefato em cada commit) e instale:
 
 ```bash
-./uninstall.sh
+sudo apt install ./mouse-hub_*_all.deb
 ```
+
+Depois, execute pelo menu de aplicativos (**Mouse Hub**) ou pelo comando `mouse-hub`.
+
+> Após a instalação, **encerre e inicie a sessão** uma única vez para o grupo `plugdev` valer — sem isso o app funciona (sensibilidade, auto-clicker, macros), mas o DPI físico informa "acesso negado" em vez de operar.
 
 ## Instalação para desenvolvimento/uso a partir do repositório
 

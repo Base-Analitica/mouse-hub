@@ -1,0 +1,7 @@
+#!/bin/sh
+# Nada a parar: o Mouse Hub não mantém daemon nem serviço.
+# Gravação em curso no momento da remoção é encerrada pelo próprio
+# app (closeEvent idempotente). Dados do usuário em XDG NÃO são
+# tocados aqui — sobrevivem a upgrade e a remoção.
+set -e
+exit 0
