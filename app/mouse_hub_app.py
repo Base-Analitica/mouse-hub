@@ -511,10 +511,17 @@ class AutoClickerFacade:
         self._svc = svc
         # O engine do core é lazy no serviço (nada criado antes do
         # usuário usar a feature). As páginas leem estado no _build
-        # (estado inicial == defaults do core), então as leituras em
-        # idle NÃO criam o engine — só mutações (start/stop/set_*)
-        # disparam a criação.
+        # (estado inicial == preferências persistidas do config XDG,
+        # issue #5), então as leituras em idle NÃO criam o engine —
+        # só mutações (start/stop/set_*) disparam a criação.
         self._started = False
+        try:
+            cps, button_name = svc.initial_clicker_settings()
+        except Exception:  # noqa: BLE001
+            cps, button_name = 10, "left"
+        self._default_cps = cps
+        self._default_button_id = {"left": 1, "middle": 2, "right": 3}.get(
+            button_name, 1)
 
     @property
     def _native(self):
@@ -550,25 +557,27 @@ class AutoClickerFacade:
     @property
     def cps(self):
         if not self._started:
-            return 10  # default do core
+            return self._default_cps  # preferência persistida (issue #5)
         return self._native.cps
 
     @cps.setter
     def cps(self, value):
         self._ensure_started()
         self._native.set_cps(value)
+        self._svc.save_clicker_settings()
 
     @property
     def button(self):
         """Compat: UI usa botão como int (1/2/3)."""
         if not self._started:
-            return 1  # default do core (MouseButton.LEFT)
+            return self._default_button_id  # preferência persistida
         return self._native.button.button_id
 
     @button.setter
     def button(self, value):
         self._ensure_started()
         self._native.set_button(MouseButton.from_id(int(value)))
+        self._svc.save_clicker_settings()
 
     def _ensure_started(self):
         if self._started:
@@ -1821,6 +1830,7 @@ class AutoClickerPage(QWidget):
     def _toggle(self):
         if self.ac.running:
             self.ac.stop()
+            self._update()  # estado real como fonte (issue #5)
             self.toggle_btn.setText("▶️  Iniciar Auto-Clicker")
             self.toggle_btn.setStyleSheet(f"""
                 QPushButton {{
@@ -1851,6 +1861,7 @@ class AutoClickerPage(QWidget):
             """)
         else:
             self.ac.start()
+            self._update()  # estado real como fonte (issue #5)
             self.toggle_btn.setText("⏹️  Parar Auto-Clicker")
             self.toggle_btn.setStyleSheet(f"""
                 QPushButton {{
@@ -2823,7 +2834,10 @@ class MouseHubApp(QMainWindow):
         # criado no startup (lazy): display, workers e disco só surgem
         # quando a feature é usada.
         migrate_legacy_config(ConfigPaths.xdg())
-        self.svc = AutomationService(macros_path=ConfigPaths.xdg().macros_file)
+        self.svc = AutomationService(
+            macros_path=ConfigPaths.xdg().macros_file,
+            config_paths=ConfigPaths.xdg(),
+        )
         self.ac = AutoClickerFacade(self.svc)
         self.me = MacroEngine(self.svc)
 
