@@ -6,6 +6,7 @@ App nativo estilo Feather Client para controle do Logitech G403 HERO
 DPI, Sensibilidade, Macros e Auto-Clicker (Minecraft Only)
 """
 
+import queue
 import signal
 import os
 import sys
@@ -48,6 +49,7 @@ from mouse_hub.core.sensitivity import clamp_sensitivity
 from mouse_hub.core.capabilities import CapabilityState, with_overrides
 from mouse_hub.core.profiles import ProfileStore
 from mouse_hub.platform.linux import LinuxHidAccess
+from mouse_hub.platform.linux.udev_monitor import HotplugDebouncer, UdevHidrawMonitor
 from mouse_hub.platform.linux.input import LinuxSystemInput
 
 from PyQt5.QtWidgets import (
@@ -2980,6 +2982,18 @@ class MouseHubApp(QMainWindow):
         # Set active
         self._switch_page(0)
 
+        # Hotplug (issue #67): monitor de uevents hidraw em thread
+        # dedicada + debounce (plug emite rajada) — orientado a evento,
+        # sem polling de /sys e sem polling HID++. Se o ambiente não
+        # suportar netlink, o app segue funcionando sem hotplug.
+        self._hotplug_queue: "queue.Queue" = queue.Queue()
+        self._hotplug_debouncer = HotplugDebouncer()
+        self._hotplug_monitor = UdevHidrawMonitor(self._hotplug_queue)
+        self._hotplug_monitor.start()
+        self._hotplug_timer = QTimer(self)
+        self._hotplug_timer.timeout.connect(self._poll_hotplug)
+        self._hotplug_timer.start(200)
+
     def _switch_page(self, index):
         self.stack.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
@@ -3017,6 +3031,47 @@ class MouseHubApp(QMainWindow):
             self.mouse_state.capability_state(), self._automation_overrides()
         )
 
+    def _poll_hotplug(self, now: Optional[float] = None) -> None:
+        """Drena a fila do monitor (main thread) e aplica o debounce.
+
+        Só a CHEGADA de evento importa — o devpath vem do discovery no
+        refresh, que reescaneia o sysfs atual. Rajada vira um único
+        refresh após a janela de silêncio."""
+        clock = time.monotonic if now is None else (lambda: now)
+        drained = False
+        try:
+            while True:
+                self._hotplug_queue.get_nowait()
+                drained = True
+        except queue.Empty:
+            pass
+        if drained:
+            self._hotplug_debouncer.event_received(clock())
+        if self._hotplug_debouncer.should_refresh(clock()):
+            self._on_device_changed()
+
+    def _on_device_changed(self) -> None:
+        """Conexão/desconexão do G403: reavalia capacidades e sincroniza
+        a UI inteira (sidebar, dashboard e caps das páginas)."""
+        try:
+            self.mouse_state.refresh()
+        except Exception:  # noqa: BLE001 — refresh nunca derruba a UI
+            pass
+        self._update_sidebar_status()
+        for sync in (
+            getattr(self.dashboard_page, "_sync_subtitle", None),
+            getattr(self.dpi_page, "_sync_from_state", None),
+            getattr(self.sens_page, "_sync_sensitivity_caps", None),
+            getattr(self.clicker_page, "_sync_caps", None),
+            getattr(self.macros_page, "_sync_caps", None),
+        ):
+            if sync is None:
+                continue
+            try:
+                sync()
+            except Exception:  # noqa: BLE001 — uma página não derruba as outras
+                pass
+
     def _update_sidebar_status(self):
         """Indicador da sidebar reflete o estado combinado real —
         nunca "Online" incondicional."""
@@ -3038,6 +3093,11 @@ class MouseHubApp(QMainWindow):
         # Ordem correta (auditoria #4/#5): para as engines ENQUANTO o
         # IO compartilhado ainda vive, depois encerra o serviço UMA
         # única vez (me.cleanup delega ao svc.cleanup, idempotente).
+        # Hotplug (issue #67): para o monitor ANTES das engines —
+        # idempotente, seguro sem start (fail soft do netlink).
+        monitor = getattr(self, "_hotplug_monitor", None)
+        if monitor is not None:
+            monitor.stop()
         self.ac.cleanup()
         self.me.cleanup()
         event.accept()
