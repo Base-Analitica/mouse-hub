@@ -31,21 +31,21 @@ O antigo servidor HTTP e a interface web foram removidos após a consolidação 
 
 ## Capacidades atuais
 
-| Área | Estado | Observação |
-| --- | --- | --- |
-| **Detecção do G403** | Implementada | Identidade do dispositivo é validada; não depende de `/dev/hidraw0` nem da ordem de enumeração. |
-| **DPI físico** | Implementado no software | HID++ com validação de identidade/feature e tratamento separado de timeout, erro de protocolo, permissão e remoção; validação física ainda pendente. |
-| **Sensibilidade** | Implementada | É independente do DPI físico. |
-| **Perfis e presets** | Implementados | Fonte de verdade no core; aplicação de DPI e sensibilidade ocorre como operações independentes. |
-| **Polling rate** | Indisponível no stack atual | A UI não simula sucesso nem marca frequência ativa sem capacidade confirmada. |
-| **Auto-clicker** | Funcional, em hardening | 1–50 CPS, três botões e restrição por janela em foco; a consolidação final permanece acompanhada pela issue correspondente. |
-| **Macros — persistência/playback** | Implementados | Modelo, armazenamento e reprodução existem no core. |
-| **Macros — captura** | Implementada no software | Backend XRecord captura teclado/cliques e possui lifecycle/testes determinísticos; validação end-to-end em sessão X11 real ainda deve ser tratada como evidência separada. |
+| Área | Estado | Dependência | Observação |
+| --- | --- | --- | --- |
+| **Detecção do G403** | Implementada | — | Identidade do dispositivo é validada; não depende de `/dev/hidraw0` nem da ordem de enumeração. |
+| **DPI físico** | Implementado no software | Acesso HID (regra udev, grupo `plugdev`) | HID++ com validação de identidade/feature e tratamento separado de timeout, erro de protocolo, permissão e remoção; validação física ainda pendente. Sem a regra udev, a UI informa "acesso negado" em vez de falhar em silêncio. |
+| **Sensibilidade** | Implementada | Sessão X11 (libinput) | É independente do DPI físico. |
+| **Perfis e presets** | Implementados | — | Fonte de verdade no core; aplicação de DPI e sensibilidade ocorre como operações independentes. |
+| **Polling rate** | Indisponível no stack atual | — | A UI não simula sucesso nem marca frequência ativa sem capacidade confirmada. |
+| **Auto-clicker** | Funcional, em hardening | Sessão X11 (XTest + leitura de foco) | 1–50 CPS, três botões e restrição por janela em foco; CPS/botão persistem no config XDG. Sem X11, os controles ficam desabilitados com a causa visível. |
+| **Macros — persistência/playback** | Implementados | Sessão X11 (XTest) | Modelo, armazenamento e reprodução existem no core; timing usa o clock do servidor X na captura e relógio monotônico na reprodução. |
+| **Macros — captura** | Implementada no software | Sessão X11 (extensão XRecord) | Backend XRecord captura teclado/cliques com handshake, cancelamento durante a inicialização e lifecycle testado deterministicamente; validação end-to-end em sessão X11 real ainda deve ser tratada como evidência separada. |
 
 ## Requisitos
 
 - Linux, com foco em Linux Mint;
-- sessão X11 para as integrações nativas atuais de input/foco;
+- **sessão X11** — auto-clicker, macros e leitura de janela em foco usam XTest/XRecord/leitura direta X11; em sessões Wayland essas automações ficam indisponíveis e a UI exibe o motivo em vez de simular funcionamento (DPI físico via HID++ e detecção do dispositivo continuam funcionando);
 - Python 3.10+;
 - PyQt5 5.15+;
 - `python-xlib`.
