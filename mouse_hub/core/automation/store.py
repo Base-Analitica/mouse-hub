@@ -41,11 +41,25 @@ _display_for_keycode = None
 # layout US padrão (o layout de referência do X). Só é usado quando
 # não há servidor para consultar — no runtime real, display
 # #keysym_to_keycode resolve pelo servidor.
+#
+# ATENÇÃO (issue #5): keycodes X11/evdev NÃO são sequenciais para
+# letras (o teclado QWERTY vem do layout da máquina de escrever:
+# q=24, w=25, e=26... e a=38). O mapa antigo era sequencial
+# (a→38, b→39, ...), o que reproduzia a tecla ERRADA para macros
+# legadas (w virava 60). Valores conforme evdev/xorgkeyCode:
 _FALLBACK_KEYCODES: Dict[int, int] = {
-    # Latin-1 a-z (keysyms 0x61..0x7a) → keycodes 38..63
-    **{0x61 + i: 38 + i for i in range(26)},
-    # dígitos 0-9 (0x30..0x39) → keycodes 10..19 (linha numérica)
-    **{0x30 + i: 10 + i for i in range(10)},
+    # letras (keysym minúsculo → keycode evdev real)
+    **{ks: code for ks, code in {
+        0x61: 38, 0x62: 56, 0x63: 54, 0x64: 40, 0x65: 26, 0x66: 41,
+        0x67: 42, 0x68: 43, 0x69: 31, 0x6A: 44, 0x6B: 45, 0x6C: 46,
+        0x6D: 58, 0x6E: 57, 0x6F: 32, 0x70: 33, 0x71: 24, 0x72: 27,
+        0x73: 39, 0x74: 28, 0x75: 30, 0x76: 55, 0x77: 25, 0x78: 53,
+        0x79: 29, 0x7A: 52,
+    }.items()},
+    # dígitos: linha numérica real — 1..9 → 10..18 e 0 → 19
+    **{0x31 + i: 10 + i for i in range(9)},  # '1'..'9'
+    0x30: 19,  # '0'
+
     0x020: 65,   # space
     0xff0d: 36,  # Return
     0xff09: 23,  # Tab

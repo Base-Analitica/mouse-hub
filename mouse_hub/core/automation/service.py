@@ -32,9 +32,10 @@ from typing import Callable, List, Optional
 from mouse_hub.core.automation.autoclicker import AutoClickerEngine
 from mouse_hub.core.automation.focus import WindowFocusChecker
 from mouse_hub.core.automation.io import AutomationIO
-from mouse_hub.core.automation.macros import MacroPlayer, MacroRecorder
+from mouse_hub.core.automation.macros import MacroPlayer
 from mouse_hub.core.automation.scheduler import AutomationScheduler
 from mouse_hub.core.automation.store import MacroStore, MacroStoreError
+from mouse_hub.core.config import ConfigPaths, load_autoclicker_settings, save_autoclicker_settings
 from mouse_hub.core.automation.types import MouseButton, RecordedEvent
 from mouse_hub.platform.linux.automation import (
     LinuxAutomationIO,
@@ -63,8 +64,12 @@ class AutomationService:
         title_source=None,
         capture_backend: Optional[XRecordBackend] = None,
         io: Optional[AutomationIO] = None,
+        config_paths: Optional["ConfigPaths"] = None,
     ) -> None:
         self._macros_path = macros_path
+        # Caminhos XDG para carregar/persistir preferências do
+        # auto-clicker (issue #5). None = lê/salva no XDG padrão.
+        self._config_paths = config_paths
         self._capture_backend = capture_backend
         # Ownership explícito: quando o IO/TitleSource é injetado, o
         # serviço NÃO o fecha no cleanup — a responsabilidade é do
@@ -79,7 +84,6 @@ class AutomationService:
         self._title_source = title_source
         self._focus: Optional[WindowFocusChecker] = None
         self._store: Optional[MacroStore] = None
-        self._recorder: Optional[MacroRecorder] = None
         self._player: Optional[MacroPlayer] = None
         self._capture: Optional[InputCapture] = None
         self._clicker: Optional[AutoClickerEngine] = None
@@ -300,12 +304,44 @@ class AutomationService:
                     # display X, um open por processo de vida).
                     io = LinuxAutomationIO()
                     self._io = io
+            cps, button_name = self.initial_clicker_settings()
             self._clicker = AutoClickerEngine(
                 io=io,
                 focus=self.window_service,
                 windows=tuple(focus_patterns()),
+                cps=cps,
+                button=MouseButton(button_name),
             )
         return self._clicker
+
+    def initial_clicker_settings(self) -> tuple[int, str]:
+        """Preferências persistidas do auto-clicker (issue #5).
+
+        Sem `config_paths` (testes/embedding), retorna os defaults do
+        core sem tocar em disco — a suíte permanece hermética. Com
+        caminhos configurados, falha de leitura/config inválida cai no
+        default dentro do próprio leitor — nunca impede o motor."""
+        if self._config_paths is None:
+            return 10, "left"
+        try:
+            return load_autoclicker_settings(self._config_paths)
+        except Exception:  # noqa: BLE001 — config não pode derrubar o motor
+            return 10, "left"
+
+    def save_clicker_settings(self) -> bool:
+        """Persiste CPS/botão atuais do engine (best-effort: falha de
+        I/O não derruba o motor nem a UI). Sem `config_paths`, é no-op
+        (nada é escrito em disco)."""
+        clicker = self._clicker
+        if clicker is None or self._config_paths is None:
+            return False
+        try:
+            save_autoclicker_settings(
+                clicker.cps, clicker.button.value, self._config_paths
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def cleanup(self) -> None:
         """Encerramento completo e seguro: gravação cancelada, playback

@@ -76,12 +76,14 @@ def keycode_from_name(name: str, display: Optional[Display] = None) -> int:
     except Exception:  # noqa: BLE001
         keysym = 0
     if keysym != 0:
-        # Keysym ASCII simples (letras minúsculas) mapeia direto para o
-        # keycode XFree86 (offset 24) — sem consulta ao display.
-        if 0x0020 <= keysym <= 0x007E:
-            code = keysym - 0x0020 + 24
-            if 0 < code < 256:
-                return code
+        # Sem display: usa o MESMO mapa determinístico (layout US real)
+        # do MacroStore — a fórmula ASCII antiga (offset 24) reproduzia
+        # a tecla errada, pois keycodes X11 não são sequenciais (issue
+        # #5: "w" devia ser 25, não 77).
+        from mouse_hub.core.automation.store import _FALLBACK_KEYCODES
+        code = _FALLBACK_KEYCODES.get(keysym, 0)
+        if 0 < code < 256:
+            return code
         dpy = display
         if dpy is None:
             try:
@@ -146,6 +148,11 @@ class LinuxAutomationIO(AutomationIO):
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        # Serializa a EMISSÃO inteira (XTest + sync), não só a abertura
+        # da conexão: clicker e playback compartilham este IO e o
+        # python-xlib não é thread-safe — emitir fora do lock permitia
+        # intercalação/corrupção de chamadas (issue #5).
+        self._emit_lock = threading.Lock()
         self._display: Optional[Display] = None
         self._error: Optional[str] = None
 
@@ -202,16 +209,20 @@ class LinuxAutomationIO(AutomationIO):
     # ── Emissão ────────────────────────────────────────────────────
 
     def _emit(self, action) -> bool:  # pragma: no cover - requer X real
-        display = self._ensure_display()
-        if display is None:
-            return False
-        try:
-            action(display)
-            display.sync()
-            return True
-        except Exception:  # noqa: BLE001
-            # Falha de emissão detectável — o engine vai para FAILED.
-            return False
+        # Lock durante TODO o emit (abertura, XTest e sync): o IO é
+        # compartilhado entre clicker e playback; sem isso, emissões
+        # concorrentes podem intercalar eventos na mesma conexão X.
+        with self._emit_lock:
+            display = self._ensure_display()
+            if display is None:
+                return False
+            try:
+                action(display)
+                display.sync()
+                return True
+            except Exception:  # noqa: BLE001
+                # Falha de emissão detectável — o engine vai para FAILED.
+                return False
 
     def click(self, button: MouseButton) -> bool:
         def action(display: Display) -> None:
@@ -272,7 +283,11 @@ class X11TitleSource(TitleSource):
 
     def __init__(self, ttl_ms: int = FOCUS_PATTERN_TTL_MS) -> None:
         self._ttl_ms = ttl_ms
-        self._lock = threading.Lock()
+        # RLock: a leitura do título acontece DENTRO do lock (a conexão
+        # python-xlib não é thread-safe; consultas concorrentes do
+        # Dashboard e do worker expirado disputavam a mesma conexão —
+        # issue #5) e os métodos internos reentram no mesmo lock.
+        self._lock = threading.RLock()
         self._display: Optional[Display] = None
         self._cached_title: Optional[str] = ""
         self._cached_until: float = 0.0
@@ -322,13 +337,24 @@ class X11TitleSource(TitleSource):
                 if props is not None:
                     title = props.value.decode("utf-8", errors="replace").strip()
                     if title:
+                        self._unavailable = False
                         return title
                 parent = win.query_tree().parent
                 if parent is None or parent.id == display.screen().root.id:
                     break
                 win = parent
+            self._unavailable = False
             return ""
         except Exception:  # noqa: BLE001
+            # Falha numa conexão JÁ aberta: a conexão quebrou (não é
+            # estado transitório de abertura). Descarta o display e
+            # marca indisponível — is_available() deve refletir a
+            # quebra, senão o clicker fica "BLOCKED_BY_FOCUS" para
+            # sempre com a fonte morta (issue #5).
+            with contextlib.suppress(Exception):
+                display.close()
+            self._display = None
+            self._unavailable = True
             return None
 
     def _ensure_display_local(self) -> Optional[Display]:
@@ -338,19 +364,22 @@ class X11TitleSource(TitleSource):
             return self._display
 
     def active_window_title(self) -> Optional[str]:
-        """Título atual (cacheado por TTL). None = backend falhou."""
+        """Título atual (cacheado por TTL). None = backend falhou.
+
+        Toda a consulta (cache → leitura X → cache) acontece sob o
+        mesmo lock: a conexão não é thread-safe e leituras concorrentes
+        disputavam a mesma conexão (issue #5)."""
         with self._lock:
             now = time.monotonic()
             if now < self._cached_until:
                 return self._cached_title
-        title = self._read_title()
-        if title is None:
-            # Falha de backend: None distinto de título vazio.
-            return None
-        with self._lock:
+            title = self._read_title()
+            if title is None:
+                # Falha de backend: None distinto de título vazio.
+                return None
             self._cached_title = title
             self._cached_until = time.monotonic() + self._ttl_ms / 1000.0
-        return title
+            return title
 
 
 # A verificação de foco em si é o `WindowFocusChecker` do core da PR
