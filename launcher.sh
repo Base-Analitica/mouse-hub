@@ -27,7 +27,7 @@ if ! python3 -c "from Xlib import display" 2>/dev/null; then
 fi
 
 if [ -z "$DISPLAY" ]; then
-    echo "❌ DISPLAY nao definido. Execute em uma sessao X11." >&2
+    echo "❌ DISPLAY nao definido. Execute em um terminal grafico." >&2
     exit 1
 fi
 
