@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+BIN="$ROOT/.tools/rtk/bin/rtk"
+if [ ! -x "$BIN" ]; then
+  echo "RTK is not installed for this repository. Run scripts/agent/bootstrap-rtk." >&2
+  exit 127
+fi
+
+STATE="$ROOT/.tools/rtk/state"
+mkdir -p "$STATE/config" "$STATE/data" "$STATE/tee"
+# Keep RTK configuration, history, tee files and opt-out state inside this checkout.
+export XDG_CONFIG_HOME="$STATE/config"
+export XDG_DATA_HOME="$STATE/data"
+export RTK_TEE_DIR="$STATE/tee"
+export RTK_TELEMETRY_DISABLED=1
+export NO_COLOR=1
+exec "$BIN" "$@"
