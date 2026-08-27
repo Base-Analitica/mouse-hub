@@ -81,11 +81,14 @@ def _discovered(hidraw="/dev/hidraw2"):
 class TestIssue3DeviceAbsent:
     """Cenário obrigatório: UI/core com G403 ausente."""
 
-    def test_discovery_returns_none_without_g403(self, tmp_path, monkeypatch):
+    def test_discovery_returns_none_without_g403(self, tmp_path):
         """discover() devolve None quando não há mouse com a identidade
-        esperada — nada é construído, nenhuma escrita acontece."""
-        monkeypatch.setattr("os.scandir", lambda *a: iter([]))  # sysfs vazio
-        assert discover() is None
+        esperada — nada é construído, nenhuma escrita acontece.
+
+        Hermeticidade: sysfs falso vazio (o patch de os.scandir não
+        cobre Path.iterdir em Python 3.12 — em máquina com o G403
+        plugado o scan real devolveria o device e o teste mentiria)."""
+        assert discover(sysfs_root=tmp_path) is None
 
     def test_controller_without_device_reports_no_dpi(self):
         core, _ = _make_controller_with()

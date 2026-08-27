@@ -129,6 +129,14 @@ class LinuxHidAccess(HidAccess):
             # ENODEV/ENXIO: dispositivo desconectado a quente
             if exc.errno in (errno.ENODEV, errno.ENXIO, errno.EIO):
                 return OperationResult.device_not_found("Dispositivo desconectado")
+            if exc.errno == errno.EPIPE:
+                # Issue #68: o G403 tem múltiplos hidraw; a interface de
+                # INPUT do mouse abre mas rejeita escrita HID++ (EPIPE) —
+                # causa real distinguível de transporte quebrado.
+                return OperationResult.failed(
+                    "Endpoint rejeitou a escrita (EPIPE): interface não "
+                    "expõe HID++ (ex.: interface de input do mouse)"
+                )
             return OperationResult.failed(f"OSError durante escrita: {exc}")
         return OperationResult.applied()
 

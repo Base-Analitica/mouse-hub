@@ -201,6 +201,9 @@ class ProbeOutcome:
     # Código de erro FAP quando o probe terminou em PROTOCOL_ERROR
     # (para o reason do caller); None nos demais casos.
     error_code: Optional[int] = None
+    # Mensagem REAL da falha de acesso (ex.: EPIPE da interface de
+    # input do G403, issue #68) preservada para o reason do caller.
+    access_message: Optional[str] = None
 
     # Compatibilidade: True apenas quando o acesso foi realmente OK —
     # PERMISSION_DENIED/DEVICE_NOT_FOUND/FAILED NÃO viram True.
@@ -288,7 +291,8 @@ class HydppEndpointSelection:
                 # é preservada no outcome (quem usa NUNCA colapsa
                 # permission denied com device ausente).
                 return ProbeOutcome(
-                    valid=False, access_status=open_result.status
+                    valid=False, access_status=open_result.status,
+                    access_message=open_result.message,
                 )
             opened = True
 
@@ -305,6 +309,7 @@ class HydppEndpointSelection:
                 # NUNCA colapsar em FAILED genérico.
                 return ProbeOutcome(
                     valid=False, access_status=write_result.status,
+                    access_message=write_result.message,
                 )
             kind, response, error_or_outcome = self._read_typed(
                 self._hid, root.protocol_version_request_key(), 0.5,
@@ -338,6 +343,7 @@ class HydppEndpointSelection:
                 # reason para quem consome o outcome.
                 return ProbeOutcome(
                     valid=False, access_status=write_result.status,
+                    access_message=write_result.message,
                 )
             kind, response, error_or_outcome = self._read_typed(
                 self._hid, root.get_feature_request_key(), 0.5,

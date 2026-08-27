@@ -50,7 +50,7 @@ propósito.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional
 
 from mouse_hub.core.capabilities import CapabilityModel
 from mouse_hub.core.config import ConfigPaths
@@ -125,6 +125,15 @@ class MouseController:
         # para nunca colapsar permission_denied/device_not_found/falha
         # genérica em um único accessible=False).
         self._probe_access_status: Optional[OperationStatus] = None
+        # Mensagem REAL da última falha de acesso no probe (ex.: EPIPE
+        # da interface de input — issue #68); None quando não há falha
+        # ou a causa é coberta pelo status.
+        self._probe_access_message: Optional[str] = None
+        # True quando MAIS DE UM candidato confirmou o protocolo no
+        # select_endpoint sem critério seguro de desempate — nesse caso
+        # nenhum endpoint é elegível a efeitos (fail closed), mesmo que
+        # um probe isolado do primeiro candidato passe (issue #68).
+        self._selection_ambiguous: bool = False
         # Causa da ÚLTIMA falha do próprio comando SetSensorDPI
         # (timeout/protocol_error). None = sem falha ou recuperado por
         # re-probe. Capability: hardware_dpi_available deixa de ser True
@@ -208,8 +217,41 @@ class MouseController:
         hid_available/hardware_dpi_available True."""
         self._probe_access_status = status
         self._probe_accessible = False
+        self._probe_access_message = None
         self._dpi_feature_index = None
         self._dpi_set_error_reason = None
+
+    def select_endpoint(
+        self, candidates: List[MouseDevice]
+    ) -> Optional[MouseDevice]:
+        """Seleciona entre TODOS os hidraws do G403 o único que confirma
+        o protocolo HID++ 2.0 (probe em dois estágios, fail closed).
+
+        O G403 real expõe múltiplos /dev/hidrawN; apenas a interface
+        vendor responde ao probe — as demais abrem mas rejeitam a
+        escrita (EPIPE). Selecionar exige sondar todos (issue #68).
+
+        Regras (HydppEndpointSelection.select):
+        * nenhum candidato confirma → None;
+        * exatamente um confirma → esse;
+        * mais de um confirma sem desempate seguro → None, e o estado
+          fica marcado como ambíguo: probe/DPI permanecem bloqueados
+          até um novo select_endpoint limpar a marca.
+        """
+        if not candidates:
+            self._selection_ambiguous = False
+            return None
+        selection = HydppEndpointSelection(self._hid)
+        outcomes = selection.probe(candidates)
+        validated = [
+            device
+            for device, outcome in zip(candidates, outcomes)
+            if outcome.valid and outcome.feature_index is not None
+        ]
+        self._selection_ambiguous = len(validated) > 1
+        if len(validated) == 1:
+            return validated[0]
+        return None
 
     def probe_endpoint(self) -> OperationResult:
         """Valida o dispositivo registrado no protocolo HID++ 2.0.
@@ -256,6 +298,20 @@ class MouseController:
         self._probe_access_status = None
         self._dpi_set_error_reason = None
 
+        if self._selection_ambiguous:
+            # Seleção ambígua: nenhum endpoint é elegível — um probe
+            # isolado NÃO pode confirmar feature index nem habilitar
+            # escritas de efeito (fail closed, issue #68).
+            ambiguous_reason = (
+                "seleção de endpoint ambígua: mais de um candidato "
+                "confirmou o protocolo — nada é escrito até um novo "
+                "select_endpoint resolver"
+            )
+            self._probe_access_status = OperationStatus.FAILED
+            self._probe_accessible = False
+            self._probe_access_message = ambiguous_reason
+            return OperationResult.failed(ambiguous_reason)
+
         selection = HydppEndpointSelection(self._hid)
         try:
             outcomes = selection.probe([self._device])
@@ -272,6 +328,7 @@ class MouseController:
         outcome: ProbeOutcome = outcomes[0]
         self._probe_accessible = outcome.accessible
         self._probe_access_status = outcome.access_status
+        self._probe_access_message = outcome.access_message
 
         if not outcome.valid:
             if outcome.access_status == OperationStatus.PERMISSION_DENIED:
@@ -289,6 +346,12 @@ class MouseController:
                 details["fap_error_code"] = outcome.error_code
             if outcome.access_status is not None:
                 details["access"] = outcome.access_status.value
+            if outcome.access_message is not None:
+                # Causa real de acesso (ex.: EPIPE da interface de
+                # input) — nunca colapsada em falha genérica (#68).
+                return OperationResult.failed(
+                    outcome.access_message, **details
+                )
             return OperationResult.failed(
                 "Endpoint não confirmou o protocolo HID++ "
                 "(resposta ausente, header não ecoado, ping incorreto, "
@@ -627,7 +690,11 @@ class MouseController:
             if self._probe_access_status == OperationStatus.DEVICE_NOT_FOUND:
                 return False, "endpoint desapareceu entre a descoberta e o probe"
             if self._probe_access_status == OperationStatus.FAILED:
-                return False, "falha de acesso ao descritor hidraw não relacionada a permissão"
+                return False, (
+                    self._probe_access_message
+                    or "falha de acesso ao descritor hidraw não "
+                    "relacionada a permissão"
+                )
             if self._probe_accessible is False:
                 return False, "acesso negado ao descritor hidraw (regra udev ausente)"
             if self._probe_accessible is None:
@@ -646,7 +713,10 @@ class MouseController:
             if self._probe_access_status == OperationStatus.PERMISSION_DENIED:
                 return False, "acesso negado ao descritor hidraw (regra udev ausente)"
             if self._probe_access_status == OperationStatus.FAILED:
-                return False, "falha de acesso ao endpoint (open/probe falhou)"
+                return False, (
+                    self._probe_access_message
+                    or "falha de acesso ao endpoint (open/probe falhou)"
+                )
             if self._probe_accessible is False:
                 return False, "acesso negado ao descritor hidraw (regra udev ausente)"
             if not feature_known:
