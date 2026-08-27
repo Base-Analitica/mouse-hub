@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+# Roda no venv project-local da Serena, que já contém o pacote mcp.
+exec "$ROOT/.tools/serena/venv/bin/python" "$ROOT/scripts/agent/semantic-code.py" "$@"
