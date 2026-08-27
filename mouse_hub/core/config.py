@@ -74,6 +74,10 @@ def default_config() -> Dict[str, Any]:
         "polling_rate": 1000,
         "lighting": dict(LIGHTING_DEFAULT),
         "profiles": {k: dict(v) for k, v in PROFILES_DEFAULT.items()},
+        # Preferências do auto-clicker (issue #5): CPS e botão
+        # persistem entre sessões; a validação de range fica nos
+        # leitores abaixo (1..50, botões left/middle/right).
+        "autoclicker": {"cps": 10, "button": "left"},
     }
 
 
@@ -241,6 +245,49 @@ def _merge_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
                     for sub_key, sub_default in default_profile.items():
                         profile.setdefault(sub_key, sub_default)
     return config
+
+
+AUTOCICKER_BUTTONS = ("left", "middle", "right")
+
+
+def load_autoclicker_settings(
+    paths: Optional[ConfigPaths] = None,
+) -> tuple[int, str]:
+    """Lê as preferências do auto-clicker do config XDG.
+
+    Valores fora do contrato (CPS fora de 1..50, botão desconhecido)
+    caem para o default — config não pode quebrar o motor. Retorna
+    (cps, button_name)."""
+    config = load_config(paths)
+    raw = config.get("autoclicker")
+    raw = raw if isinstance(raw, dict) else {}
+    try:
+        cps = int(raw.get("cps", 10))
+    except (TypeError, ValueError):
+        cps = 10
+    if not 1 <= cps <= 50:
+        cps = 10
+    button = raw.get("button", "left")
+    if button not in AUTOCICKER_BUTTONS:
+        button = "left"
+    return cps, button
+
+
+def save_autoclicker_settings(
+    cps: int,
+    button: str,
+    paths: Optional[ConfigPaths] = None,
+) -> None:
+    """Persiste CPS/botão do auto-clicker preservando o restante do
+    config (read-modify-write atômico via _safe_write)."""
+    if not 1 <= int(cps) <= 50:
+        raise ValueError(f"CPS deve estar entre 1 e 50: {cps}")
+    if button not in AUTOCICKER_BUTTONS:
+        raise ValueError(f"botão inválido: {button}")
+    paths = paths or ConfigPaths.xdg()
+    config = load_config(paths)
+    config["autoclicker"] = {"cps": int(cps), "button": button}
+    _safe_write(paths.config_file, config)
 
 
 def migrate_legacy_config(paths: ConfigPaths, legacy_dir: Path = DEFAULT_LEGACY_DIR) -> bool:
