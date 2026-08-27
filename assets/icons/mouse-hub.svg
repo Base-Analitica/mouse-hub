@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- corpo do mouse -->
+  <path d="M32 6c-11 0-19 9-19 22v14c0 9 8 16 19 16s19-7 19-16V28c0-13-8-22-19-22z"
+        fill="#2d3440" stroke="#8f9bb3" stroke-width="2"/>
+  <!-- divisão dos botões -->
+  <line x1="32" y1="8" x2="32" y2="30" stroke="#8f9bb3" stroke-width="2"/>
+  <path d="M13 30h38" stroke="#8f9bb3" stroke-width="2" fill="none"/>
+  <!-- scroll/accent gaming -->
+  <rect x="29" y="14" width="6" height="12" rx="3" fill="#e05561"/>
+  <!-- LED -->
+  <circle cx="32" cy="44" r="4" fill="#e05561"/>
+</svg>

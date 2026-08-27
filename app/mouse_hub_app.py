@@ -29,7 +29,10 @@ from mouse_hub.core import (
 )
 from mouse_hub.core.constants import (
     DPI_DEFAULT,
+    DPI_MAX,
+    DPI_MIN,
     DPI_PRESETS,
+    DPI_STEP,
     G403_NAME,
     SENSITIVITY_DEFAULT,
 )
@@ -38,7 +41,9 @@ from mouse_hub.core.mouse_controller import (
     MouseController as CoreMouseController,
     make_linux_controller,
 )
-from mouse_hub.core.config import ConfigError, ConfigPaths
+from mouse_hub.core.config import ConfigError, ConfigPaths, migrate_legacy_config
+from mouse_hub.core.dpi import round_to_step
+from mouse_hub.core.sensitivity import clamp_sensitivity
 from mouse_hub.core.capabilities import CapabilityState
 from mouse_hub.core.profiles import ProfileStore
 from mouse_hub.platform.linux import LinuxHidAccess
@@ -281,9 +286,11 @@ QProgressBar::chunk {{
 # ═══════════════════════════════════════════════════════════════════════════════
 
 MOUSE_NAME = "Logitech G403 HERO Gaming Mouse"
-DPI_MIN, DPI_MAX, DPI_STEP = 100, 25600, 50
-CONFIG_PATH = Path.home() / "mouse-hub" / "config.json"
-MACROS_PATH = Path.home() / "mouse-hub" / "macros.json"
+# DPI_MIN/DPI_MAX/DPI_STEP vêm de mouse_hub.core.constants (issue #2):
+# nenhum limite de domínio é redefinido na UI.
+# Caminhos de macro: exatamente os mesmos do core (XDG), sem path
+# paralelo na UI (issue #2). A migração do legado ~/mouse-hub/ roda
+# uma vez no startup, antes de qualquer acesso ao MacroStore.
 
 
 # ── Controller legado DEPRECIADO (issue #3) ─────────────────────
@@ -316,7 +323,8 @@ class MouseController:
 
     def set_sensitivity(self, value):
         # Sem efeito de hardware — a UI usa MouseCoreState no core.
-        self.current_sensitivity = max(0, min(100, int(value)))
+        # A matemática de domínio é a mesma implementação do core.
+        self.current_sensitivity = clamp_sensitivity(value)
         return True
 
     def get_sensitivity(self):
@@ -324,9 +332,8 @@ class MouseController:
 
     def set_dpi(self, dpi):
         # Sem efeito de hardware — a UI usa MouseCoreState no core.
-        dpi = max(DPI_MIN, min(DPI_MAX, int(dpi)))
-        dpi = round(dpi / DPI_STEP) * DPI_STEP
-        self.current_dpi = dpi
+        # clamp + alinhamento de step vêm do core (issue #2).
+        self.current_dpi = round_to_step(int(dpi))
         return True
 
     # Observação de arquitetura (Issue #12): a detecção de foco não
@@ -490,7 +497,7 @@ def _result_text(result: OperationResult) -> str:
 
 
 
-class AutoClickerEngine:
+class AutoClickerFacade:
     """Fachada mínima sobre o AutoClickerEngine do core único
     (mouse_hub.core.automation.autoclicker), mantendo o contrato que as
     páginas PyQt já usam (cps, button como int, running, state, start).
@@ -1254,7 +1261,7 @@ class DPIPage(QWidget):
         valor em consideração. NENHUM efeito físico aqui — o commit
         acontece em sliderReleased/Aplicar/preset. Arrastar o slider
         nunca gera dezenas de comandos HID++."""
-        val = round(val / DPI_STEP) * DPI_STEP
+        val = round_to_step(val)
         self.dpi_value.setText(str(val))
         self.dpi_input.setText(str(val))
 
@@ -1262,7 +1269,7 @@ class DPIPage(QWidget):
         """sliderReleased: exatamente UMA operação HID por gesto."""
         if self.state is None or not self.slider.isEnabled():
             return
-        val = round(self.slider.value() / DPI_STEP) * DPI_STEP
+        val = round_to_step(self.slider.value())
         result = self.state.set_hardware_dpi(val)
         self._render_result(result, val)
 
@@ -2707,8 +2714,9 @@ class MouseHubApp(QMainWindow):
         # e clicker centralizados (detect once, share state). Nada é
         # criado no startup (lazy): display, workers e disco só surgem
         # quando a feature é usada.
-        self.svc = AutomationService(macros_path=MACROS_PATH)
-        self.ac = AutoClickerEngine(self.svc)
+        migrate_legacy_config(ConfigPaths.xdg())
+        self.svc = AutomationService(macros_path=ConfigPaths.xdg().macros_file)
+        self.ac = AutoClickerFacade(self.svc)
         self.me = MacroEngine(self.svc)
 
         # Central widget
