@@ -48,6 +48,9 @@ fi
 # Verifica DISPLAY (o app nativo precisa de um display X para a UI)
 if [ -z "$DISPLAY" ]; then
     echo "❌ DISPLAY nao definido. Execute em um terminal grafico." >&2
+    if [ "${XDG_SESSION_TYPE:-}" = "wayland" ]; then
+        echo "   Sessao Wayland detectada: o app requer XWayland." >&2
+    fi
     exit 1
 fi
 

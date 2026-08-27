@@ -57,6 +57,26 @@ O CI (`.github/workflows/ci.yml`) roda em Python 3.12 com 2 jobs: `test` (compil
 9. **Fluxo de dupla**: quem implementa entrega PR e NÃO faz merge — revisão e merge são do mantenedor (@mantenedor / Pedro). Requests de mudança do revisor têm prioridade máxima.
 10. **Web legado não volta.** Não recrie servidor HTTP, `static/index.html`, `mouse_hub.py` raiz ou lógica de domínio paralela para navegador.
 
+## Eficiência de tokens (agentes)
+
+<!-- BEGIN TOKEN-EFFICIENCY LAYER -->
+
+**Código mínimo (estilo ponytail)**: entenda o fluxo real antes de editar; reutilize implementação existente; prefira stdlib e dependências já presentes; sem abstração/helper para uso único; sem dependência nova para problema trivial; menor mudança correta; sem refactor adjacente; sem duplicar lógica existente. Legibilidade e testes valem mais que economia.
+
+**Comunicação enxuta (profissional, não "caveman speak")**: respostas curtas por padrão; não repetir a solicitação; não narrar ações óbvias; não explicar código que fala por si; não despejar logs completos (citá-los só quando a precisão exigir); conclusões com resultado, validação, arquivos e bloqueios reais. Código, comandos, erros e dados técnicos permanecem exatos.
+
+**Shell comprimido**: use `scripts/agent/rtk` para saídas verbosas (`git status/diff/log`, `rg/grep`, `pytest`, `find`, `ls`). Saída bruta para diffs exatos, dados byte-sensíveis ou resultados pequenos. Em falhas, inspecione o tee antes de reexecutar. Setup: `scripts/agent/bootstrap-rtk` (uma vez por checkout). Ver `.prime/agent/skills/token-efficient-shell/`.
+
+**Navegação semântica**: prefira `scripts/agent/semantic-code` (overview/find/refs) antes de ler arquivos grandes; fallback: `rg` + leitura de trechos. Nunca comece lendo o repositório inteiro: estrutura → símbolos candidatos → referências → ler só as regiões relevantes. Arquivo já compreendido e inalterado: reutilize o conhecimento. Ver `.prime/agent/skills/semantic-code/`.
+
+**Compaction**: em tarefas longas, consulte o uso de contexto em limites naturais e compacte quando houver material resolvido e trabalho substancial restante, preservando no resumo: objetivo, decisões, invariantes, arquivos modificados, testes, erros abertos e próximo passo. Não compacte compulsivamente a cada turno.
+
+**Subagentes**: apenas com os modelos autorizados pelo mantenedor (`openai-codex/gpt-5.6-luna` ou `opencode-go/deepseek-v4-flash`). O agente principal roda no modelo do próprio provedor. Nenhum outro modelo.
+
+**Decisões registradas**: EcoTokens descartado (sobrepõe RTK); Tokscale descartado (telemetria nativa do Prime Agent basta). Detalhes e benchmark: `.token-efficiency/REPORT.md`.
+
+<!-- END TOKEN-EFFICIENCY LAYER -->
+
 ## Armadilhas conhecidas
 
 - O pacote **não está instalado** em runtime na máquina de desenvolvimento: os testes importam o core direto do repo (`tests/conftest.py`). Não "conserte" isso alterando o layout.
