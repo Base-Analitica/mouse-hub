@@ -50,6 +50,10 @@ from mouse_hub.core.capabilities import CapabilityState, with_overrides
 from mouse_hub.core.profiles import ProfileStore
 from mouse_hub.platform.linux import LinuxHidAccess
 from mouse_hub.platform.linux.udev_monitor import HotplugDebouncer, UdevHidrawMonitor
+from mouse_hub.platform.linux.privileges import (
+    fix_hid_permissions,
+    is_hid_permission_issue,
+)
 from mouse_hub.platform.linux.input import LinuxSystemInput
 
 from PyQt5.QtWidgets import (
@@ -2705,12 +2709,15 @@ class ProfilesPage(QWidget):
 
 class SettingsPage(QWidget):
     """Pagina de Configuracoes"""
-    def __init__(self, mc, ac, me, svc):
+    def __init__(self, mc, ac, me, svc, state=None):
         super().__init__()
         self.mc = mc
         self.ac = ac
         self.me = me
         self.svc = svc
+        self.state = state
+        self._permission_thread: Optional[threading.Thread] = None
+        self._permission_result: Optional[object] = None
         self._build()
 
     def _build(self):
@@ -2737,32 +2744,34 @@ class SettingsPage(QWidget):
         hid_info.setStyleSheet(f"color: {COLORS['text_secondary']}; background: transparent;")
         hid_layout.addWidget(hid_info)
 
-        cmd_frame = QFrame()
-        cmd_frame.setStyleSheet(f"""
-            QFrame {{
-                background: {COLORS['bg_input']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 8px;
-                padding: 8px;
-            }}
-        """)
-        cmd_layout = QVBoxLayout(cmd_frame)
-        rule_text = QLabel(
-            '# /etc/udev/rules.d/99-logitech-g403.rules\n'
-            'SUBSYSTEM=="hidraw", ATTRS{{idVendor}}=="046d", '
-            'ATTRS{{idProduct}}=="c08f", MODE="0664", '
-            'GROUP="plugdev"'
-        )
-        rule_text.setStyleSheet(f"font-family: monospace; font-size: 11px; color: {COLORS['mc_green']}; background: transparent;")
-        cmd_layout.addWidget(rule_text)
-        reload_hint = QLabel(
-            "Depois: sudo udevadm control --reload-rules && "
-            "sudo udevadm trigger"
-        )
-        reload_hint.setStyleSheet(f"font-family: monospace; font-size: 11px; color: {COLORS['text_secondary']}; background: transparent;")
-        cmd_layout.addWidget(reload_hint)
-        hid_layout.addWidget(cmd_frame)
+        # Fluxo do usuário final (sem terminal): o próprio app aplica a
+        # regra udev via prompt gráfico de senha (polkit/pkexec). O
+        # estado do botão reflete a evidência real das capacidades.
+        self._permission_status = QLabel("")
+        self._permission_status.setWordWrap(True)
+        self._permission_status.setStyleSheet("font-size: 12px; background: transparent;")
+        hid_layout.addWidget(self._permission_status)
 
+        self._permission_btn = QPushButton(
+            "🔓  Conceder acesso ao hardware  (senha de administrador)"
+        )
+        self._permission_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {COLORS['bg_card']};
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 10px;
+                padding: 10px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{ border-color: {COLORS['accent']}; }}
+            QPushButton:disabled {{ color: {COLORS['text_muted']}; }}
+        """)
+        self._permission_btn.clicked.connect(self._grant_hid_access)
+        hid_layout.addWidget(self._permission_btn)
+
+        self._sync_permission_ui()
         layout.addWidget(hid_group)
 
         # Auto-clicker settings
@@ -2803,8 +2812,101 @@ class SettingsPage(QWidget):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+    def _sync_permission_ui(self) -> None:
+        """Botão/status refletem a evidência REAL de acesso HID —
+        nunca genérico (issue #7: estado honesto de capacidades)."""
+        if self.state is None:
+            self._permission_status.setText(
+                "Estado de hardware não disponível nesta página.")
+            self._permission_status.setStyleSheet(
+                f"font-size: 12px; color: {COLORS['text_muted']}; background: transparent;")
+            self._permission_btn.setEnabled(False)
+            return
+        try:
+            caps = self.state.capability_state()
+        except Exception:  # noqa: BLE001
+            self._permission_btn.setEnabled(False)
+            return
+        if caps.is_available("hid_available"):
+            self._permission_status.setText(
+                "✅ Acesso HID ativo — controle de DPI físico operável.")
+            self._permission_status.setStyleSheet(
+                f"font-size: 12px; color: {COLORS['success']}; background: transparent;")
+            self._permission_btn.setEnabled(False)
+            self._permission_btn.setToolTip("Acesso já concedido")
+            return
+        reason = caps.reason_for("hid_available")
+        if is_hid_permission_issue(reason):
+            self._permission_status.setText(
+                f"🔓 Sem acesso HID: {reason}. "
+                "Clique abaixo e informe sua senha para o app resolver.")
+            self._permission_status.setStyleSheet(
+                f"font-size: 12px; color: {COLORS['warning']}; background: transparent;")
+            self._permission_btn.setEnabled(True)
+            self._permission_btn.setToolTip("")
+        else:
+            self._permission_status.setText(
+                f"⚠️ Sem acesso HID por outra causa: {reason}")
+            self._permission_status.setStyleSheet(
+                f"font-size: 12px; color: {COLORS['text_secondary']}; background: transparent;")
+            self._permission_btn.setEnabled(False)
+
+    def _grant_hid_access(self) -> None:
+        """Roda o pkexec (prompt gráfico de senha) em thread dedicada —
+        a UI nunca trava esperando o usuário digitar a senha."""
+        thread = self._permission_thread
+        if thread is not None and thread.is_alive():
+            return  # já em andamento
+        self._permission_btn.setEnabled(False)
+        self._permission_status.setText(
+            "⏳ Aguardando autenticação de administrador…")
+        self._permission_status.setStyleSheet(
+            f"font-size: 12px; color: {COLORS['text_secondary']}; background: transparent;")
+        self._permission_result = None
+
+        def work():
+            self._permission_result = fix_hid_permissions()
+
+        self._permission_thread = threading.Thread(
+            target=work, name="mouse-hub-hid-permission", daemon=True)
+        self._permission_thread.start()
+        QTimer.singleShot(150, self._poll_permission_result)
+
+    def _poll_permission_result(self) -> None:
+        thread = self._permission_thread
+        if thread is not None and thread.is_alive():
+            QTimer.singleShot(150, self._poll_permission_result)
+            return
+        result, self._permission_result = self._permission_result, None
+        self._permission_thread = None
+        if result is None:
+            self._sync_permission_ui()
+            return
+        if result.status.ok:
+            # Nova evidência REAL antes de afirmar sucesso: re-probe.
+            try:
+                if self.state is not None:
+                    self.state.refresh()
+            except Exception:  # noqa: BLE001
+                pass
+            self._permission_status.setText("✅ " + result.message)
+            self._permission_status.setStyleSheet(
+                f"font-size: 12px; color: {COLORS['success']}; background: transparent;")
+            self._permission_btn.setEnabled(False)
+        else:
+            self._permission_status.setText(
+                ("✅ " if result.status.value == "permission_denied" else "⚠️ ")
+                + result.message)
+            self._permission_status.setStyleSheet(
+                f"font-size: 12px; color: {COLORS['warning']}; background: transparent;")
+            self._sync_permission_ui()
+
+
 #  MAIN WINDOW
 # ═══════════════════════════════════════════════════════════════════════════════
+
+class MouseHubApp(QMainWindow):
+    """Janela principal do Mouse Hub"""
 
 class MouseHubApp(QMainWindow):
     """Janela principal do Mouse Hub"""
@@ -2963,7 +3065,7 @@ class MouseHubApp(QMainWindow):
             caps_provider=self.full_capability_state,
         )
         self.profiles_page = ProfilesPage(self.mc, state=self.mouse_state, store=ProfileStore(ConfigPaths.xdg()))
-        self.settings_page = SettingsPage(self.mc, self.ac, self.me, self.svc)
+        self.settings_page = SettingsPage(self.mc, self.ac, self.me, self.svc, state=self.mouse_state)
 
         # Sem thread de estado do mouse (revisão PR #21): o refresh
         # roda no startup, após operações e em evento explícito — nunca
