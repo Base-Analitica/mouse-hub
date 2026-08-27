@@ -10,3 +10,4 @@ macros.json
 mouse_hub.egg-info/
 .tools/
 .cache/
+dist/

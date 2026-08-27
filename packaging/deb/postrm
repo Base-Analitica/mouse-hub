@@ -1,0 +1,9 @@
+#!/bin/sh
+# Remove a regra udev apenas com purge (dpkg gerencia o conffile).
+set -e
+if [ "$1" = purge ] && command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger --action=add --subsystem-match=hidraw 2>/dev/null || true
+fi
+echo "mouse-hub: dados do usuário preservados em ~/.config/mouse-hub/ e ~/.local/share/mouse-hub/." >&2
+exit 0

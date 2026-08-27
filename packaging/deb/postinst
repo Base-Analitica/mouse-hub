@@ -1,0 +1,26 @@
+#!/bin/sh
+# ─── Mouse Hub — pós-instalação do .deb ─────────────────
+# Sem pip --break-system-packages, sem chmod 666, sem /dev/hidraw0.
+set -e
+
+# Regra udev do G403: recarrega e re-triggera hidraw já conectado.
+if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger --action=add --subsystem-match=hidraw 2>/dev/null || true
+fi
+
+# Grupo plugdev para o usuário que executou a instalação com sudo
+# (necessário para o acesso HID do DPI físico).
+if [ -n "${SUDO_USER:-}" ] && command -v usermod >/dev/null 2>&1; then
+    if ! id -nG "$SUDO_USER" 2>/dev/null | tr ' ' '\n' | grep -qx plugdev; then
+        usermod -aG plugdev "$SUDO_USER" 2>/dev/null || true
+        echo "mouse-hub: usuário $SUDO_USER adicionado ao grupo plugdev." >&2
+        echo "mouse-hub: ENCERRE A SESSÃO e entre novamente para o acesso HID valer." >&2
+    fi
+fi
+
+# Cache de ícones (best-effort; ambientes sem GTK atualizam no login)
+command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+    gtk-update-icon-cache -f /usr/share/icons/hicolor 2>/dev/null || true
+
+exit 0
