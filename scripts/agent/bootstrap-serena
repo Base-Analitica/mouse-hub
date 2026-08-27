@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+SERENA_VERSION=1.7.0
+TOOLS="$ROOT/.tools/serena"
+VENV="$TOOLS/venv"
+CACHE="$ROOT/.cache/agent-tools/uv"
+
+command -v uv >/dev/null 2>&1 || { echo "Serena bootstrap: uv is required." >&2; exit 127; }
+mkdir -p "$TOOLS" "$CACHE"
+if [ ! -x "$VENV/bin/python" ]; then
+  UV_CACHE_DIR="$CACHE" uv venv "$VENV" --python 3.12 >/dev/null
+fi
+UV_CACHE_DIR="$CACHE" uv pip install --python "$VENV/bin/python" --no-progress "serena-agent==$SERENA_VERSION" "mcp==1.28.1"
+"$VENV/bin/serena" --version

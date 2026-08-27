@@ -30,7 +30,10 @@ from mouse_hub.core import (
 )
 from mouse_hub.core.constants import (
     DPI_DEFAULT,
+    DPI_MAX,
+    DPI_MIN,
     DPI_PRESETS,
+    DPI_STEP,
     G403_NAME,
     SENSITIVITY_DEFAULT,
 )
@@ -39,7 +42,9 @@ from mouse_hub.core.mouse_controller import (
     MouseController as CoreMouseController,
     make_linux_controller,
 )
-from mouse_hub.core.config import ConfigError, ConfigPaths
+from mouse_hub.core.config import ConfigError, ConfigPaths, migrate_legacy_config
+from mouse_hub.core.dpi import round_to_step
+from mouse_hub.core.sensitivity import clamp_sensitivity
 from mouse_hub.core.capabilities import CapabilityState, with_overrides
 from mouse_hub.core.profiles import ProfileStore
 from mouse_hub.platform.linux import LinuxHidAccess
@@ -282,9 +287,11 @@ QProgressBar::chunk {{
 # ═══════════════════════════════════════════════════════════════════════════════
 
 MOUSE_NAME = "Logitech G403 HERO Gaming Mouse"
-DPI_MIN, DPI_MAX, DPI_STEP = 100, 25600, 50
-CONFIG_PATH = Path.home() / "mouse-hub" / "config.json"
-MACROS_PATH = Path.home() / "mouse-hub" / "macros.json"
+# DPI_MIN/DPI_MAX/DPI_STEP vêm de mouse_hub.core.constants (issue #2):
+# nenhum limite de domínio é redefinido na UI.
+# Caminhos de macro: exatamente os mesmos do core (XDG), sem path
+# paralelo na UI (issue #2). A migração do legado ~/mouse-hub/ roda
+# uma vez no startup, antes de qualquer acesso ao MacroStore.
 
 
 # ── Controller legado DEPRECIADO (issue #3) ─────────────────────
@@ -317,7 +324,8 @@ class MouseController:
 
     def set_sensitivity(self, value):
         # Sem efeito de hardware — a UI usa MouseCoreState no core.
-        self.current_sensitivity = max(0, min(100, int(value)))
+        # A matemática de domínio é a mesma implementação do core.
+        self.current_sensitivity = clamp_sensitivity(value)
         return True
 
     def get_sensitivity(self):
@@ -325,9 +333,8 @@ class MouseController:
 
     def set_dpi(self, dpi):
         # Sem efeito de hardware — a UI usa MouseCoreState no core.
-        dpi = max(DPI_MIN, min(DPI_MAX, int(dpi)))
-        dpi = round(dpi / DPI_STEP) * DPI_STEP
-        self.current_dpi = dpi
+        # clamp + alinhamento de step vêm do core (issue #2).
+        self.current_dpi = round_to_step(int(dpi))
         return True
 
     # Observação de arquitetura (Issue #12): a detecção de foco não
@@ -491,7 +498,7 @@ def _result_text(result: OperationResult) -> str:
 
 
 
-class AutoClickerEngine:
+class AutoClickerFacade:
     """Fachada mínima sobre o AutoClickerEngine do core único
     (mouse_hub.core.automation.autoclicker), mantendo o contrato que as
     páginas PyQt já usam (cps, button como int, running, state, start).
@@ -1269,7 +1276,7 @@ class DPIPage(QWidget):
         valor em consideração. NENHUM efeito físico aqui — o commit
         acontece em sliderReleased/Aplicar/preset. Arrastar o slider
         nunca gera dezenas de comandos HID++."""
-        val = round(val / DPI_STEP) * DPI_STEP
+        val = round_to_step(val)
         self.dpi_value.setText(str(val))
         self.dpi_input.setText(str(val))
 
@@ -1277,7 +1284,7 @@ class DPIPage(QWidget):
         """sliderReleased: exatamente UMA operação HID por gesto."""
         if self.state is None or not self.slider.isEnabled():
             return
-        val = round(self.slider.value() / DPI_STEP) * DPI_STEP
+        val = round_to_step(self.slider.value())
         result = self.state.set_hardware_dpi(val)
         self._render_result(result, val)
 
@@ -1934,6 +1941,14 @@ class MacrosPage(QWidget):
         self.me = me
         self.svc = svc
         self.caps_provider = caps_provider
+        # issue #4: start/stop/cancel de gravação rodam FORA da thread
+        # da UI (o handshake XRecord espera até 5 s e o stop faz join
+        # de até 2 s). A conclusão é aplicada pelo timer de 500 ms —
+        # widgets só são tocados na main thread.
+        self._op_kind: Optional[str] = None  # "start" | "stop" | "cancel"
+        self._op_thread: Optional[threading.Thread] = None
+        self._op_result: Optional[dict] = None
+        self._op_ctx: dict = {}
         self._build()
 
     def _build(self):
@@ -2012,6 +2027,7 @@ class MacrosPage(QWidget):
 
         self._play_timer = QTimer()
         self._play_timer.timeout.connect(self._update_play_status)
+        self._play_timer.timeout.connect(self._poll_op)
         self._play_timer.start(500)
 
         layout.addWidget(rec_frame)
@@ -2068,39 +2084,124 @@ class MacrosPage(QWidget):
         self.record_btn.setText("⏹️  Parar Gravação" if recording else "⏺️  Gravar Macro")
         self.cancel_btn.setVisible(recording)
         self.name_input.setEnabled(not recording)
+        if not recording and self._op_kind is None:
+            self.record_btn.setEnabled(True)
 
     def _cancel_record(self):
-        """Aborta a gravação descartando os eventos acumulados."""
-        self.me.cancel_recording()
-        self._set_recording_ui(False)
-        self.record_status.setText("⚠️  Gravação cancelada — eventos descartados")
+        """Aborta a gravação descartando os eventos acumulados.
+
+        Funciona também DURANTE o handshake inicial (issue #4): o
+        cancelamento aborta o start em andamento em vez de ser
+        ignorado — e roda fora da thread da UI."""
+        if self._op_kind == "start":
+            # Cancelar DURANTE o handshake (issue #4): o pedido aborta
+            # o start em curso — o desfecho ("cancelado durante
+            # inicialização") aparece quando a op pendente conclui.
+            threading.Thread(
+                target=self.me.cancel_recording,
+                name="mouse-hub-record-cancel-start",
+                daemon=True,
+            ).start()
+            self.record_status.setText("⏳ Cancelando…")
+            return
+        if self._op_kind is not None:
+            return  # já há operação em curso
+        self.record_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(False)
+        self.record_status.setText("⏳ Cancelando gravação…")
+        self._start_async("cancel", self.me.cancel_recording)
 
     def _toggle_record(self):
+        # Uma operação por vez: o handshake/stop nunca roda na thread
+        # da UI e cliques repetidos não empilham operações (issue #4).
+        if self._op_kind is not None:
+            return
         if self.me.recording:
-            name = self.me.stop_recording()
-            self._set_recording_ui(False)
-            if name is None:
-                self.record_status.setText(
-                    "⚠️  Gravação descartada (sem eventos ou nome inválido)")
-            else:
-                count = self.me.macros.get(name, {}).get("count", 0)
-                self.record_status.setText(
-                    f"✅ Macro '{name}' salva! ({count} eventos)")
-            self._refresh_list()
+            self.record_btn.setEnabled(False)
+            self.record_status.setText("⏸️  Encerrando gravação…")
+            self._start_async("stop", self.me.stop_recording)
         else:
             name = self.name_input.text().strip() or \
                 f"macro_{int(time.time())}"
-            self.me.start_recording(name)
-            if self.me.recording:
+            self.record_btn.setEnabled(False)
+            self.name_input.setEnabled(False)
+            self.cancel_btn.setVisible(True)
+            self.record_status.setText(
+                "⏳ Iniciando captura XRecord… (aguardando o servidor X)")
+            self._start_async("start", lambda: self.me.start_recording(name),
+                              name=name)
+
+    # ── Operações assíncronas de gravação (issue #4) ────────────
+
+    def _start_async(self, kind: str, fn, **ctx) -> None:
+        self._op_kind = kind
+        self._op_ctx = ctx
+        self._op_result = None
+        def _work():
+            result = None
+            error = None
+            try:
+                result = fn()
+            except Exception as exc:  # noqa: BLE001 — a UI decide o que mostrar
+                error = exc
+            self._op_result = {"result": result, "error": error}
+        self._op_thread = threading.Thread(
+            target=_work, name=f"mouse-hub-record-{kind}", daemon=True,
+        )
+        self._op_thread.start()
+
+    def _poll_op(self) -> None:
+        """Aplica o resultado da operação assíncrona na main thread
+        (chamado pelo timer de 500 ms). Nenhum widget é tocado pela
+        thread de trabalho."""
+        if self._op_kind is None or self._op_result is None:
+            return
+        kind = self._op_kind
+        ctx = self._op_ctx
+        result = self._op_result["result"]
+        error = self._op_result["error"]
+        self._op_kind = None
+        self._op_thread = None
+        self._op_result = None
+        self.record_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(True)
+
+        if kind == "start":
+            if error is not None:
+                self._set_recording_ui(False)
+                self.record_status.setText(
+                    f"❌ Erro ao iniciar a gravação: {error}")
+            elif result:
+                name = ctx.get("name", "")
                 self._set_recording_ui(True)
                 self.record_status.setText(
                     f"🔴 Gravando '{name}'... pressione parar quando "
                     "terminar. Teclas e cliques são capturados em "
                     "qualquer janela.")
             else:
+                self._set_recording_ui(False)
                 reason = self.me.capture_failed or "capturador indisponível"
                 self.record_status.setText(
                     f"❌ Não foi possível iniciar a gravação: {reason}")
+        elif kind == "stop":
+            self._set_recording_ui(False)
+            if error is not None:
+                self.record_status.setText(
+                    f"❌ Erro ao encerrar a gravação: {error}")
+            elif result is None:
+                self.record_status.setText(
+                    "⚠️  Gravação descartada (sem eventos ou nome inválido)")
+            else:
+                count = self.me.macros.get(result, {}).get("count", 0)
+                suffix = " — TRUNCADA no teto de eventos" \
+                    if self.me.last_recording_truncated else ""
+                self.record_status.setText(
+                    f"✅ Macro '{result}' salva! ({count} eventos){suffix}")
+            self._refresh_list()
+        elif kind == "cancel":
+            self._set_recording_ui(False)
+            self.record_status.setText(
+                "⚠️  Gravação cancelada — eventos descartados")
 
     def _update_play_status(self) -> None:
         """Reflete o estado real do playback: em execução ou FAILED com
@@ -2645,7 +2746,8 @@ class SettingsPage(QWidget):
 
         safety_text = QLabel(
             "✅ O auto-clicker só funciona quando Minecraft/Lunar Client está em foco.\n"
-            "✅ O detector verifica o nome da janela ativa a cada ciclo.\n"
+            "✅ O detector lê o nome da janela ativa direto via X11, "
+            "com cache de 500 ms (TTL) entre consultas.\n"
             "✅ Nenhum clique é feito fora do jogo."
         )
         safety_text.setWordWrap(True)
@@ -2720,8 +2822,9 @@ class MouseHubApp(QMainWindow):
         # e clicker centralizados (detect once, share state). Nada é
         # criado no startup (lazy): display, workers e disco só surgem
         # quando a feature é usada.
-        self.svc = AutomationService(macros_path=MACROS_PATH)
-        self.ac = AutoClickerEngine(self.svc)
+        migrate_legacy_config(ConfigPaths.xdg())
+        self.svc = AutomationService(macros_path=ConfigPaths.xdg().macros_file)
+        self.ac = AutoClickerFacade(self.svc)
         self.me = MacroEngine(self.svc)
 
         # Central widget
@@ -2906,9 +3009,11 @@ class MouseHubApp(QMainWindow):
         # (o mutex do serviço garante a parada sem corrida; a chamada é
         # idempotente quando nada foi usado). Não há thread de estado
         # do mouse para parar (revisão PR #21 — sem polling periódico).
-        self.me.cleanup()
+        # Ordem correta (auditoria #4/#5): para as engines ENQUANTO o
+        # IO compartilhado ainda vive, depois encerra o serviço UMA
+        # única vez (me.cleanup delega ao svc.cleanup, idempotente).
         self.ac.cleanup()
-        self.svc.cleanup()
+        self.me.cleanup()
         event.accept()
 
 

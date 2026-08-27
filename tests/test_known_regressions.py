@@ -37,7 +37,6 @@ from mouse_hub.core.automation.autoclicker import (
     AutoClickerState,
 )
 from mouse_hub.core.automation.focus import WindowFocusChecker
-from mouse_hub.core.automation.macros import MacroRecorder
 from mouse_hub.core.automation.store import MacroStore
 from mouse_hub.core.automation.types import EventType, MouseButton, RecordedEvent
 from tests.fakes import (
@@ -89,13 +88,12 @@ def test_macro_mouse_events_roundtrip_after_fix(macro_store):
     assert loaded[0].kind == EventType.MOUSE_PRESS and loaded[0].button == 1
     assert macro_store.discarded_entries.get("mouse", 0) == 0
 
-def test_recorder_load_reads_store_v1_after_fix(macro_store):
-    """INVARIANTE (correção #17, anteriormente regressão conhecida):
+def test_store_flush_reload_preserves_recorded_macro(macro_store):
+    """INVARIANTE (contrato #17 sob persistência única, issue #2):
     gravação e reprodução compartilham o MESMO contrato de armazenamento
-    — o MacroRecorder.load entende o container v1 do MacroStore. Este
-    era o teste `test_recorder_load_handles_file_in_store_v1_format`
-    (recorder retornava None para macros gravadas pelo store),
-    convertido para o comportamento esperado pós-correção."""
+    — uma instância do MacroStore relê do disco exatamente o que outra
+    gravou (o MacroRecorder.save/load duplicado foi removido; o store
+    transacional é a única implementação)."""
     events = [
         RecordedEvent(EventType.KEY_PRESS, button=0, keycode=38, delta_ms=0.0),
         RecordedEvent(EventType.KEY_RELEASE, button=0, keycode=38, delta_ms=33.33),
@@ -103,9 +101,10 @@ def test_recorder_load_reads_store_v1_after_fix(macro_store):
     macro_store.add("compartilhada", events)
     macro_store.flush()
 
-    # Comportamento esperado pós-correção (#17): o recorder entende o
-    # container v1 do store — retornar None era o bug.
-    loaded = MacroRecorder.load(macro_store._path, "compartilhada")
+    # Nova instância (simula reinício do app): lê o que a anterior gravou.
+    reread = MacroStore(macro_store._path)
+    assert reread.load() == 1
+    loaded = reread.get("compartilhada")
     assert loaded is not None
     assert len(loaded) == 2
     assert loaded[0].kind == EventType.KEY_PRESS
