@@ -52,6 +52,24 @@ O antigo servidor HTTP e a interface web foram removidos após a consolidação 
 
 As dependências Python estão declaradas em [`pyproject.toml`](pyproject.toml).
 
+## Instalação nativa (Linux Mint)
+
+O formato oficial de distribuição é o **instalador `install.sh`**: ele verifica dependências via `apt`, instala a regra udev do G403, copia o app para `/opt/mouse-hub`, registra o atalho e o ícone no menu de aplicativos e adiciona o usuário ao grupo `plugdev`. Um `.deb`/AppImage não é necessário neste estágio; essa decisão vale até que o volume de usuários justifique empacotamento formal.
+
+```bash
+git clone https://github.com/Base-Analitica/mouse-hub.git
+cd mouse-hub
+./install.sh
+```
+
+Depois, execute pelo menu de aplicativos (**Mouse Hub**) ou por `/opt/mouse-hub/launcher.sh`.
+
+Para remover (preserva seus dados em `~/.config/mouse-hub/` e `~/.local/share/mouse-hub/`):
+
+```bash
+./uninstall.sh
+```
+
 ## Instalação para desenvolvimento/uso a partir do repositório
 
 Use um ambiente virtual; o aplicativo não precisa alterar os pacotes Python do sistema:
