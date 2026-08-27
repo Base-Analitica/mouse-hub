@@ -7,6 +7,7 @@ DPI, Sensibilidade, Macros e Auto-Clicker (Minecraft Only)
 """
 
 import signal
+import os
 import sys
 import threading
 import time
@@ -44,7 +45,7 @@ from mouse_hub.core.mouse_controller import (
 from mouse_hub.core.config import ConfigError, ConfigPaths, migrate_legacy_config
 from mouse_hub.core.dpi import round_to_step
 from mouse_hub.core.sensitivity import clamp_sensitivity
-from mouse_hub.core.capabilities import CapabilityState
+from mouse_hub.core.capabilities import CapabilityState, with_overrides
 from mouse_hub.core.profiles import ProfileStore
 from mouse_hub.platform.linux import LinuxHidAccess
 from mouse_hub.platform.linux.input import LinuxSystemInput
@@ -889,7 +890,9 @@ class DashboardPage(QWidget):
         title.setStyleSheet(f"font-size: 20px; font-weight: 900; color: {COLORS['text_primary']}; background: transparent;")
         layout.addWidget(title)
 
-        self.subtitle = QLabel(f"Mouse: {MOUSE_NAME}  •  Conectado via xinput")
+        # issue #7: o texto real vem de _sync_subtitle() (capacidades do
+        # core); nenhum estado é afirmado antes da avaliação.
+        self.subtitle = QLabel(f"Mouse: {MOUSE_NAME}  •  Avaliando capacidades…")
         self.subtitle.setStyleSheet(f"font-size: 11px; color: {COLORS['text_muted']}; background: transparent;")
         layout.addWidget(self.subtitle)
 
@@ -908,6 +911,9 @@ class DashboardPage(QWidget):
         stats.addWidget(self.clicker_card)
         stats.addStretch()
         layout.addLayout(stats)
+
+        # issue #7: primeira renderização já parte do estado real.
+        self._sync_subtitle()
 
         # Quick actions
         layout.addWidget(self._spacer(10))
@@ -1029,9 +1035,18 @@ class DashboardPage(QWidget):
         caps = self.state.capability_state()
         hid = caps.is_available("hid_available")
         detected = caps.is_available("mouse_detected")
-        if detected and hid:
+        dpi = caps.is_available("hardware_dpi_available")
+        if detected and hid and dpi:
             text = f"{MOUSE_NAME}  •  Hardware DPI disponível"
             color = COLORS["mc_green"]
+        elif detected and hid:
+            # Acesso HID confirmado não implica DPI ajustável (issue #7):
+            # o texto declara apenas o que o core evidenciou.
+            reason = caps.reason_for("hardware_dpi_available")
+            text = f"{MOUSE_NAME}  •  Acesso HID — DPI físico indisponível"
+            if reason:
+                text += f" ({reason})"
+            color = COLORS["warning"]
         elif detected:
             text = f"{MOUSE_NAME}  •  Detectado — sem acesso HID"
             color = COLORS["warning"]
@@ -1425,6 +1440,14 @@ class SensitivityPage(QWidget):
         self.slider.sliderReleased.connect(self._commit_slider)
         layout.addWidget(self.slider)
 
+        # issue #7: a capacidade real manda — sem libinput/xinput, o
+        # controle fica desabilitado COM a causa, nunca mascarado.
+        self.caps_hint = QLabel("")
+        self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["text_muted"])
+        self.caps_hint.setWordWrap(True)
+        layout.addWidget(self.caps_hint)
+        self._sync_sensitivity_caps()
+
         hint = QHBoxLayout()
         hint.addWidget(QLabel("🐢 Lento"))
         hint.addStretch()
@@ -1586,16 +1609,33 @@ class SensitivityPage(QWidget):
                 self.slider.setValue(confirmed)
             else:
                 self.sens_value.setText(UNKNOWN_VALUE_TEXT)
+        self._sync_sensitivity_caps()
         self._sync_polling()
+
+    def _sync_sensitivity_caps(self):
+        """Reflete sensitivity_available com a causa real (issue #7)."""
+        if self.state is None:
+            return
+        caps = self.state.capability_state()
+        available = caps.is_available("sensitivity_available")
+        reason = caps.reason_for("sensitivity_available") or "capacidade não disponível no ambiente atual"
+        self.slider.setEnabled(available)
+        if available:
+            self.caps_hint.setText("🟢 Sensibilidade do sistema disponível (libinput)")
+            self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["mc_green"])
+        else:
+            self.caps_hint.setText(f"🔴 Sensibilidade indisponível: {reason}")
+            self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["danger"])
 
 
 class AutoClickerPage(QWidget):
     """Pagina do Auto-Clicker"""
-    def __init__(self, mc, ac, svc):
+    def __init__(self, mc, ac, svc, caps_provider=None):
         super().__init__()
         self.mc = mc
         self.ac = ac
         self.svc = svc
+        self.caps_provider = caps_provider
         self._build()
 
     def _build(self):
@@ -1723,6 +1763,10 @@ class AutoClickerPage(QWidget):
         layout.addLayout(btn_row)
 
         # Start / Stop
+        self.caps_hint = QLabel("")
+        self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["text_muted"])
+        self.caps_hint.setWordWrap(True)
+
         self.toggle_btn = AccentButton("▶️  Iniciar Auto-Clicker")
         self.toggle_btn.setMinimumHeight(44)
         self.toggle_btn.clicked.connect(self._toggle)
@@ -1734,6 +1778,30 @@ class AutoClickerPage(QWidget):
         self.timer = QTimer()
         self.timer.timeout.connect(self._update)
         self.timer.start(1000)
+
+        # issue #7: disponibilidade real do clicker dirige os controles.
+        self._sync_caps()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_caps()
+
+    def _sync_caps(self):
+        """Reflete autoclick_available com a causa real (issue #7)."""
+        if self.caps_provider is None:
+            return
+        caps = self.caps_provider()
+        available = caps.is_available("autoclick_available")
+        reason = caps.reason_for("autoclick_available") or "capacidade não disponível no ambiente atual"
+        button_widgets = [b for b, _ in self.btn_buttons]
+        for w in [self.cps_slider, self.toggle_btn, *button_widgets]:
+            w.setEnabled(available)
+        if available:
+            self.caps_hint.setText("🟢 Auto-clicker disponível (X11/XTest)")
+            self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["mc_green"])
+        else:
+            self.caps_hint.setText(f"🔴 Auto-clicker indisponível: {reason}")
+            self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["danger"])
 
     def _on_cps(self, val):
         self.ac.cps = val
@@ -1879,10 +1947,11 @@ class AutoClickerPage(QWidget):
 
 class MacrosPage(QWidget):
     """Pagina de Macros"""
-    def __init__(self, me, svc):
+    def __init__(self, me, svc, caps_provider=None):
         super().__init__()
         self.me = me
         self.svc = svc
+        self.caps_provider = caps_provider
         # issue #4: start/stop/cancel de gravação rodam FORA da thread
         # da UI (o handshake XRecord espera até 5 s e o stop faz join
         # de até 2 s). A conclusão é aplicada pelo timer de 500 ms —
@@ -1951,6 +2020,12 @@ class MacrosPage(QWidget):
         self.record_status.setStyleSheet(f"color: {COLORS['danger']}; font-size: 12px; font-weight: 600; background: transparent;")
         rl.addWidget(self.record_status)
 
+        # issue #7: disponibilidade real da captura, com a causa.
+        self.caps_hint = QLabel("")
+        self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["text_muted"])
+        self.caps_hint.setWordWrap(True)
+        rl.addWidget(self.caps_hint)
+
         # Feedback do playback (estado real do worker, incl. FAILED):
         # refresh leve a cada 500ms — sem polling de subprocesso,
         # apenas leitura de estado em memória do serviço.
@@ -1984,6 +2059,37 @@ class MacrosPage(QWidget):
         layout.addWidget(scroll)
 
         self._refresh_list()
+
+        # issue #7: disponibilidade real da captura dirige os controles
+        # (após a lista existir — botões por linha também são gated).
+        self._sync_caps()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_caps()
+
+    def _sync_caps(self):
+        """Reflete macro_capture_available com a causa real (issue #7).
+
+        Gravação exige captura XRecord; playback exige emissão XTest.
+        Sem o ambiente, ambos ficam desabilitados com a causa visível —
+        incluindo os botões por linha da lista de macros.
+        """
+        if self.caps_provider is None:
+            return
+        caps = self.caps_provider()
+        available = caps.is_available("macro_capture_available")
+        reason = caps.reason_for("macro_capture_available") or "capacidade não disponível no ambiente atual"
+        self.name_input.setEnabled(available)
+        self.record_btn.setEnabled(available)
+        for child in self.macro_list_widget.findChildren(QPushButton):
+            child.setEnabled(available)
+        if available:
+            self.caps_hint.setText("🟢 Captura de macros disponível (X11/XRecord)")
+            self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["mc_green"])
+        else:
+            self.caps_hint.setText(f"🔴 Captura de macros indisponível: {reason}")
+            self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["danger"])
 
     def _set_recording_ui(self, recording: bool) -> None:
         self.record_btn.setText("⏹️  Parar Gravação" if recording else "⏺️  Gravar Macro")
@@ -2669,11 +2775,10 @@ class SettingsPage(QWidget):
         info = QLabel(
             f"Mouse: {MOUSE_NAME} (VID 046d / PID c08f)\n"
             f"Descoberta: identidades de hardware (sysfs/hidraw)\n"
-            f"Sistema: Linux (xinput)\n"
+            f"Sistema: Linux (X11/XWayland)\n"
             f"Python: {sys.version.split()[0]}\n"
             f"Config: {paths.config_file}\n"
-            f"Macros: {paths.macros_file}\n"
-            f"Porta Web: 7777"
+            f"Macros: {paths.macros_file}"
         )
         info.setStyleSheet(f"font-family: monospace; font-size: 12px; color: {COLORS['text_secondary']}; background: transparent;")
         info_layout.addWidget(info)
@@ -2719,6 +2824,9 @@ class MouseHubApp(QMainWindow):
             self.mouse_state.refresh()
         except Exception:  # noqa: BLE001
             pass
+        # issue #7: o refresh acima reavalia capacidades; o indicador
+        # da sidebar parte delas (a chamada em _switch_page também
+        # cobre as atualizações posteriores).
 
         # Core único de automação (PR #14): uma única instância
         # compartilhada por todas as páginas — foco, gravação, playback
@@ -2787,12 +2895,12 @@ class MouseHubApp(QMainWindow):
         """)
         si_layout = QHBoxLayout(self.status_indicator)
         si_layout.setContentsMargins(8, 0, 8, 0)
-        dot = QLabel("●")
-        dot.setStyleSheet(f"color: {COLORS['success']}; font-size: 10px; background: transparent;")
-        si_layout.addWidget(dot)
-        si_text = QLabel("Online")
-        si_text.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-weight: 600; background: transparent;")
-        si_layout.addWidget(si_text)
+        self._status_dot = QLabel("●")
+        self._status_dot.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px; background: transparent;")
+        si_layout.addWidget(self._status_dot)
+        self._status_text = QLabel("Offline")
+        self._status_text.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-weight: 600; background: transparent;")
+        si_layout.addWidget(self._status_text)
         si_layout.addStretch()
         sb_layout.addWidget(self.status_indicator)
 
@@ -2832,8 +2940,14 @@ class MouseHubApp(QMainWindow):
         self.dashboard_page = DashboardPage(self.mc, self.ac, self.me, self.svc, state=self.mouse_state)
         self.dpi_page = DPIPage(self.mc, state=self.mouse_state)
         self.sens_page = SensitivityPage(self.mc, state=self.mouse_state)
-        self.clicker_page = AutoClickerPage(self.mc, self.ac, self.svc)
-        self.macros_page = MacrosPage(self.me, self.svc)
+        self.clicker_page = AutoClickerPage(
+            self.mc, self.ac, self.svc,
+            caps_provider=self.full_capability_state,
+        )
+        self.macros_page = MacrosPage(
+            self.me, self.svc,
+            caps_provider=self.full_capability_state,
+        )
         self.profiles_page = ProfilesPage(self.mc, state=self.mouse_state, store=ProfileStore(ConfigPaths.xdg()))
         self.settings_page = SettingsPage(self.mc, self.ac, self.me, self.svc)
 
@@ -2858,6 +2972,51 @@ class MouseHubApp(QMainWindow):
         self.stack.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
             btn.set_active(i == index)
+        self._update_sidebar_status()
+
+    # ── Estado global dirigido por capacidades (issue #7) ───────
+
+    def _automation_overrides(self):
+        """Evidências de automação da instância real do serviço.
+
+        O modelo de capacidades do MouseController marca automações
+        como "fronteira: outra instância"; a instância de automação
+        deste processo decide a partir do ambiente (X11 presente ⇒
+        XTest/XRecord utilizáveis). Sem X11, a causa real aparece no
+        motivo — a UI nunca simula disponibilidade.
+        """
+        if os.environ.get("DISPLAY"):
+            return {
+                "autoclick_available": (True, ""),
+                "macro_capture_available": (True, ""),
+                "active_window_detection_available": (True, ""),
+            }
+        reason = "sessão sem X11 (DISPLAY ausente)"
+        return {
+            "autoclick_available": (False, reason),
+            "macro_capture_available": (False, reason),
+            "active_window_detection_available": (False, reason),
+        }
+
+    def full_capability_state(self) -> CapabilityState:
+        """Estado combinado: evidências de hardware (core) + evidências
+        da instância de automação (issue #7)."""
+        return with_overrides(
+            self.mouse_state.capability_state(), self._automation_overrides()
+        )
+
+    def _update_sidebar_status(self):
+        """Indicador da sidebar reflete o estado combinado real —
+        nunca "Online" incondicional."""
+        caps = self.full_capability_state()
+        if caps.is_available("mouse_detected") and caps.is_available("hid_available"):
+            text, color = "Online", COLORS["success"]
+        elif caps.is_available("mouse_detected"):
+            text, color = "Detectado", COLORS["warning"]
+        else:
+            text, color = "Offline", COLORS["text_muted"]
+        self._status_dot.setStyleSheet(f"color: {color}; font-size: 10px; background: transparent;")
+        self._status_text.setText(text)
 
     def closeEvent(self, event):
         # Encerramento completo: captura, playback e worker do clicker
