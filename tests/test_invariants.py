@@ -445,17 +445,20 @@ def test_macro_load_returns_empty_state_without_false_success(macro_store):
     assert macro_store.get("ausente") is None
 
 
-def test_recorder_persists_deltas_relative_to_capture(macro_store):
-    """INVARIANTE: MacroRecorder grava o delta RELATIVO entre eventos
-    (não timestamp absoluto) — o roundtrip por MacroRecorder.save/load
-    reproduz os deltas com a mesma adaptação de 2 casas."""
+def test_store_persists_deltas_relative(macro_store):
+    """INVARIANTE: a persistência única (MacroStore, issue #2) grava o
+    delta RELATIVO entre eventos (não timestamp absoluto) — o roundtrip
+    add/flush + relê reproduz os deltas com a mesma adaptação de 2 casas."""
     events = [
         RecordedEvent(EventType.KEY_PRESS, button=0, keycode=38, delta_ms=0.0),
         RecordedEvent(EventType.KEY_RELEASE, button=0, keycode=38, delta_ms=55.55),
     ]
-    MacroRecorder.save(events, macro_store._path, "capturada")
+    macro_store.add("capturada", events)
+    macro_store.flush()
 
-    loaded = MacroRecorder.load(macro_store._path, "capturada")
+    reread = MacroStore(macro_store._path)
+    reread.load()
+    loaded = reread.get("capturada")
     assert loaded is not None
     assert len(loaded) == 2
     assert loaded[0].delta_ms == 0.0
