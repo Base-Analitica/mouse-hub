@@ -37,7 +37,7 @@ from mouse_hub.core.constants import (
     G403_NAME,
     SENSITIVITY_DEFAULT,
 )
-from mouse_hub.core.discovery import discover
+from mouse_hub.core.discovery import discover, discover_candidates
 from mouse_hub.core.mouse_controller import (
     MouseController as CoreMouseController,
     make_linux_controller,
@@ -406,7 +406,19 @@ class MouseCoreState:
         e nos OperationResult das operações."""
         with self._lock:
             try:
-                device = discover()
+                # Issue #68: o G403 expõe vários hidraw (input, vendor);
+                # selecionar exige sondar TODOS e escolher o que confirma
+                # HID++ — pegar o primeiro faz o DPI morrer em EPIPE.
+                candidates = discover_candidates()
+                device = self._core.select_endpoint(candidates)
+                if device is None and candidates:
+                    # Mouse PRESENTE mas nenhum endpoint elegível
+                    # (permissão, EPIPE ou ambiguidade): registra o
+                    # primeiro só para o diagnóstico ficar honesto
+                    # ("detectado, sem acesso"), nunca para efeitos —
+                    # o probe bloqueia escrita em seleção ambígua e só
+                    # confirma feature index em endpoint único.
+                    device = candidates[0]
                 register = self._core.refresh_device(device)
                 if register.status == OperationStatus.UNSUPPORTED and device is not None:
                     # Dispositivo do G403 presente mas sem interface hidraw
@@ -2797,7 +2809,7 @@ class MouseHubApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🖱️ Mouse Hub — Controlador Gamer")
+        self.setWindowTitle("🖱️ Mouse Hub — Controlador Gaymer")
         self.setMinimumSize(900, 600)
         self.resize(1050, 680)
 

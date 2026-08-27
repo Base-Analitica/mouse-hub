@@ -72,7 +72,7 @@ def _ready_dpi_page(qapp, monkeypatch):
     Usa o caminho REAL do app (state.refresh() com discovery patcheado)
     para que o snapshot de capacidades não fique defasado do probe."""
     state, core, hid, si = _make_state()
-    monkeypatch.setattr(app_module, "discover", lambda: _discovered())
+    monkeypatch.setattr(app_module, "discover_candidates", lambda: [_discovered()])
     state.refresh()  # discovery + registro + probe via state
     page = DPIPage(MouseController(), state=state)
     return state, core, hid, si, page
@@ -214,7 +214,7 @@ class TestImmediateCapabilityInvalidation:
     def test_permission_denied_reflected_immediately(self, qapp, monkeypatch):
         hid = FakeHidAccess()
         state, core, hid2, si = _make_state(hid=hid)
-        monkeypatch.setattr(app_module, "discover", lambda: _discovered())
+        monkeypatch.setattr(app_module, "discover_candidates", lambda: [_discovered()])
         state.refresh()
         caps = state.capability_state()
         assert caps.is_available("hid_available")
@@ -231,7 +231,7 @@ class TestImmediateCapabilityInvalidation:
     def test_transport_failure_invalidates_immediately(self, qapp, monkeypatch):
         hid = FakeHidAccess()
         state, core, hid2, si = _make_state(hid=hid)
-        monkeypatch.setattr(app_module, "discover", lambda: _discovered())
+        monkeypatch.setattr(app_module, "discover_candidates", lambda: [_discovered()])
         state.refresh()
         caps = state.capability_state()
         assert caps.is_available("hid_available")
@@ -246,7 +246,7 @@ class TestImmediateCapabilityInvalidation:
     def test_hot_unplug_invalidates_immediately(self, qapp, monkeypatch):
         hid = FakeHidAccess()
         state, core, hid2, si = _make_state(hid=hid)
-        monkeypatch.setattr(app_module, "discover", lambda: _discovered())
+        monkeypatch.setattr(app_module, "discover_candidates", lambda: [_discovered()])
         state.refresh()
         hid.write_failure_status = "device_not_found"
         result = state.set_hardware_dpi(800)
@@ -260,7 +260,7 @@ class TestImmediateCapabilityInvalidation:
         logo após a operação (sem refresh externo)."""
         hid = FakeHidAccess()
         state, core, hid2, si = _make_state(hid=hid)
-        monkeypatch.setattr(app_module, "discover", lambda: _discovered())
+        monkeypatch.setattr(app_module, "discover_candidates", lambda: [_discovered()])
         state.refresh()
         page = DPIPage(MouseController(), state=state)
         assert page.slider.isEnabled()
@@ -302,6 +302,13 @@ class _TrackingCore:
         self._enter()
         try:
             return self._core.refresh_device(device)
+        finally:
+            self._leave()
+
+    def select_endpoint(self, candidates):
+        self._enter()
+        try:
+            return self._core.select_endpoint(candidates)
         finally:
             self._leave()
 
@@ -355,7 +362,7 @@ class TestSerializedAccess:
         core.probe_endpoint()
 
         # discovery patcheado para devolver o G403 fake (sem sysfs real).
-        monkeypatch.setattr(app_module, "discover", lambda: _discovered())
+        monkeypatch.setattr(app_module, "discover_candidates", lambda: [_discovered()])
 
         n = 25
         barrier = threading.Barrier(2)
@@ -445,7 +452,7 @@ class TestRequestedVsApplied:
     def test_failed_apply_does_not_display_requested_as_applied(self, qapp, monkeypatch):
         hid = FakeHidAccess()
         state, core, hid2, si = _make_state(hid=hid)
-        monkeypatch.setattr(app_module, "discover", lambda: _discovered())
+        monkeypatch.setattr(app_module, "discover_candidates", lambda: [_discovered()])
         state.refresh()
         page = DPIPage(MouseController(), state=state)
         # Estado saudável com valor confirmado.
@@ -478,7 +485,7 @@ class TestDpiSetFailureInvalidatesCapability:
         """State com probe saudável e página de DPI pronta."""
         hid = FakeHidAccess()
         state, core, hid2, si = _make_state(hid=hid)
-        monkeypatch.setattr(app_module, "discover", lambda: _discovered())
+        monkeypatch.setattr(app_module, "discover_candidates", lambda: [_discovered()])
         state.refresh()
         page = DPIPage(MouseController(), state=state)
         assert page.slider.isEnabled()

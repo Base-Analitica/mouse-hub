@@ -29,3 +29,19 @@ def discover(
     """Localiza o G403 HERO pelo VID/PID. Retorna None se ausente."""
     devices = scanner(vid, pid, sysfs_root)
     return devices[0] if devices else None
+
+
+def discover_candidates(
+    vid: int = G403_VID,
+    pid: int = G403_PID,
+    sysfs_root: Path = Path("/sys/class/hidraw"),
+    scanner: SysfsScanner = DEFAULT_SCANNER,
+) -> List[MouseDevice]:
+    """Retorna TODOS os hidraws com a identidade do G403 (VID/PID).
+
+    O G403 real expõe mais de um /dev/hidrawN (interface de input do
+    mouse, interface vendor HID++). Identidade por VID/PID não diz qual
+    fala o protocolo — a escolha do endpoint é feita depois, por
+    HydppEndpointSelection (issue #68: pegar o primeiro candidato é um
+    bug de hardware real, a interface de input rejeita a escrita)."""
+    return scanner(vid, pid, sysfs_root)
