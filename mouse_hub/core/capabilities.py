@@ -139,3 +139,23 @@ class CapabilityModel:
     def unavailable() -> "CapabilityModel":
         """Estado em que nenhuma capacidade está disponível (fallback)."""
         return CapabilityModel()
+
+
+def with_overrides(
+    state: CapabilityState, overrides: Dict[str, tuple]
+) -> CapabilityState:
+    """Retorna um novo CapabilityState com capacidades substituídas.
+
+    A instância do serviço de automação é DONA da evidência sobre
+    automações (captura de macros, clicker, foco de janela): o modelo
+    do MouseController marca essas capacidades como "fronteira: outra
+    instância". A UI compõe os dois estados — o override substitui
+    apenas as capacidades listadas, preservando as evidências de
+    hardware do mouse.
+    """
+    capabilities = dict(state.capabilities)
+    for name, (available, reason) in overrides.items():
+        if name not in CAPABILITY_NAMES:
+            raise ValueError(f"capacidade desconhecida: {name}")
+        capabilities[name] = Capability(name=name, available=bool(available), reason=str(reason))
+    return CapabilityState(capabilities=capabilities)
