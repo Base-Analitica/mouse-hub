@@ -54,6 +54,13 @@ from mouse_hub.platform.linux.privileges import (
     fix_hid_permissions,
     is_hid_permission_issue,
 )
+from app.ui.theme import (
+    COLORS,
+    build_app_stylesheet,
+    TYPE_SCALE,
+    SPACE,
+    normal_font_size,
+)
 from mouse_hub.platform.linux.input import LinuxSystemInput
 
 from PyQt5.QtWidgets import (
@@ -87,205 +94,9 @@ from PyQt5.QtGui import (
 #  TEMA / CORES
 # ═══════════════════════════════════════════════════════════════════════════════
 
-COLORS = {
-    "bg_darkest":    "#08080e",
-    "bg_dark":       "#0e0e18",
-    "bg_mid":        "#141422",
-    "bg_card":       "#1a1a2e",
-    "bg_card_hover": "#20203a",
-    "bg_input":      "#252540",
-    "border":        "#2a2a4a",
-    "border_light":  "#3a3a6a",
-    "accent":        "#7c3aed",
-    "accent_light":  "#a78bfa",
-    "accent_dark":   "#5b21b6",
-    "accent_glow":   "rgba(124, 58, 237, 0.3)",
-    "success":       "#22c55e",
-    "success_dark":  "#166534",
-    "danger":        "#ef4444",
-    "danger_dark":   "#7f1d1d",
-    "warning":       "#f59e0b",
-    "warning_dark":  "#78350f",
-    "text_primary":  "#e2e8f0",
-    "text_secondary":"#94a3b8",
-    "text_muted":    "#64748b",
-    "text_dim":      "#475569",
-    "mc_green":      "#4ade80",
-    "mc_dark":       "#166534",
-    "sidebar_bg":    "#0b0b14",
-    "sidebar_hover": "#15152a",
-    "sidebar_active":"#1c1c38",
-    "scrollbar":     "#2a2a4a",
-    "scrollbar_bg":  "#0e0e18",
-}
+COLORS = dict(COLORS)  # alias local (fonte única: app/ui/theme.py)
 
-STYLESHEET = f"""
-/* ─── Global ────────────────────────────────────────────── */
-* {{
-    font-family: 'Segoe UI', 'Ubuntu', 'Noto Sans', sans-serif;
-}}
-QMainWindow {{
-    background-color: {COLORS['bg_darkest']};
-}}
-QWidget {{
-    color: {COLORS['text_primary']};
-}}
-
-/* ─── Scrollbar ─────────────────────────────────────────── */
-QScrollArea {{
-    border: none;
-    background: transparent;
-}}
-QScrollBar:vertical {{
-    background: {COLORS['scrollbar_bg']};
-    width: 8px;
-    margin: 0;
-    border-radius: 4px;
-}}
-QScrollBar::handle:vertical {{
-    background: {COLORS['scrollbar']};
-    border-radius: 4px;
-    min-height: 30px;
-}}
-QScrollBar::handle:vertical:hover {{
-    background: {COLORS['border_light']};
-}}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-    height: 0;
-}}
-QScrollBar:horizontal {{
-    height: 8px;
-    background: {COLORS['scrollbar_bg']};
-    border-radius: 4px;
-}}
-QScrollBar::handle:horizontal {{
-    background: {COLORS['scrollbar']};
-    border-radius: 4px;
-    min-width: 30px;
-}}
-
-/* ─── Slider ────────────────────────────────────────────── */
-QSlider::groove:horizontal {{
-    background: {COLORS['bg_input']};
-    height: 6px;
-    border-radius: 3px;
-}}
-QSlider::handle:horizontal {{
-    background: {COLORS['accent']};
-    width: 18px;
-    height: 18px;
-    margin: -6px 0;
-    border-radius: 9px;
-    border: 2px solid {COLORS['accent_light']};
-}}
-QSlider::handle:horizontal:hover {{
-    background: {COLORS['accent_light']};
-    border-color: white;
-}}
-QSlider::sub-page:horizontal {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 {COLORS['accent_dark']}, stop:1 {COLORS['accent']});
-    border-radius: 3px;
-}}
-
-/* ─── Buttons ───────────────────────────────────────────── */
-QPushButton {{
-    background-color: {COLORS['bg_card']};
-    color: {COLORS['text_primary']};
-    border: 1px solid {COLORS['border']};
-    border-radius: 8px;
-    padding: 8px 16px;
-    font-size: 13px;
-    font-weight: 600;
-}}
-QPushButton:hover {{
-    background-color: {COLORS['bg_card_hover']};
-    border-color: {COLORS['accent']};
-}}
-QPushButton:pressed {{
-    background-color: {COLORS['accent_dark']};
-}}
-QPushButton:disabled {{
-    background-color: {COLORS['bg_dark']};
-    color: {COLORS['text_dim']};
-    border-color: {COLORS['bg_mid']};
-}}
-
-/* ─── Input ─────────────────────────────────────────────── */
-QLineEdit, QSpinBox, QComboBox {{
-    background-color: {COLORS['bg_input']};
-    color: {COLORS['text_primary']};
-    border: 1px solid {COLORS['border']};
-    border-radius: 8px;
-    padding: 8px 12px;
-    font-size: 13px;
-}}
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{
-    border-color: {COLORS['accent']};
-}}
-QComboBox::drop-down {{
-    border: none;
-    width: 30px;
-}}
-QComboBox::down-arrow {{
-    image: none;
-    border: none;
-}}
-QComboBox QAbstractItemView {{
-    background-color: {COLORS['bg_card']};
-    color: {COLORS['text_primary']};
-    border: 1px solid {COLORS['border']};
-    selection-background-color: {COLORS['accent']};
-    border-radius: 8px;
-    padding: 4px;
-}}
-
-/* ─── Label ─────────────────────────────────────────────── */
-QLabel {{
-    background: transparent;
-}}
-
-/* ─── GroupBox ──────────────────────────────────────────── */
-QGroupBox {{
-    background-color: {COLORS['bg_card']};
-    border: 1px solid {COLORS['border']};
-    border-radius: 12px;
-    margin-top: 8px;
-    padding: 20px 16px 16px 16px;
-    font-weight: 700;
-    font-size: 14px;
-}}
-QGroupBox::title {{
-    subcontrol-origin: margin;
-    left: 16px;
-    padding: 0 8px;
-    color: {COLORS['accent_light']};
-}}
-
-/* ─── QTextEdit ─────────────────────────────────────────── */
-QTextEdit {{
-    background-color: {COLORS['bg_input']};
-    color: {COLORS['text_secondary']};
-    border: 1px solid {COLORS['border']};
-    border-radius: 8px;
-    padding: 8px;
-    font-size: 12px;
-}}
-
-/* ─── Progress Bar ──────────────────────────────────────── */
-QProgressBar {{
-    background-color: {COLORS['bg_input']};
-    border: none;
-    border-radius: 4px;
-    height: 6px;
-    text-align: center;
-}}
-QProgressBar::chunk {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 {COLORS['accent_dark']}, stop:1 {COLORS['accent']});
-    border-radius: 4px;
-}}
-"""
+STYLESHEET = build_app_stylesheet()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -755,7 +566,7 @@ class StatCard(QFrame):
         self.value_label = QLabel(value)
         self.value_label.setStyleSheet(f"""
             color: {color};
-            font-size: 22px;
+            font-size: 20px;
             font-weight: 900;
             background: transparent;
         """)
@@ -900,7 +711,7 @@ class DashboardPage(QWidget):
 
     def _build(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 14, 24, 14)
+        layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(12)
 
         # Title
@@ -914,20 +725,23 @@ class DashboardPage(QWidget):
         self.subtitle.setStyleSheet(f"font-size: 11px; color: {COLORS['text_muted']}; background: transparent;")
         layout.addWidget(self.subtitle)
 
-        # Stats row
-        stats = QHBoxLayout()
-        stats.setSpacing(16)
+        # Stats em GRID 2×2 (issue #66): cabe em qualquer largura sem
+        # espremer/overlap; colunas expansíveis igualmente.
+        stats = QGridLayout()
+        stats.setHorizontalSpacing(16)
+        stats.setVerticalSpacing(12)
 
         self.dpi_card = StatCard("🎯", "DPI", str(self.mc.current_dpi), COLORS["accent"])
         self.sens_card = StatCard("🎚️", "SENSIBILIDADE", f"{self.mc.current_sensitivity}%", COLORS["success"])
         self.mc_card = StatCard("⛏️", "MINECRAFT", "OFF", COLORS["text_muted"])
         self.clicker_card = StatCard("⚡", "AUTO-CLICKER", "OFF", COLORS["danger"])
 
-        stats.addWidget(self.dpi_card)
-        stats.addWidget(self.sens_card)
-        stats.addWidget(self.mc_card)
-        stats.addWidget(self.clicker_card)
-        stats.addStretch()
+        stats.addWidget(self.dpi_card, 0, 0)
+        stats.addWidget(self.sens_card, 0, 1)
+        stats.addWidget(self.mc_card, 1, 0)
+        stats.addWidget(self.clicker_card, 1, 1)
+        stats.setColumnStretch(0, 1)
+        stats.setColumnStretch(1, 1)
         layout.addLayout(stats)
 
         # issue #7: primeira renderização já parte do estado real.
@@ -946,7 +760,10 @@ class DashboardPage(QWidget):
         for name, dpi in [("CS:GO AWP", 400), ("FPS Geral", 800),
                           ("Minecraft PvP", 1200), ("Flick Shots", 1600)]:
             btn = AccentButton(f"{name}\n{dpi} DPI", COLORS["bg_card"])
-            btn.setFixedSize(130, 52)
+            # issue #66: largura mínima flexível — 4 presets nunca
+            # estouram a linha (setFixedSize(130) somava 556px mínimos).
+            btn.setMinimumHeight(52)
+            btn.setMinimumWidth(96)
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background: {COLORS['bg_card']};
@@ -1108,7 +925,7 @@ class DPIPage(QWidget):
 
     def _build(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 14, 24, 14)
+        layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(12)
 
         title = QLabel("🎯  Controle de DPI")
@@ -1133,7 +950,7 @@ class DPIPage(QWidget):
         self.dpi_value.setAlignment(Qt.AlignCenter)
         self.dpi_value.setStyleSheet(f"""
             color: {COLORS['accent_light']};
-            font-size: 56px;
+            font-size: 44px;
             font-weight: 900;
             background: transparent;
         """)
@@ -1197,7 +1014,7 @@ class DPIPage(QWidget):
         self.dpi_input.setAlignment(Qt.AlignCenter)
         self.dpi_input.setStyleSheet(f"""
             QLineEdit {{
-                font-size: 18px;
+                font-size: 16px;
                 font-weight: 700;
                 padding: 10px;
                 border-radius: 10px;
@@ -1228,8 +1045,11 @@ class DPIPage(QWidget):
         presets_label.setStyleSheet(f"font-size: 16px; font-weight: 700; background: transparent;")
         layout.addWidget(presets_label)
 
-        presets = QHBoxLayout()
-        presets.setSpacing(12)
+        # Grid 2×3 (issue #66): 5 presets em linha somavam 607px
+        # mínimos e estouravam a janela pequena; em grid cabem sempre.
+        presets = QGridLayout()
+        presets.setHorizontalSpacing(12)
+        presets.setVerticalSpacing(12)
 
         # Presets com valores vindos da fonte unica de verdade
         # (DPI_PRESETS em core/constants) — issue #6.
@@ -1264,7 +1084,8 @@ class DPIPage(QWidget):
             """)
             btn.clicked.connect(lambda _, d=dpi: self._set_preset(d))
             self.preset_buttons.append((name, dpi, btn))
-            presets.addWidget(btn)
+            presets.addWidget(btn, len(self.preset_buttons) // 3,
+                         len(self.preset_buttons) % 3)
         layout.addLayout(presets)
 
         layout.addStretch()
@@ -1324,7 +1145,7 @@ class DPIPage(QWidget):
         ok = result.status.ok
         self.dpi_value.setStyleSheet(f"""
             color: {COLORS['accent_light'] if ok else COLORS['danger']};
-            font-size: 56px;
+            font-size: 44px;
             font-weight: 900;
             background: transparent;
         """)
@@ -1402,7 +1223,7 @@ class SensitivityPage(QWidget):
 
     def _build(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 14, 24, 14)
+        layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(12)
 
         title = QLabel("🎚️  Sensibilidade")
@@ -1432,7 +1253,7 @@ class SensitivityPage(QWidget):
         self.sens_value.setAlignment(Qt.AlignCenter)
         self.sens_value.setStyleSheet(f"""
             color: {COLORS['success']};
-            font-size: 48px;
+            font-size: 44px;
             font-weight: 900;
             background: transparent;
         """)
@@ -1599,7 +1420,7 @@ class SensitivityPage(QWidget):
         ok = result.status.ok
         self.sens_value.setStyleSheet(f"""
             color: {COLORS['success'] if ok else COLORS['danger']};
-            font-size: 48px;
+            font-size: 44px;
             font-weight: 900;
             background: transparent;
         """)
@@ -1658,7 +1479,7 @@ class AutoClickerPage(QWidget):
 
     def _build(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 14, 24, 14)
+        layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(12)
 
         title = QLabel("⚡  Auto-Clicker")
@@ -1691,7 +1512,7 @@ class AutoClickerPage(QWidget):
         sl = QHBoxLayout(self.status_frame)
 
         self.status_icon = QLabel("🖱️")
-        self.status_icon.setStyleSheet("font-size: 36px; background: transparent;")
+        self.status_icon.setStyleSheet("font-size: 44px; background: transparent;")
         sl.addWidget(self.status_icon)
 
         info = QVBoxLayout()
@@ -1737,7 +1558,7 @@ class AutoClickerPage(QWidget):
         self.cps_display.setAlignment(Qt.AlignCenter)
         self.cps_display.setStyleSheet(f"""
             color: {COLORS['warning']};
-            font-size: 30px;
+            font-size: 24px;
             font-weight: 900;
             background: transparent;
         """)
@@ -1982,7 +1803,7 @@ class MacrosPage(QWidget):
 
     def _build(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 14, 24, 14)
+        layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(12)
 
         title = QLabel("🎬  Macros")
@@ -2378,7 +2199,7 @@ class ProfilesPage(QWidget):
 
     def _build(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 14, 24, 14)
+        layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(12)
 
         title = QLabel("👤  Perfis")
@@ -2411,11 +2232,14 @@ class ProfilesPage(QWidget):
         form_label.setStyleSheet("font-size: 16px; font-weight: 700; background: transparent;")
         layout.addWidget(form_label)
 
-        form = QHBoxLayout()
-        form.setSpacing(10)
+        # Grid (issue #66): nome em linha própria, controles e botões
+        # em duas colunas — nunca soma 668px de largura mínima.
+        form = QGridLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(10)
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("Nome do perfil")
-        self.name_input.setFixedWidth(180)
+        self.name_input.setMinimumWidth(120)
         self.name_input.setStyleSheet(
             "QLineEdit { background: %s; border: 1px solid %s;"
             "border-radius: 8px; padding: 8px; font-size: 13px; }"
@@ -2435,12 +2259,11 @@ class ProfilesPage(QWidget):
         self.clear_btn = QPushButton("✖ Cancelar")
         self.clear_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.clear_btn.clicked.connect(self._clear_form)
-        form.addWidget(self.name_input)
-        form.addWidget(self.dpi_input)
-        form.addWidget(self.sens_input)
-        form.addWidget(self.save_btn)
-        form.addWidget(self.clear_btn)
-        form.addStretch()
+        form.addWidget(self.name_input, 0, 0, 1, 2)
+        form.addWidget(self.dpi_input, 1, 0)
+        form.addWidget(self.sens_input, 1, 1)
+        form.addWidget(self.save_btn, 2, 0)
+        form.addWidget(self.clear_btn, 2, 1)
         layout.addLayout(form)
 
         layout.addStretch()
@@ -2514,7 +2337,7 @@ class ProfilesPage(QWidget):
 
         top = QHBoxLayout()
         ic = QLabel("🖱️")
-        ic.setStyleSheet("font-size: 22px; background: transparent;")
+        ic.setStyleSheet("font-size: 20px; background: transparent;")
         top.addWidget(ic)
         top.addStretch()
         active_badge = QLabel("")
@@ -2524,7 +2347,7 @@ class ProfilesPage(QWidget):
 
         nm = QLabel(profile.name)
         nm.setStyleSheet(
-            "font-size: 15px; font-weight: 700; color: %s; background: transparent;" % color
+            "font-size: 14px; font-weight: 700; color: %s; background: transparent;" % color
         )
         cl.addWidget(nm)
 
@@ -2722,7 +2545,7 @@ class SettingsPage(QWidget):
 
     def _build(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 14, 24, 14)
+        layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(12)
 
         title = QLabel("⚙️  Configurações")
@@ -2914,7 +2737,9 @@ class MouseHubApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("🖱️ Mouse Hub — Controlador Gaymer")
-        self.setMinimumSize(900, 600)
+        # Mínimo coerente com o conteúdo (issue #66): abaixo disso as
+        # páginas entram em scroll em vez de sobrepor widgets.
+        self.setMinimumSize(720, 520)
         self.resize(1050, 680)
 
         # Centraliza na tela automaticamente
@@ -2983,7 +2808,7 @@ class MouseHubApp(QMainWindow):
         logo_layout = QHBoxLayout(logo_frame)
         logo_layout.setContentsMargins(4, 0, 4, 0)
         icon = QLabel("🖱️")
-        icon.setStyleSheet("font-size: 28px; background: transparent;")
+        icon.setStyleSheet("font-size: 24px; background: transparent;")
         logo_layout.addWidget(icon)
         logo_text = QLabel("MOUSE\nHUB")
         logo_text.setStyleSheet(f"""
@@ -3012,7 +2837,7 @@ class MouseHubApp(QMainWindow):
         si_layout = QHBoxLayout(self.status_indicator)
         si_layout.setContentsMargins(8, 0, 8, 0)
         self._status_dot = QLabel("●")
-        self._status_dot.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px; background: transparent;")
+        self._status_dot.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
         si_layout.addWidget(self._status_dot)
         self._status_text = QLabel("Offline")
         self._status_text.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-weight: 600; background: transparent;")
@@ -3044,7 +2869,7 @@ class MouseHubApp(QMainWindow):
 
         # Version
         ver = QLabel("v1.0.0 — Freebuff")
-        ver.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 10px; background: transparent;")
+        ver.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 11px; background: transparent;")
         sb_layout.addWidget(ver)
 
         main_layout.addWidget(sidebar)
@@ -3071,13 +2896,14 @@ class MouseHubApp(QMainWindow):
         # roda no startup, após operações e em evento explícito — nunca
         # em loop periódico.
 
-        self.stack.addWidget(self.dashboard_page)
-        self.stack.addWidget(self.dpi_page)
-        self.stack.addWidget(self.sens_page)
-        self.stack.addWidget(self.clicker_page)
-        self.stack.addWidget(self.macros_page)
-        self.stack.addWidget(self.profiles_page)
-        self.stack.addWidget(self.settings_page)
+        # Issue #66: toda página vive dentro de um scroll frameless —
+        # janela pequena NUNCA mais sobrepõe widgets; conteúdo rola.
+        for page in (
+            self.dashboard_page, self.dpi_page, self.sens_page,
+            self.clicker_page, self.macros_page, self.profiles_page,
+            self.settings_page,
+        ):
+            self.stack.addWidget(self._wrap_scrollable(page))
 
         main_layout.addWidget(self.stack)
 
@@ -3095,6 +2921,21 @@ class MouseHubApp(QMainWindow):
         self._hotplug_timer = QTimer(self)
         self._hotplug_timer.timeout.connect(self._poll_hotplug)
         self._hotplug_timer.start(200)
+
+    @staticmethod
+    def _wrap_scrollable(page):
+        """Envolve a página em QScrollArea transparente (issue #66).
+
+        Todo QLabel da página recebe wordWrap: texto longo deixa a
+        página ENCOLHER em vez de empurrar a largura mínima do layout
+        (causa raiz da sobreposição em janela pequena)."""
+        for lab in page.findChildren(QLabel):
+            lab.setWordWrap(True)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(page)
+        return scroll
 
     def _switch_page(self, index):
         self.stack.setCurrentIndex(index)
@@ -3184,7 +3025,7 @@ class MouseHubApp(QMainWindow):
             text, color = "Detectado", COLORS["warning"]
         else:
             text, color = "Offline", COLORS["text_muted"]
-        self._status_dot.setStyleSheet(f"color: {color}; font-size: 10px; background: transparent;")
+        self._status_dot.setStyleSheet(f"color: {color}; font-size: 11px; background: transparent;")
         self._status_text.setText(text)
 
     def closeEvent(self, event):
