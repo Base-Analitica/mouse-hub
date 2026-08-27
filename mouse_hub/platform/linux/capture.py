@@ -212,6 +212,7 @@ class InputCapture:
         self._first_time_ms: int = 0   # clock do servidor X do 1º evento
         self._last_at_ms: float = 0.0  # offset ms do evento anterior
         self._count: int = 0
+        self._truncated: bool = False  # teto MAX_EVENTS atingido (issue #4)
 
     # ── Estado ─────────────────────────────────────────────────────
 
@@ -224,6 +225,14 @@ class InputCapture:
     def failure(self) -> Optional[str]:
         with self._lock:
             return self._failure
+
+    @property
+    def truncated(self) -> bool:
+        """True quando a gravação foi interrompida por atingir o teto
+        MAX_EVENTS — a macro salva é um TRUNCADO, e a UI precisa
+        dizer isso em vez de apresentar sucesso silencioso."""
+        with self._lock:
+            return self._truncated
 
     @property
     def state(self) -> str:
@@ -309,6 +318,29 @@ class InputCapture:
             self._cleanup_handles()
         return ok
 
+    def _abort_start(self, reason: str) -> None:
+        """Aborta um start em andamento (estado `starting`).
+
+        Desabilita o contexto pela conexão de controle (destrava o
+        enable_context bloqueante), libera os handles exatamente uma
+        vez e registra o motivo — issue #4: cancelar/parar durante o
+        handshake não pode vazar o worker nem o contexto X."""
+        with self._lock:
+            if self._state != "starting":
+                return
+            handles = self._handles
+            self._handles = None
+            self._failure = reason
+            self._stop_event.set()
+            self._state = "stopped"
+        if handles is not None:
+            try:
+                self._backend.disable_context(handles.ctx, handles.ctl_display)
+            except Exception:  # noqa: BLE001
+                pass
+            self._cleanup_handles(handles)
+        self._ready.set()
+
     def stop(self) -> int:
         """Encerra a captura de forma limpa: desabilita o contexto
         pela conexão de controle, aguarda o worker (que só sai quando
@@ -316,7 +348,18 @@ class InputCapture:
         exatamente uma vez, e retorna o número de eventos gravados.
         Após o return, o handler nunca mais recebe evento."""
         with self._lock:
-            if self._state != "recording":
+            if self._state == "starting":
+                stop_starting = True
+            else:
+                stop_starting = False
+                recording_now = self._state == "recording"
+        if stop_starting:
+            # A parada chegou antes do handshake concluir: aborta o
+            # start em vez de ignorar o pedido (issue #4).
+            self._abort_start("parado durante inicialização")
+            return 0
+        with self._lock:
+            if not recording_now:
                 return self._count
             self._state = "stopping"
             handles = self._handles
@@ -368,7 +411,11 @@ class InputCapture:
     def cancel(self) -> None:
         """Aborta imediatamente e descarta tudo o que foi gravado."""
         with self._lock:
+            starting = self._state == "starting"
             was_recording = self._state == "recording"
+        if starting:
+            self._abort_start("cancelado durante inicialização")
+            return
         if not was_recording:
             return
         self.stop()
@@ -583,6 +630,10 @@ class InputCapture:
                 if self._state not in ("recording", "stopping"):
                     break
                 if self._count >= MAX_EVENTS:
+                    # Teto defensivo atingido — sinaliza truncamento
+                    # (a UI informa; sucesso silencioso aqui seria
+                    # uma macro silenciosamente incompleta).
+                    self._truncated = True
                     break
                 if self._count == 0:
                     self._first_time_ms = evt_time_ms

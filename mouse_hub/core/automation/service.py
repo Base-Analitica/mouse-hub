@@ -86,6 +86,7 @@ class AutomationService:
 
         self._events: List[RecordedEvent] = []
         self._record_name: Optional[str] = None
+        self._last_recording_truncated: bool = False
         self._loaded = False
 
     # ── Foco (discovert once, consumers share) ─────────────────────
@@ -149,14 +150,15 @@ class AutomationService:
             self._record_name = name
 
         capture = InputCapture(self._on_event, backend=self._capture_backend)
+        with self._lock:
+            # Registrado ANTES do handshake (issue #4): cancelar durante
+            # o estado `starting` encontra a captura e aborta o start —
+            # antes, o pedido era silenciosamente ignorado.
+            self._capture = capture
         if not capture.start():
             with self._lock:
-                self._capture = capture
                 self._record_name = None
             return False
-
-        with self._lock:
-            self._capture = capture
         return True
 
     def stop_recording(self) -> bool:
@@ -199,6 +201,12 @@ class AutomationService:
             self._events = []
             self._record_name = None
         capture.cancel()
+        with self._lock:
+            # A captura cancelada permanece registrada: o motivo do
+            # aborto (ex.: "cancelado durante inicialização") fica
+            # legível em capture_failure para a UI (issue #4). O estado
+            # interno é stopped — recording/stop seguem coerentes.
+            self._capture = capture
 
     def delete_macro(self, name: str) -> bool:
         if not self.store.delete(name):
