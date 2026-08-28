@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small, read-only Serena MCP bridge for Prime Agent project skills."""
+"""Small, read-only Serena MCP bridge for project agent skills (Jcode)."""
 from __future__ import annotations
 
 import argparse

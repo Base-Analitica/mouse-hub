@@ -14,4 +14,4 @@ Run `scripts/agent/semantic-code tools` as a health check. If missing, run `scri
 - `scripts/agent/semantic-code refs <name> <path>`
 - `scripts/agent/semantic-code diagnostics <path>`
 
-Use normal Prime Agent editing and exact reads for changes and non-code files. Keep answers bounded with `--max-chars`; fall back to `rg` and native tools if Serena fails.
+Use the agent's native editing and exact reads for changes and non-code files. Keep answers bounded with `--max-chars`; fall back to `rg` and native tools if Serena fails.
