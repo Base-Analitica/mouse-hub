@@ -30,6 +30,7 @@ from mouse_hub.core import (
     OperationStatus,
 )
 from mouse_hub.core.constants import (
+    APP_VERSION,
     DPI_DEFAULT,
     DPI_MAX,
     DPI_MIN,
@@ -165,6 +166,7 @@ class MouseController:
 # confirmou o valor). Unknown NUNCA vira default na UI (revisão PR #21):
 # requested != applied != persisted; sem confirmação, não há valor a exibir.
 UNKNOWN_VALUE_TEXT = "—"
+_PERMISSION_BTN_LABEL = "🔓  Conceder acesso ao hardware  (senha de administrador)"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -578,7 +580,7 @@ class StatCard(QFrame):
 
         title_label = QLabel(title)
         title_label.setStyleSheet(f"""
-            color: {COLORS['text_muted']};
+            color: {COLORS['text_secondary']};
             font-size: 11px;
             font-weight: 600;
             background: transparent;
@@ -680,10 +682,12 @@ class DangerButton(QPushButton):
         super().__init__(f"{icon}  {text}" if icon else text)
         self.setMinimumHeight(38)
         self.setCursor(QCursor(Qt.PointingHandCursor))
+        # Audit impeccable: stops ≥4.5:1 contra branco (antes 2.77:1
+        # no hover) + estado :disabled legível.
         self.setStyleSheet(f"""
             QPushButton {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {COLORS['danger']}, stop:1 #f87171);
+                    stop:0 {COLORS['danger']}, stop:1 {COLORS['danger_dark']});
                 color: white;
                 border: none;
                 border-radius: 10px;
@@ -693,7 +697,12 @@ class DangerButton(QPushButton):
             }}
             QPushButton:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #f87171, stop:1 #fca5a5);
+                    stop:0 {COLORS['danger_dark']}, stop:1 {COLORS['danger_dark']});
+            }}
+            QPushButton:disabled {{
+                background: {COLORS['bg_input']};
+                color: {COLORS['text_muted']};
+                border: none;
             }}
         """)
 
@@ -720,7 +729,7 @@ class DashboardPage(QWidget):
 
         # Title
         title = QLabel("🖱️  Mouse Hub Dashboard")
-        title.setStyleSheet(f"font-size: 20px; font-weight: 900; color: {COLORS['text_primary']}; background: transparent;")
+        title.setStyleSheet(f"font-size: 24px; font-weight: 900; color: {COLORS['text_primary']}; background: transparent;")
         layout.addWidget(title)
 
         # issue #7: o texto real vem de _sync_subtitle() (capacidades do
@@ -735,7 +744,7 @@ class DashboardPage(QWidget):
         stats.setHorizontalSpacing(16)
         stats.setVerticalSpacing(12)
 
-        self.dpi_card = StatCard("🎯", "DPI", str(self.mc.current_dpi), COLORS["accent"])
+        self.dpi_card = StatCard("🎯", "DPI", str(self.mc.current_dpi), COLORS["accent_light"])
         self.sens_card = StatCard("🎚️", "SENSIBILIDADE", f"{self.mc.current_sensitivity}%", COLORS["success"])
         self.mc_card = StatCard("⛏️", "MINECRAFT", "OFF", COLORS["text_muted"])
         self.clicker_card = StatCard("⚡", "AUTO-CLICKER", "OFF", COLORS["danger"])
@@ -798,6 +807,8 @@ class DashboardPage(QWidget):
         self.log = QTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumHeight(120)
+        self.log.setPlaceholderText(
+            "Nenhuma atividade ainda — as ações do app aparecem aqui.")
         self.log.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {COLORS['bg_card']};
@@ -962,10 +973,10 @@ class DPIPage(QWidget):
         """)
         dl.addWidget(self.dpi_value)
 
-        dpi_label = QLabel("DOTS PER INCH")
-        dpi_label.setAlignment(Qt.AlignCenter)
-        dpi_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; font-weight: 700; letter-spacing: 2px; background: transparent;")
-        dl.addWidget(dpi_label)
+        self.dpi_state = QLabel("DOTS PER INCH")
+        self.dpi_state.setAlignment(Qt.AlignCenter)
+        self.dpi_state.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-weight: 700; letter-spacing: 2px; background: transparent;")
+        dl.addWidget(self.dpi_state)
 
         layout.addWidget(display)
 
@@ -994,22 +1005,20 @@ class DPIPage(QWidget):
                 # Desconhecido: exibe UNKNOWN; o slider fica em posição
                 # NEUTRA (controle de entrada — não alega estado aplicado).
                 self.dpi_value.setText(UNKNOWN_VALUE_TEXT)
+                self.dpi_state.setText("AGUARDANDO LEITURA DO HARDWARE")
                 self.slider.setValue(DPI_DEFAULT)
             else:
                 self.dpi_value.setText(str(initial))
+                self.dpi_state.setText("DOTS PER INCH")
                 self.slider.setValue(initial)
                 self.mc.current_dpi = initial
 
-        # Range labels
-        range_row = QHBoxLayout()
-        min_l = QLabel(f"Min: {DPI_MIN}")
-        min_l.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
-        max_l = QLabel(f"Max: {DPI_MAX}")
-        max_l.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
-        range_row.addWidget(min_l)
-        range_row.addStretch()
-        range_row.addWidget(max_l)
-        layout.addLayout(range_row)
+        # Range como UMA legenda centrada (labels colados nas bordas
+        # opostas pairavam desconectados do slider).
+        range_l = QLabel(f"Faixa suportada: {DPI_MIN} – {DPI_MAX} DPI")
+        range_l.setAlignment(Qt.AlignCenter)
+        range_l.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; background: transparent;")
+        layout.addWidget(range_l)
 
         # Manual input
         input_row = QHBoxLayout()
@@ -1060,23 +1069,25 @@ class DPIPage(QWidget):
         # Presets com valores vindos da fonte unica de verdade
         # (DPI_PRESETS em core/constants) — issue #6.
         preset_data = [
-            ("🎯 CS:GO AWP", DPI_PRESETS["Low (CS:GO AWP)"], COLORS["success"]),
-            ("🔫 FPS Geral", DPI_PRESETS["Medium (FPS Geral)"], COLORS["accent"]),
-            ("⛏️ Minecraft PvP", DPI_PRESETS["High (Minecraft PvP)"], COLORS["warning"]),
-            ("⚡ Flick Shots", DPI_PRESETS["Ultra (Flick Shots)"], COLORS["danger"]),
-            ("🚀 Max Speed", DPI_PRESETS["Max Speed"], COLORS["text_muted"]),
+            ("🎯 CS:GO AWP", DPI_PRESETS["Low (CS:GO AWP)"]),
+            ("🔫 FPS Geral", DPI_PRESETS["Medium (FPS Geral)"]),
+            ("⛏️ Minecraft PvP", DPI_PRESETS["High (Minecraft PvP)"]),
+            ("⚡ Flick Shots", DPI_PRESETS["Ultra (Flick Shots)"]),
+            ("🚀 Max Speed", DPI_PRESETS["Max Speed"]),
         ]
 
         # Botões expostos para a suíte de integração (QTest/direct emit).
         self.preset_buttons = []
-        for name, dpi, color in preset_data:
+        for pos, (name, dpi) in enumerate(preset_data):
             btn = QPushButton(f"{name}\n{dpi} DPI")
             btn.setFixedHeight(70)
             btn.setCursor(QCursor(Qt.PointingHandCursor))
+            # Operate: nome neutro, valor em destaque — cor SEMÂNTICA
+            # não decora botão (a cor por jogo era salada visual).
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background: {COLORS['bg_card']};
-                    color: {color};
+                    color: {COLORS['text_secondary']};
                     border: 1px solid {COLORS['border']};
                     border-radius: 12px;
                     padding: 10px;
@@ -1084,14 +1095,15 @@ class DPIPage(QWidget):
                     font-weight: 700;
                 }}
                 QPushButton:hover {{
-                    border-color: {color};
+                    border-color: {COLORS['accent']};
                     background: {COLORS['bg_card_hover']};
+                    color: {COLORS['text_primary']};
                 }}
             """)
             btn.clicked.connect(lambda _, d=dpi: self._set_preset(d))
             self.preset_buttons.append((name, dpi, btn))
-            presets.addWidget(btn, len(self.preset_buttons) // 3,
-                         len(self.preset_buttons) % 3)
+            presets.addWidget(btn, pos // 3, pos % 3)
+        presets.setColumnStretch(3, 1)
         layout.addLayout(presets)
 
         layout.addStretch()
@@ -1132,6 +1144,7 @@ class DPIPage(QWidget):
         nunca gera dezenas de comandos HID++."""
         val = round_to_step(val)
         self.dpi_value.setText(str(val))
+        self.dpi_state.setText("DOTS PER INCH")
         self.dpi_input.setText(str(val))
 
     def _commit_slider(self):
@@ -1158,6 +1171,7 @@ class DPIPage(QWidget):
         applied = result.details.get("applied")
         if ok and applied is not None:
             self.dpi_value.setText(str(applied))
+            self.dpi_state.setText("DOTS PER INCH")
             self.dpi_input.setText(str(applied))
             # setValue programático dispara valueChanged → preview sem
             # efeito físico (uma ação = uma operação).
@@ -1168,10 +1182,12 @@ class DPIPage(QWidget):
             )
             if confirmed is not None:
                 self.dpi_value.setText(str(confirmed))
+                self.dpi_state.setText("DOTS PER INCH")
                 self.dpi_input.setText(str(confirmed))
                 self.slider.setValue(confirmed)
             else:
                 self.dpi_value.setText(UNKNOWN_VALUE_TEXT)
+                self.dpi_state.setText("AGUARDANDO LEITURA DO HARDWARE")
         self._sync_hint()
 
     def _apply_manual(self):
@@ -1187,6 +1203,7 @@ class DPIPage(QWidget):
         else:
             self.mc.set_dpi(val)
             self.dpi_value.setText(str(val))
+            self.dpi_state.setText("DOTS PER INCH")
 
     def _set_preset(self, dpi):
         """Preset de DPI físico — exatamente UMA operação via core."""
@@ -1196,6 +1213,7 @@ class DPIPage(QWidget):
         else:
             self.mc.set_dpi(dpi)
             self.dpi_value.setText(str(dpi))
+            self.dpi_state.setText("DOTS PER INCH")
 
     def showEvent(self, event):
         """Refresh explícito ao abrir a página (revisão PR #21 — sem
@@ -1213,10 +1231,12 @@ class DPIPage(QWidget):
         confirmed = self.state.applied_dpi
         if confirmed is not None:
             self.dpi_value.setText(str(confirmed))
+            self.dpi_state.setText("DOTS PER INCH")
             self.dpi_input.setText(str(confirmed))
             self.slider.setValue(confirmed)
         else:
             self.dpi_value.setText(UNKNOWN_VALUE_TEXT)
+            self.dpi_state.setText("AGUARDANDO LEITURA DO HARDWARE")
 
 
 class SensitivityPage(QWidget):
@@ -1233,7 +1253,7 @@ class SensitivityPage(QWidget):
         layout.setSpacing(12)
 
         title = QLabel("🎚️  Sensibilidade")
-        title.setStyleSheet(f"font-size: 20px; font-weight: 900; background: transparent;")
+        title.setStyleSheet(f"font-size: 24px; font-weight: 900; background: transparent;")
         layout.addWidget(title)
 
         # Display
@@ -1266,10 +1286,10 @@ class SensitivityPage(QWidget):
         """)
         dl.addWidget(self.sens_value)
 
-        sl = QLabel("VELOCIDADE DO SISTEMA (libinput)")
-        sl.setAlignment(Qt.AlignCenter)
-        sl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; font-weight: 700; background: transparent;")
-        dl.addWidget(sl)
+        self.sens_state = QLabel("VELOCIDADE DO SISTEMA (libinput)")
+        self.sens_state.setAlignment(Qt.AlignCenter)
+        self.sens_state.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-weight: 700; background: transparent;")
+        dl.addWidget(self.sens_state)
 
         layout.addWidget(display)
 
@@ -1301,7 +1321,7 @@ class SensitivityPage(QWidget):
         for i in range(hint.count()):
             w = hint.itemAt(i).widget()
             if w:
-                w.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
+                w.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; background: transparent;")
         layout.addLayout(hint)
 
         # Speed bar
@@ -1354,7 +1374,7 @@ class SensitivityPage(QWidget):
                     font-size: 13px;
                     font-weight: 700;
                 }
-            """ % (COLORS["bg_card"], COLORS["text_dim"], COLORS["border"]))
+            """ % (COLORS["bg_card"], COLORS["text_muted"], COLORS["border"]))
             pr_row.addWidget(btn)
             self.polling_buttons.append(btn)
         pr_row.addStretch()
@@ -1413,6 +1433,7 @@ class SensitivityPage(QWidget):
         ponteiro (libinput) acontece no commit (sliderReleased) — um
         gesto gera no máximo uma operação de sensibilidade."""
         self.sens_value.setText(f"{val}%")
+        self.sens_state.setText("VELOCIDADE DO SISTEMA (libinput)")
 
     def _commit_slider(self):
         """sliderReleased: uma operação de sensibilidade por gesto.
@@ -1432,14 +1453,17 @@ class SensitivityPage(QWidget):
         applied = result.details.get("applied")
         if ok and applied is not None:
             self.sens_value.setText(f"{applied}%")
+            self.sens_state.setText("VELOCIDADE DO SISTEMA (libinput)")
             self.slider.setValue(applied)
         else:
             confirmed = self.state.applied_sensitivity
             if confirmed is not None:
                 self.sens_value.setText(f"{confirmed}%")
+                self.sens_state.setText("VELOCIDADE DO SISTEMA (libinput)")
                 self.slider.setValue(confirmed)
             else:
                 self.sens_value.setText(UNKNOWN_VALUE_TEXT)
+                self.sens_state.setText("aguardando leitura do hardware…")
 
     def showEvent(self, event):
         """Refresh explícito ao abrir a página (revisão PR #21 — sem
@@ -1450,9 +1474,11 @@ class SensitivityPage(QWidget):
             confirmed = self.state.applied_sensitivity
             if confirmed is not None:
                 self.sens_value.setText(f"{confirmed}%")
+                self.sens_state.setText("VELOCIDADE DO SISTEMA (libinput)")
                 self.slider.setValue(confirmed)
             else:
                 self.sens_value.setText(UNKNOWN_VALUE_TEXT)
+                self.sens_state.setText("aguardando leitura do hardware…")
         self._sync_sensitivity_caps()
         self._sync_polling()
 
@@ -1602,6 +1628,9 @@ class AutoClickerPage(QWidget):
 
         self.toggle_btn = AccentButton("▶️  Iniciar Auto-Clicker")
         self.toggle_btn.setMinimumHeight(44)
+        self.toggle_btn.setToolTip(
+            "O clique só dispara com a janela do Minecraft em foco — "
+            "fora dela o motor fica ocioso por segurança.")
         self.toggle_btn.clicked.connect(self._toggle)
         layout.addWidget(self.toggle_btn)
 
@@ -1821,6 +1850,7 @@ class MacrosPage(QWidget):
 
         rl.addWidget(QLabel("Nome da macro:"))
         self.name_input = QLineEdit("minha_macro")
+        self.name_input.setMaxLength(32)
         self.name_input.setStyleSheet(f"padding: 10px; font-size: 14px;")
         rl.addWidget(self.name_input)
 
@@ -2081,7 +2111,9 @@ class MacrosPage(QWidget):
 
         macros = self.me.list_all()
         if not macros:
-            empty = QLabel("Nenhuma macro gravada ainda")
+            empty = QLabel(
+                "Nenhuma macro gravada ainda.\n"
+                "Use ⏺️  Gravar Macro acima para criar a primeira.")
             empty.setAlignment(Qt.AlignCenter)
             empty.setStyleSheet(f"color: {COLORS['text_muted']}; padding: 30px; font-size: 13px; background: transparent;")
             self.macro_list_layout.addWidget(empty)
@@ -2109,7 +2141,7 @@ class MacrosPage(QWidget):
             info_col.addWidget(name_label)
 
             meta = QLabel(f"{info['count']} eventos  •  {info['created'][:10]}")
-            meta.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
+            meta.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; background: transparent;")
             info_col.addWidget(meta)
             il.addLayout(info_col)
 
@@ -2227,6 +2259,7 @@ class ProfilesPage(QWidget):
         self.grid = QGridLayout()
         self.grid.setSpacing(16)
         layout.addLayout(self.grid)
+        self._grid_cols = 3
 
         # ── Criacao/edicao de perfil customizado ────────────────────
         form_label = QLabel("✏️  Criar / Editar Perfil")
@@ -2323,7 +2356,9 @@ class ProfilesPage(QWidget):
             color = COLORS["warning"]
 
         card = QFrame()
-        card.setFixedSize(200, 185)
+        # audit: cards flexíveis — 3 colunas têm de caber em 720px
+        card.setMinimumSize(140, 185)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         card.setCursor(QCursor(Qt.PointingHandCursor))
         card.setObjectName("profileCard")
         card.setStyleSheet(
@@ -2355,7 +2390,7 @@ class ProfilesPage(QWidget):
 
         det = QLabel("DPI: %d  •  Sens: %d%%" % (profile.dpi, profile.sensitivity))
         det.setStyleSheet(
-            "color: %s; font-size: 11px; background: transparent;" % COLORS["text_muted"]
+            "color: %s; font-size: 11px; background: transparent;" % COLORS["text_secondary"]
         )
         cl.addWidget(det)
 
@@ -2384,7 +2419,8 @@ class ProfilesPage(QWidget):
         edit.clicked.connect(lambda _, p=profile: self._start_edit(p))
         cl.addWidget(edit)
 
-        self.grid.addWidget(card, index // 2, index % 2)
+        self.grid.addWidget(card, index // self._grid_cols,
+                     index % self._grid_cols)
         self.profile_cards[profile.name] = {
             "card": card,
             "active_badge": active_badge,
@@ -2642,6 +2678,7 @@ class SettingsPage(QWidget):
         """Botão/status refletem a evidência REAL de acesso HID —
         nunca genérico (issue #7: estado honesto de capacidades)."""
         if self.state is None:
+            self._permission_btn.setText(_PERMISSION_BTN_LABEL)
             self._permission_status.setText(
                 "Estado de hardware não disponível nesta página.")
             self._permission_status.setStyleSheet(
@@ -2660,8 +2697,11 @@ class SettingsPage(QWidget):
                 f"font-size: 12px; color: {COLORS['success']}; background: transparent;")
             self._permission_btn.setEnabled(False)
             self._permission_btn.setToolTip("Acesso já concedido")
+            self._permission_btn.setText("✔  Acesso HID já concedido")
             return
         reason = caps.reason_for("hid_available")
+        if self._permission_btn.text() != _PERMISSION_BTN_LABEL:
+            self._permission_btn.setText(_PERMISSION_BTN_LABEL)
         if is_hid_permission_issue(reason):
             self._permission_status.setText(
                 f"🔓 Sem acesso HID: {reason}. "
@@ -2671,6 +2711,8 @@ class SettingsPage(QWidget):
             self._permission_btn.setEnabled(True)
             self._permission_btn.setToolTip("")
         else:
+            if self._permission_btn.text() != _PERMISSION_BTN_LABEL:
+                self._permission_btn.setText(_PERMISSION_BTN_LABEL)
             self._permission_status.setText(
                 f"⚠️ Sem acesso HID por outra causa: {reason}")
             self._permission_status.setStyleSheet(
@@ -2842,7 +2884,7 @@ class MouseHubApp(QMainWindow):
         si_layout = QHBoxLayout(self.status_indicator)
         si_layout.setContentsMargins(8, 0, 8, 0)
         self._status_dot = QLabel("●")
-        self._status_dot.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
+        self._status_dot.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; background: transparent;")
         si_layout.addWidget(self._status_dot)
         self._status_text = QLabel("Offline")
         self._status_text.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-weight: 600; background: transparent;")
@@ -2873,8 +2915,8 @@ class MouseHubApp(QMainWindow):
         sb_layout.addStretch()
 
         # Version
-        ver = QLabel("v1.0.0 — Freebuff")
-        ver.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 11px; background: transparent;")
+        ver = QLabel(f"Mouse Hub v{APP_VERSION}")
+        ver.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; background: transparent;")
         sb_layout.addWidget(ver)
 
         main_layout.addWidget(sidebar)
