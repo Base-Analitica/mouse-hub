@@ -255,7 +255,7 @@ def test_ui_start_does_not_block_event_loop(qapp):
     assert "Iniciando" in page.record_status.text()
 
     assert _drain(page)
-    assert page.record_status.text().startswith("🔴 Gravando")
+    assert page.record_status.text().startswith("● Gravando")
     assert page.cancel_btn.isVisible() or not page.cancel_btn.isHidden()
     assert page.record_btn.isEnabled() is True
 
@@ -280,7 +280,7 @@ def test_ui_stop_saves_and_refreshes(qapp):
     assert page.record_btn.isEnabled() is False
 
     assert _drain(page)
-    assert "✅ Macro 'minha_macro' salva! (3 eventos)" in page.record_status.text()
+    assert "Macro 'minha_macro' salva! (3 eventos)" in page.record_status.text()
     assert page.me.recording is False
 
 

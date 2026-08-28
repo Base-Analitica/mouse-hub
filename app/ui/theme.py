@@ -61,6 +61,7 @@ TYPE_SCALE = {
     "title":    20,   # título de página
     "display":  24,   # título hero
     "hero":     44,   # números grandes (detector MC)
+    "logo":     17,   # wordmark da sidebar (única exceção de marca)
 }
 
 # ── Espaçamento (px) — base 4 ───────────────────────────────
