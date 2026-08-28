@@ -11,6 +11,9 @@ agente de código responsável por este repositório a partir de
   `scripts/agent/bootstrap-rtk`).
 - [`skills/semantic-code/`](skills/semantic-code/) — navegação semântica
   via bridge Serena read-only (`scripts/agent/semantic-code`).
+- [`skills/find-skills/`](skills/find-skills/) — descoberta e instalação
+  de skills do ecossistema público (skills.sh / `npx skills`), com nota
+  de adaptação para instalação project-local neste repo.
 
 ## Camadas de prompt que o Jcode lê neste repositório
 
