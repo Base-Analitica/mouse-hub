@@ -39,10 +39,36 @@ git+https://github.com/github/spec-kit.git@v1.0.1`).
 2. `.jcode/skills/<nome>/SKILL.md` — carregadas sob demanda (semântica
    ou via `skill_manage`).
 
+## Superfície única de skills
+
+`.jcode/skills/` é a **única** superfície de skills do projeto. Nenhuma
+skill vive em `.agents/`, `.claude/` ou `.prime/`. Inventário atual:
+
+- **Projeto** (3): `find-skills`, `semantic-code`, `token-efficient-shell`
+- **obra/superpowers** (14): brainstorming, systematic-debugging,
+  test-driven-development, writing-plans, executing-plans,
+  requesting/receiving-code-review, verification-before-completion,
+  using-superpowers, subagent-driven-development, dispatching-parallel-agents,
+  using-git-worktrees, finishing-a-development-branch, writing-skills
+- **dietrichgebert/ponytail** (6): ponytail + audit/debt/gain/help/review
+- **pbakaus/impeccable** (1): design/critique/polish de frontend v4.1.2
+- **nextlevelbuilder/ui-ux-pro-max** (1): design intelligence (79 estilos,
+  192 paletas, 74 font pairings, 119 UX guidelines, 22 stacks)
+- **anthropics/skills** (1): frontend-design oficial da Anthropic
+- **Spec Kit** (10): speckit-constitution/specify/plan/tasks/implement/
+  converge/clarify/analyze/checklist/taskstoissues
+
+Total: 36 skills. Instalação de novas skills: copiar `SKILL.md` (e
+dependências) do catálogo para `.jcode/skills/<nome>/` — nunca para
+outro diretório.
+
 ## Notas de migração
 
 - `.prime/agent/skills/*` → `.jcode/skills/*` (mesma semântica, formato
   idêntico de frontmatter YAML).
+- `.agents/skills/speckit-*` → `.jcode/skills/speckit-*` (superfície
+  única; Spec Kit instalado com `--integration codex --skills` originalmente
+  escreve em `.agents/`, que deixou de existir no repo).
 - `AGENTS.md` e `scripts/agent/*` foram atualizados para referenciar
   `.jcode/`; `.prime/` foi removido do repositório.
 - As ferramentas (`rtk`, `semantic-code`) continuam em `scripts/agent/`
