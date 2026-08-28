@@ -148,3 +148,20 @@ def test_janela_minima_maior_que_o_piso_de_usabilidade(window):
     assert window.minimumWidth() >= 720
     assert window.minimumHeight() >= 520
     assert 190 + 500 <= window.minimumWidth()
+
+
+# ── Issue #117: microcopy do heading CPS ─────────────────────
+
+def test_clicker_cps_heading_copy(qapp, window):
+    """O heading do controle de velocidade expande a sigla em pt-BR
+    consistente (sem mistura com inglês). O rótulo de unidade "CPS"
+    do slider é outro widget e não faz parte da microcopy da issue."""
+    from PyQt5.QtWidgets import QLabel
+    window._switch_page(3)  # clicker
+    qapp.processEvents()
+    headings = [w for w in window.clicker_page.findChildren(QLabel)
+                if "CPS (" in w.text()]
+    assert headings, "heading CPS não encontrado na página do clicker"
+    for w in headings:
+        assert w.text() == "CPS (Cliques por segundo)", \
+            f"microcopy inconsistente: {w.text()!r}"
