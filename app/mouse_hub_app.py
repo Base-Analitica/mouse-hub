@@ -68,7 +68,7 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QSlider, QFrame, QGraphicsDropShadowEffect,
     QScrollArea, QStackedWidget, QLineEdit, QSpinBox, QComboBox,
     QMessageBox, QProgressBar, QSystemTrayIcon, QMenu, QAction,
-    QGroupBox, QGridLayout, QTextEdit
+    QGroupBox, QGridLayout, QTextEdit, QSizePolicy,
 )
 from PyQt5.QtCore import (
     Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize,
@@ -542,14 +542,18 @@ class StatCard(QFrame):
     """Card de estatistica"""
     def __init__(self, icon, title, value, color=COLORS["accent"]):
         super().__init__()
-        self.setFixedSize(140, 88)
-        self.setStyleSheet(f"""
-            QFrame {{
+        # issue #66 (craft): cards EXPANDEM para preencher o grid —
+        # setFixedSize(140, 88) deixava 4 caixinhas perdidas no meio.
+        self.setMinimumHeight(96)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setObjectName("statCard")
+        self        .setStyleSheet(f"""
+            QFrame#statCard {{
                 background-color: {COLORS['bg_card']};
                 border: 1px solid {COLORS['border']};
                 border-radius: 12px;
             }}
-            QFrame:hover {{
+            QFrame#statCard:hover {{
                 border-color: {color};
             }}
         """)
@@ -566,7 +570,7 @@ class StatCard(QFrame):
         self.value_label = QLabel(value)
         self.value_label.setStyleSheet(f"""
             color: {color};
-            font-size: 20px;
+            font-size: 24px;
             font-weight: 900;
             background: transparent;
         """)
@@ -934,8 +938,10 @@ class DPIPage(QWidget):
 
         # DPI Display
         display = QFrame()
-        display.setStyleSheet(f"""
-            QFrame {{
+        display.setFixedHeight(150)
+        display.setObjectName("dpiDisplay")
+        display        .setStyleSheet(f"""
+            QFrame#dpiDisplay {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                     stop:0 {COLORS['bg_card']}, stop:1 {COLORS['bg_mid']});
                 border: 1px solid {COLORS['border']};
@@ -1233,8 +1239,9 @@ class SensitivityPage(QWidget):
         # Display
         display = QFrame()
         display.setFixedHeight(130)
-        display.setStyleSheet(f"""
-            QFrame {{
+        display.setObjectName("sensDisplay")
+        display        .setStyleSheet(f"""
+            QFrame#sensDisplay {{
                 background: {COLORS['bg_card']};
                 border: 1px solid {COLORS['border']};
                 border-radius: 16px;
@@ -1300,17 +1307,15 @@ class SensitivityPage(QWidget):
         # Speed bar
         bar_frame = QFrame()
         bar_frame.setFixedHeight(8)
-        bar_frame.setStyleSheet(f"""
-            QFrame {{
+        bar_frame.setObjectName("speedBar")
+        bar_frame        .setStyleSheet(f"""
+            QFrame#speedBar {{
                 background: {COLORS['bg_input']};
                 border-radius: 4px;
             }}
         """)
         layout.addWidget(bar_frame)
 
-        layout.addStretch()
-
-        
         # Polling rate — issue #6. O G403 HERO não tem alteração de
         # polling rate confirmável pelo stack HID++ atual (feature
         # Report Rate 0x8060 não implementada na descoberta de
@@ -1318,7 +1323,7 @@ class SensitivityPage(QWidget):
         # permanece indisponível: nenhuma frequência é apresentada
         # como ativa e os botões não executam NENHUM comando — sem
         # sucesso falso nem simulação visual.
-        pr_title = QLabel("U0001f4e1  Polling Rate")
+        pr_title = QLabel("📡  Polling Rate")
         pr_title.setStyleSheet("font-size: 16px; font-weight: 700; background: transparent;")
         layout.addWidget(pr_title)
 
@@ -1486,23 +1491,12 @@ class AutoClickerPage(QWidget):
         title.setStyleSheet(f"font-size: 24px; font-weight: 900; background: transparent;")
         layout.addWidget(title)
 
-        badge = QLabel("⛏️  FUNCIONA APENAS NO MINECRAFT / LUNAR CLIENT")
-        badge.setAlignment(Qt.AlignCenter)
-        badge.setStyleSheet(f"""
-            background: rgba(74, 222, 128, 0.1);
-            color: {COLORS['mc_green']};
-            border: 1px solid rgba(74, 222, 128, 0.3);
-            border-radius: 10px;
-            padding: 10px;
-            font-size: 12px;
-            font-weight: 700;
-        """)
-        layout.addWidget(badge)
 
         # Status
         self.status_frame = QFrame()
-        self.status_frame.setStyleSheet(f"""
-            QFrame {{
+        self.status_frame.setObjectName("clickerStatus")
+        self.status_frame        .setStyleSheet(f"""
+            QFrame#clickerStatus {{
                 background: {COLORS['bg_card']};
                 border: 2px solid {COLORS['border']};
                 border-radius: 16px;
@@ -1690,8 +1684,9 @@ class AutoClickerPage(QWidget):
             self.status_title.setText("Auto-Clicker Desligado")
             self.status_sub.setText("Clique em iniciar para começar")
             self.status_icon.setText("🖱️")
-            self.status_frame.setStyleSheet(f"""
-                QFrame {{
+            self.status_frame.setObjectName("clickerStatus")
+            self.status_frame            .setStyleSheet(f"""
+                QFrame#clickerStatus {{
                     background: {COLORS['bg_card']};
                     border: 2px solid {COLORS['border']};
                     border-radius: 16px;
@@ -1720,8 +1715,9 @@ class AutoClickerPage(QWidget):
             """)
             self.status_title.setText("Auto-Clicker Ativo!")
             self.status_icon.setText("🔥")
-            self.status_frame.setStyleSheet(f"""
-                QFrame {{
+            self.status_frame.setObjectName("clickerStatus")
+            self.status_frame            .setStyleSheet(f"""
+                QFrame#clickerStatus {{
                     background: {COLORS['bg_card']};
                     border: 2px solid {COLORS['danger']};
                     border-radius: 16px;
@@ -1812,8 +1808,9 @@ class MacrosPage(QWidget):
 
         # Record controls
         rec_frame = QFrame()
-        rec_frame.setStyleSheet(f"""
-            QFrame {{
+        rec_frame.setObjectName("recFrame")
+        rec_frame        .setStyleSheet(f"""
+            QFrame#recFrame {{
                 background: {COLORS['bg_card']};
                 border: 1px solid {COLORS['border']};
                 border-radius: 12px;
@@ -1895,7 +1892,10 @@ class MacrosPage(QWidget):
         scroll = QScrollArea()
         scroll.setWidget(self.macro_list_widget)
         scroll.setWidgetResizable(True)
-        layout.addWidget(scroll)
+        scroll.setMinimumHeight(120)
+        layout.addWidget(scroll, 1)
+        # espaço sobrando vai pro rodapé, NÃO infla o card de gravação
+        layout.addStretch()
 
         self._refresh_list()
 
@@ -2089,14 +2089,15 @@ class MacrosPage(QWidget):
 
         for name, info in macros.items():
             item = QFrame()
-            item.setStyleSheet(f"""
-                QFrame {{
+            item.setObjectName("macroItem")
+            item            .setStyleSheet(f"""
+                QFrame#macroItem {{
                     background: {COLORS['bg_card']};
                     border: 1px solid {COLORS['border']};
                     border-radius: 10px;
                     padding: 12px;
                 }}
-                QFrame:hover {{
+                QFrame#macroItem:hover {{
                     border-color: {COLORS['accent']};
                 }}
             """)
@@ -2347,7 +2348,8 @@ class ProfilesPage(QWidget):
 
         nm = QLabel(profile.name)
         nm.setStyleSheet(
-            "font-size: 14px; font-weight: 700; color: %s; background: transparent;" % color
+            "font-size: 14px; font-weight: 700; color: %s; background: transparent;"
+            % COLORS["text_primary"]
         )
         cl.addWidget(nm)
 
@@ -2364,7 +2366,8 @@ class ProfilesPage(QWidget):
         apply.setStyleSheet(
             "QPushButton { background: %s; color: white; border: none;"
             "border-radius: 8px; padding: 5px; font-size: 12px; font-weight: 700; }"
-            "QPushButton:hover { opacity: 0.8; }" % color
+            "QPushButton:hover { background: %s; }"
+            % (COLORS["accent"], COLORS["accent_light"])
         )
         apply.clicked.connect(lambda _, p=profile: self._apply(p))
         cl.addWidget(apply)
@@ -2792,8 +2795,9 @@ class MouseHubApp(QMainWindow):
         # ─── Sidebar ───
         sidebar = QFrame()
         sidebar.setFixedWidth(190)
-        sidebar.setStyleSheet(f"""
-            QFrame {{
+        sidebar.setObjectName("sidebar")
+        sidebar        .setStyleSheet(f"""
+            QFrame#sidebar {{
                 background-color: {COLORS['sidebar_bg']};
                 border-right: 1px solid {COLORS['border']};
             }}
@@ -2827,8 +2831,9 @@ class MouseHubApp(QMainWindow):
         # Status
         self.status_indicator = QFrame()
         self.status_indicator.setFixedHeight(32)
-        self.status_indicator.setStyleSheet(f"""
-            QFrame {{
+        self.status_indicator.setObjectName("statusIndicator")
+        self.status_indicator        .setStyleSheet(f"""
+            QFrame#statusIndicator {{
                 background: {COLORS['bg_card']};
                 border-radius: 18px;
                 padding: 4px 12px;
