@@ -55,6 +55,7 @@ from mouse_hub.platform.linux.privileges import (
     fix_hid_permissions,
     is_hid_permission_issue,
 )
+from app.ui import icons as ui_icons
 from app.ui.theme import (
     COLORS,
     build_app_stylesheet,
@@ -166,7 +167,7 @@ class MouseController:
 # confirmou o valor). Unknown NUNCA vira default na UI (revisão PR #21):
 # requested != applied != persisted; sem confirmação, não há valor a exibir.
 UNKNOWN_VALUE_TEXT = "—"
-_PERMISSION_BTN_LABEL = "🔓  Conceder acesso ao hardware  (senha de administrador)"
+_PERMISSION_BTN_LABEL = " Conceder acesso ao hardware  (senha de administrador)"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -593,40 +594,38 @@ class StatCard(QFrame):
 
 
 class SidebarButton(QPushButton):
-    """Botao da sidebar"""
-    def __init__(self, icon, text, index):
-        super().__init__(f"  {icon}  {text}")
-        self.index = index
-        self.setFixedHeight(40)
-        self.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                color: {COLORS['text_secondary']};
-                border: none;
-                border-radius: 8px;
-                text-align: left;
-                padding-left: 16px;
-                font-size: 13px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background: {COLORS['sidebar_hover']};
-                color: {COLORS['text_primary']};
-            }}
-        """)
+    """Botão da sidebar — ícone vetorial (Remix, fonte embutida) +
+    pill de gradiente no estado ativo. Sem emoji (tofu na fonte do
+    usuário; decisão do mantenedor: ícones profissionais apenas)."""
 
-    def set_active(self, active):
+    def __init__(self, icon_key, text, index):
+        super().__init__(text)
+        self.index = index
+        self._icon_key = icon_key
+        self.setMinimumHeight(42)
+        self.setCursor(QCursor(Qt.PointingHandCursor))
+        self._apply_style(False)
+
+    def _apply_style(self, active: bool):
+        from app.ui import icons
+        color = COLORS["text_primary"] if active else COLORS["text_secondary"]
+        ic = icons.icon(self._icon_key, color, 18) if self._icon_key else None
+        if ic is not None:
+            self.setIcon(ic)
+            self.setIconSize(QSize(18, 18))
         if active:
             self.setStyleSheet(f"""
                 QPushButton {{
-                    background: {COLORS['sidebar_active']};
-                    color: {COLORS['accent_light']};
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 {COLORS['sidebar_active']}, stop:1 {COLORS['bg_mid']});
+                    color: {COLORS['text_primary']};
                     border-left: 3px solid {COLORS['accent']};
-                    border-radius: 8px;
+                    border-radius: 10px;
                     text-align: left;
-                    padding-left: 13px;
+                    padding-left: 15px;
                     font-size: 13px;
-                    font-weight: 700;
+                    font-weight: 800;
+                    letter-spacing: 0.4px;
                 }}
             """)
         else:
@@ -635,11 +634,12 @@ class SidebarButton(QPushButton):
                     background: transparent;
                     color: {COLORS['text_secondary']};
                     border: none;
-                    border-radius: 8px;
+                    border-radius: 10px;
                     text-align: left;
-                    padding-left: 16px;
+                    padding-left: 18px;
                     font-size: 13px;
                     font-weight: 600;
+                    letter-spacing: 0.3px;
                 }}
                 QPushButton:hover {{
                     background: {COLORS['sidebar_hover']};
@@ -647,11 +647,14 @@ class SidebarButton(QPushButton):
                 }}
             """)
 
+    def set_active(self, active):
+        self._apply_style(active)
+
 
 class AccentButton(QPushButton):
     """Botao de acao principal (estilo Feather Client)"""
     def __init__(self, text, color=COLORS["accent"], icon=""):
-        super().__init__(f"{icon}  {text}" if icon else text)
+        super().__init__(text)
         self.setMinimumHeight(38)
         self.setCursor(QCursor(Qt.PointingHandCursor))
         self._color = color
@@ -679,7 +682,7 @@ class AccentButton(QPushButton):
 class DangerButton(QPushButton):
     """Botao de perigo"""
     def __init__(self, text, icon=""):
-        super().__init__(f"{icon}  {text}" if icon else text)
+        super().__init__(text)
         self.setMinimumHeight(38)
         self.setCursor(QCursor(Qt.PointingHandCursor))
         # Audit impeccable: stops ≥4.5:1 contra branco (antes 2.77:1
@@ -728,9 +731,15 @@ class DashboardPage(QWidget):
         layout.setSpacing(12)
 
         # Title
-        title = QLabel("🖱️  Mouse Hub Dashboard")
+        title = QLabel("Mouse Hub Dashboard")
         title.setStyleSheet(f"font-size: 24px; font-weight: 900; color: {COLORS['text_primary']}; background: transparent;")
-        layout.addWidget(title)
+        title_icon = ui_icons.icon_label("dashboard", COLORS["accent_light"], 24)
+        title_row = QHBoxLayout()
+        if title_icon is not None:
+            title_row.addWidget(title_icon)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        layout.addLayout(title_row)
 
         # issue #7: o texto real vem de _sync_subtitle() (capacidades do
         # core); nenhum estado é afirmado antes da avaliação.
@@ -744,10 +753,10 @@ class DashboardPage(QWidget):
         stats.setHorizontalSpacing(16)
         stats.setVerticalSpacing(12)
 
-        self.dpi_card = StatCard("🎯", "DPI", str(self.mc.current_dpi), COLORS["accent_light"])
-        self.sens_card = StatCard("🎚️", "SENSIBILIDADE", f"{self.mc.current_sensitivity}%", COLORS["success"])
-        self.mc_card = StatCard("⛏️", "MINECRAFT", "OFF", COLORS["text_muted"])
-        self.clicker_card = StatCard("⚡", "AUTO-CLICKER", "OFF", COLORS["danger"])
+        self.dpi_card = StatCard("", "DPI", str(self.mc.current_dpi), COLORS["accent_light"])
+        self.sens_card = StatCard("", "SENSIBILIDADE", f"{self.mc.current_sensitivity}%", COLORS["success"])
+        self.mc_card = StatCard("", "MINECRAFT", "OFF", COLORS["text_muted"])
+        self.clicker_card = StatCard("", "AUTO-CLICKER", "OFF", COLORS["danger"])
 
         stats.addWidget(self.dpi_card, 0, 0)
         stats.addWidget(self.sens_card, 0, 1)
@@ -763,7 +772,7 @@ class DashboardPage(QWidget):
         # Quick actions
         layout.addWidget(self._spacer(10))
 
-        actions_title = QLabel("⚡  Ações Rápidas")
+        actions_title = QLabel("Ações Rápidas")
         actions_title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {COLORS['text_primary']}; background: transparent;")
         layout.addWidget(actions_title)
 
@@ -800,7 +809,7 @@ class DashboardPage(QWidget):
         # Log area
         layout.addWidget(self._spacer(10))
 
-        log_title = QLabel("📋  Log de Atividade")
+        log_title = QLabel("Log de Atividade")
         log_title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {COLORS['text_primary']}; background: transparent;")
         layout.addWidget(log_title)
 
@@ -943,9 +952,15 @@ class DPIPage(QWidget):
         layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(12)
 
-        title = QLabel("🎯  Controle de DPI")
-        title.setStyleSheet(f"font-size: 24px; font-weight: 900; background: transparent;")
-        layout.addWidget(title)
+        title = QLabel("Controle de DPI")
+        title.setStyleSheet(f"font-size: 24px; font-weight: 900; color: {COLORS['text_primary']}; background: transparent;")
+        title_icon = ui_icons.icon_label("dpi", COLORS["accent_light"], 24)
+        title_row = QHBoxLayout()
+        if title_icon is not None:
+            title_row.addWidget(title_icon)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        layout.addLayout(title_row)
 
         # DPI Display
         display = QFrame()
@@ -1056,7 +1071,7 @@ class DPIPage(QWidget):
         self._sync_hint()
 
         # Presets
-        presets_label = QLabel("⚡  Presets Rápidos")
+        presets_label = QLabel("Presets Rápidos")
         presets_label.setStyleSheet(f"font-size: 16px; font-weight: 700; background: transparent;")
         layout.addWidget(presets_label)
 
@@ -1069,11 +1084,11 @@ class DPIPage(QWidget):
         # Presets com valores vindos da fonte unica de verdade
         # (DPI_PRESETS em core/constants) — issue #6.
         preset_data = [
-            ("🎯 CS:GO AWP", DPI_PRESETS["Low (CS:GO AWP)"]),
-            ("🔫 FPS Geral", DPI_PRESETS["Medium (FPS Geral)"]),
-            ("⛏️ Minecraft PvP", DPI_PRESETS["High (Minecraft PvP)"]),
-            ("⚡ Flick Shots", DPI_PRESETS["Ultra (Flick Shots)"]),
-            ("🚀 Max Speed", DPI_PRESETS["Max Speed"]),
+            (" CS:GO AWP", DPI_PRESETS["Low (CS:GO AWP)"]),
+            (" FPS Geral", DPI_PRESETS["Medium (FPS Geral)"]),
+            (" Minecraft PvP", DPI_PRESETS["High (Minecraft PvP)"]),
+            (" Flick Shots", DPI_PRESETS["Ultra (Flick Shots)"]),
+            (" Max Speed", DPI_PRESETS["Max Speed"]),
         ]
 
         # Botões expostos para a suíte de integração (QTest/direct emit).
@@ -1122,17 +1137,17 @@ class DPIPage(QWidget):
         hid = caps.is_available("hid_available")
         hw_dpi = caps.is_available("hardware_dpi_available")
         if hid and hw_dpi:
-            self.hid_hint.setText("🟢 DPI físico aplicável no hardware do mouse (HID++)")
+            self.hid_hint.setText("● DPI físico aplicável no hardware do mouse (HID++)")
             self.hid_hint.setStyleSheet(f"color: {COLORS['mc_green']}; font-size: 12px; background: transparent;")
             self.slider.setEnabled(True)
             self.dpi_input.setEnabled(True)
         elif hid:
-            self.hid_hint.setText("🟡 Endpoint HID conhecido, mas DPI físico não confirmado — a configuração do sensor pode exigir nova detecção")
+            self.hid_hint.setText("● Endpoint HID conhecido, mas DPI físico não confirmado — a configuração do sensor pode exigir nova detecção")
             self.hid_hint.setStyleSheet(f"color: {COLORS['warning']}; font-size: 12px; background: transparent;")
             self.slider.setEnabled(True)
             self.dpi_input.setEnabled(True)
         else:
-            self.hid_hint.setText("🔴 Sem acesso HID ao mouse — controles de DPI físico indisponíveis")
+            self.hid_hint.setText("● Sem acesso HID ao mouse — controles de DPI físico indisponíveis")
             self.hid_hint.setStyleSheet(f"color: {COLORS['danger']}; font-size: 12px; background: transparent;")
             self.slider.setEnabled(False)
             self.dpi_input.setEnabled(False)
@@ -1252,9 +1267,15 @@ class SensitivityPage(QWidget):
         layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(12)
 
-        title = QLabel("🎚️  Sensibilidade")
-        title.setStyleSheet(f"font-size: 24px; font-weight: 900; background: transparent;")
-        layout.addWidget(title)
+        title = QLabel("Sensibilidade")
+        title.setStyleSheet(f"font-size: 24px; font-weight: 900; color: {COLORS['text_primary']}; background: transparent;")
+        title_icon = ui_icons.icon_label("sensitivity", COLORS["accent_light"], 24)
+        title_row = QHBoxLayout()
+        if title_icon is not None:
+            title_row.addWidget(title_icon)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        layout.addLayout(title_row)
 
         # Display
         display = QFrame()
@@ -1315,9 +1336,9 @@ class SensitivityPage(QWidget):
         self._sync_sensitivity_caps()
 
         hint = QHBoxLayout()
-        hint.addWidget(QLabel("🐢 Lento"))
+        hint.addWidget(QLabel("Lento"))
         hint.addStretch()
-        hint.addWidget(QLabel("🐇 Rápido"))
+        hint.addWidget(QLabel("Rápido"))
         for i in range(hint.count()):
             w = hint.itemAt(i).widget()
             if w:
@@ -1343,7 +1364,7 @@ class SensitivityPage(QWidget):
         # permanece indisponível: nenhuma frequência é apresentada
         # como ativa e os botões não executam NENHUM comando — sem
         # sucesso falso nem simulação visual.
-        pr_title = QLabel("📡  Polling Rate")
+        pr_title = QLabel("Polling Rate")
         pr_title.setStyleSheet("font-size: 16px; font-weight: 700; background: transparent;")
         layout.addWidget(pr_title)
 
@@ -1392,7 +1413,7 @@ class SensitivityPage(QWidget):
         showEvent (refresh explícito, sem polling periódico)."""
         if self.state is None:
             self.polling_hint.setText(
-                "🔴 Polling rate indisponível: o stack HID++ atual não "
+                "● Polling rate indisponível: o stack HID++ atual não "
                 "implementa a feature Report Rate do G403."
             )
             self.polling_hint.setStyleSheet(
@@ -1406,7 +1427,7 @@ class SensitivityPage(QWidget):
         available = caps.is_available("polling_rate_available")
         reason = caps.reason_for("polling_rate_available")
         if available:
-            self.polling_hint.setText("🟢 Polling rate disponível")
+            self.polling_hint.setText("● Polling rate disponível")
             self.polling_hint.setStyleSheet(
                 "color: %s; font-size: 12px; background: transparent;"
                 % COLORS["mc_green"]
@@ -1419,7 +1440,7 @@ class SensitivityPage(QWidget):
                 "capacidade não disponível no ambiente atual"
             )
             self.polling_hint.setText(
-                "🔴 Polling rate indisponível: %s" % summary
+                "● Polling rate indisponível: %s" % summary
             )
             self.polling_hint.setStyleSheet(
                 "color: %s; font-size: 12px; background: transparent;"
@@ -1491,10 +1512,10 @@ class SensitivityPage(QWidget):
         reason = caps.reason_for("sensitivity_available") or "capacidade não disponível no ambiente atual"
         self.slider.setEnabled(available)
         if available:
-            self.caps_hint.setText("🟢 Sensibilidade do sistema disponível (libinput)")
+            self.caps_hint.setText("● Sensibilidade do sistema disponível (libinput)")
             self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["mc_green"])
         else:
-            self.caps_hint.setText(f"🔴 Sensibilidade indisponível: {reason}")
+            self.caps_hint.setText(f"● Sensibilidade indisponível: {reason}")
             self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["danger"])
 
 
@@ -1513,9 +1534,15 @@ class AutoClickerPage(QWidget):
         layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(12)
 
-        title = QLabel("⚡  Auto-Clicker")
-        title.setStyleSheet(f"font-size: 24px; font-weight: 900; background: transparent;")
-        layout.addWidget(title)
+        title = QLabel("Auto-Clicker")
+        title.setStyleSheet(f"font-size: 24px; font-weight: 900; color: {COLORS['text_primary']}; background: transparent;")
+        title_icon = ui_icons.icon_label("clicker", COLORS["accent_light"], 24)
+        title_row = QHBoxLayout()
+        if title_icon is not None:
+            title_row.addWidget(title_icon)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        layout.addLayout(title_row)
 
 
         # Status
@@ -1531,7 +1558,7 @@ class AutoClickerPage(QWidget):
         """)
         sl = QHBoxLayout(self.status_frame)
 
-        self.status_icon = QLabel("🖱️")
+        self.status_icon = QLabel("")
         self.status_icon.setStyleSheet("font-size: 44px; background: transparent;")
         sl.addWidget(self.status_icon)
 
@@ -1548,7 +1575,7 @@ class AutoClickerPage(QWidget):
         layout.addWidget(self.status_frame)
 
         # Minecraft detection
-        self.mc_status = QLabel("⛏️  Minecraft não detectado")
+        self.mc_status = QLabel("Minecraft não detectado")
         self.mc_status.setStyleSheet(f"""
             background: rgba(239, 68, 68, 0.1);
             color: {COLORS['danger']};
@@ -1561,7 +1588,7 @@ class AutoClickerPage(QWidget):
         layout.addWidget(self.mc_status)
 
         # CPS Control
-        cps_title = QLabel("🔥  CPS (Clicks Por Segundo)")
+        cps_title = QLabel("CPS (Clicks Por Segundo)")
         cps_title.setStyleSheet(f"font-size: 16px; font-weight: 700; background: transparent;")
         layout.addWidget(cps_title)
 
@@ -1590,14 +1617,14 @@ class AutoClickerPage(QWidget):
         layout.addLayout(cps_row)
 
         # Button selector
-        btn_title = QLabel("👆  Botão")
+        btn_title = QLabel("Botão")
         btn_title.setStyleSheet(f"font-size: 16px; font-weight: 700; background: transparent;")
         layout.addWidget(btn_title)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(12)
         self.btn_buttons = []
-        for i, (name, icon) in enumerate([(  "Esquerdo", "🖱️"), ("Meio", "🔘"), ("Direito", "🖱️")]):
+        for i, (name, icon) in enumerate([(  "Esquerdo", ""), ("Meio", ""), ("Direito", "")]):
             btn = QPushButton(f"{icon}  {name}")
             btn.setFixedHeight(44)
             btn.setCursor(QCursor(Qt.PointingHandCursor))
@@ -1626,7 +1653,7 @@ class AutoClickerPage(QWidget):
         self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["text_muted"])
         self.caps_hint.setWordWrap(True)
 
-        self.toggle_btn = AccentButton("▶️  Iniciar Auto-Clicker")
+        self.toggle_btn = AccentButton("Iniciar Auto-Clicker")
         self.toggle_btn.setMinimumHeight(44)
         self.toggle_btn.setToolTip(
             "O clique só dispara com a janela do Minecraft em foco — "
@@ -1659,10 +1686,10 @@ class AutoClickerPage(QWidget):
         for w in [self.cps_slider, self.toggle_btn, *button_widgets]:
             w.setEnabled(available)
         if available:
-            self.caps_hint.setText("🟢 Auto-clicker disponível (X11/XTest)")
+            self.caps_hint.setText("● Auto-clicker disponível (X11/XTest)")
             self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["mc_green"])
         else:
-            self.caps_hint.setText(f"🔴 Auto-clicker indisponível: {reason}")
+            self.caps_hint.setText(f"● Auto-clicker indisponível: {reason}")
             self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["danger"])
 
     def _on_cps(self, val):
@@ -1693,7 +1720,7 @@ class AutoClickerPage(QWidget):
         if self.ac.running:
             self.ac.stop()
             self._update()  # estado real como fonte (issue #5)
-            self.toggle_btn.setText("▶️  Iniciar Auto-Clicker")
+            self.toggle_btn.setText("Iniciar Auto-Clicker")
             self.toggle_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -1712,7 +1739,7 @@ class AutoClickerPage(QWidget):
             """)
             self.status_title.setText("Auto-Clicker Desligado")
             self.status_sub.setText("Clique em iniciar para começar")
-            self.status_icon.setText("🖱️")
+            self.status_icon.setText("")
             self.status_frame.setObjectName("clickerStatus")
             self.status_frame            .setStyleSheet(f"""
                 QFrame#clickerStatus {{
@@ -1725,7 +1752,7 @@ class AutoClickerPage(QWidget):
         else:
             self.ac.start()
             self._update()  # estado real como fonte (issue #5)
-            self.toggle_btn.setText("⏹️  Parar Auto-Clicker")
+            self.toggle_btn.setText("Parar Auto-Clicker")
             self.toggle_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -1743,7 +1770,7 @@ class AutoClickerPage(QWidget):
                 }}
             """)
             self.status_title.setText("Auto-Clicker Ativo!")
-            self.status_icon.setText("🔥")
+            self.status_icon.setText("")
             self.status_frame.setObjectName("clickerStatus")
             self.status_frame            .setStyleSheet(f"""
                 QFrame#clickerStatus {{
@@ -1760,7 +1787,7 @@ class AutoClickerPage(QWidget):
         focused = self.svc.window_service.is_focused(tuple(focus_patterns()))
         mc_active = focused.focused
         if mc_active:
-            self.mc_status.setText("⛏️  Minecraft Detectado!")
+            self.mc_status.setText("Minecraft Detectado!")
             self.mc_status.setStyleSheet(f"""
                 background: rgba(74, 222, 128, 0.1);
                 color: {COLORS['mc_green']};
@@ -1771,7 +1798,7 @@ class AutoClickerPage(QWidget):
                 font-weight: 600;
             """)
         else:
-            self.mc_status.setText("⛏️  Minecraft não detectado — auto-clicker não vai clicar")
+            self.mc_status.setText("Minecraft não detectado — auto-clicker não vai clicar")
             self.mc_status.setStyleSheet(f"""
                 background: rgba(239, 68, 68, 0.1);
                 color: {COLORS['danger']};
@@ -1789,24 +1816,24 @@ class AutoClickerPage(QWidget):
                 self.ac.button, "?")
             self.status_title.setText("Auto-Clicker Ativo!")
             self.status_sub.setText(f"{self.ac.cps} CPS — Botão {btn_name}")
-            self.status_icon.setText("🔥")
-            self.toggle_btn.setText("⏹️  Parar Auto-Clicker")
+            self.status_icon.setText("")
+            self.toggle_btn.setText("Parar Auto-Clicker")
         elif state.value == "blocked_by_focus":
             self.status_title.setText("Aguardando jogo em foco...")
             self.status_sub.setText(
                 "Ligado, mas só clica com Minecraft/Lunar Client ativo")
-            self.status_icon.setText("⏳")
-            self.toggle_btn.setText("⏹️  Parar Auto-Clicker")
+            self.status_icon.setText("")
+            self.toggle_btn.setText("Parar Auto-Clicker")
         elif state.value == "failed":
             self.status_title.setText("Auto-Clicker com erro")
             self.status_sub.setText(f"Falha: {self.ac.error or 'desconhecida'}")
-            self.status_icon.setText("⚠️")
-            self.toggle_btn.setText("▶️  Iniciar Auto-Clicker")
+            self.status_icon.setText("⚠")
+            self.toggle_btn.setText("Iniciar Auto-Clicker")
         else:
             self.status_title.setText("Auto-Clicker Desligado")
             self.status_sub.setText("Clique em iniciar para começar")
-            self.status_icon.setText("🖱️")
-            self.toggle_btn.setText("▶️  Iniciar Auto-Clicker")
+            self.status_icon.setText("")
+            self.toggle_btn.setText("Iniciar Auto-Clicker")
 
 
 class MacrosPage(QWidget):
@@ -1831,9 +1858,15 @@ class MacrosPage(QWidget):
         layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(12)
 
-        title = QLabel("🎬  Macros")
-        title.setStyleSheet(f"font-size: 24px; font-weight: 900; background: transparent;")
-        layout.addWidget(title)
+        title = QLabel("Macros")
+        title.setStyleSheet(f"font-size: 24px; font-weight: 900; color: {COLORS['text_primary']}; background: transparent;")
+        title_icon = ui_icons.icon_label("macros", COLORS["accent_light"], 24)
+        title_row = QHBoxLayout()
+        if title_icon is not None:
+            title_row.addWidget(title_icon)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        layout.addLayout(title_row)
 
         # Record controls
         rec_frame = QFrame()
@@ -1855,11 +1888,11 @@ class MacrosPage(QWidget):
         rl.addWidget(self.name_input)
 
         row = QHBoxLayout()
-        self.record_btn = DangerButton("⏺️  Gravar Macro")
+        self.record_btn = DangerButton("Gravar Macro")
         self.record_btn.clicked.connect(self._toggle_record)
         row.addWidget(self.record_btn)
 
-        self.cancel_btn = QPushButton("❌ Cancelar")
+        self.cancel_btn = QPushButton("Cancelar")
         self.cancel_btn.setVisible(False)
         self.cancel_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.cancel_btn.setStyleSheet(f"""
@@ -1910,7 +1943,7 @@ class MacrosPage(QWidget):
         layout.addWidget(rec_frame)
 
         # Macro list
-        list_title = QLabel("📋  Macros Salvas")
+        list_title = QLabel("Macros Salvas")
         list_title.setStyleSheet(f"font-size: 16px; font-weight: 700; background: transparent;")
         layout.addWidget(list_title)
 
@@ -1954,14 +1987,14 @@ class MacrosPage(QWidget):
         for child in self.macro_list_widget.findChildren(QPushButton):
             child.setEnabled(available)
         if available:
-            self.caps_hint.setText("🟢 Captura de macros disponível (X11/XRecord)")
+            self.caps_hint.setText("● Captura de macros disponível (X11/XRecord)")
             self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["mc_green"])
         else:
-            self.caps_hint.setText(f"🔴 Captura de macros indisponível: {reason}")
+            self.caps_hint.setText(f"● Captura de macros indisponível: {reason}")
             self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["danger"])
 
     def _set_recording_ui(self, recording: bool) -> None:
-        self.record_btn.setText("⏹️  Parar Gravação" if recording else "⏺️  Gravar Macro")
+        self.record_btn.setText("Parar Gravação" if recording else " Gravar Macro")
         self.cancel_btn.setVisible(recording)
         self.name_input.setEnabled(not recording)
         if not recording and self._op_kind is None:
@@ -1982,13 +2015,13 @@ class MacrosPage(QWidget):
                 name="mouse-hub-record-cancel-start",
                 daemon=True,
             ).start()
-            self.record_status.setText("⏳ Cancelando…")
+            self.record_status.setText("Cancelando…")
             return
         if self._op_kind is not None:
             return  # já há operação em curso
         self.record_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
-        self.record_status.setText("⏳ Cancelando gravação…")
+        self.record_status.setText("Cancelando gravação…")
         self._start_async("cancel", self.me.cancel_recording)
 
     def _toggle_record(self):
@@ -1998,7 +2031,7 @@ class MacrosPage(QWidget):
             return
         if self.me.recording:
             self.record_btn.setEnabled(False)
-            self.record_status.setText("⏸️  Encerrando gravação…")
+            self.record_status.setText("Encerrando gravação…")
             self._start_async("stop", self.me.stop_recording)
         else:
             name = self.name_input.text().strip() or \
@@ -2007,7 +2040,7 @@ class MacrosPage(QWidget):
             self.name_input.setEnabled(False)
             self.cancel_btn.setVisible(True)
             self.record_status.setText(
-                "⏳ Iniciando captura XRecord… (aguardando o servidor X)")
+                " Iniciando captura XRecord… (aguardando o servidor X)")
             self._start_async("start", lambda: self.me.start_recording(name),
                               name=name)
 
@@ -2050,57 +2083,57 @@ class MacrosPage(QWidget):
             if error is not None:
                 self._set_recording_ui(False)
                 self.record_status.setText(
-                    f"❌ Erro ao iniciar a gravação: {error}")
+                    f"Erro ao iniciar a gravação: {error}")
             elif result:
                 name = ctx.get("name", "")
                 self._set_recording_ui(True)
                 self.record_status.setText(
-                    f"🔴 Gravando '{name}'... pressione parar quando "
+                    f"● Gravando '{name}'... pressione parar quando "
                     "terminar. Teclas e cliques são capturados em "
                     "qualquer janela.")
             else:
                 self._set_recording_ui(False)
                 reason = self.me.capture_failed or "capturador indisponível"
                 self.record_status.setText(
-                    f"❌ Não foi possível iniciar a gravação: {reason}")
+                    f"Não foi possível iniciar a gravação: {reason}")
         elif kind == "stop":
             self._set_recording_ui(False)
             if error is not None:
                 self.record_status.setText(
-                    f"❌ Erro ao encerrar a gravação: {error}")
+                    f"Erro ao encerrar a gravação: {error}")
             elif result is None:
                 self.record_status.setText(
-                    "⚠️  Gravação descartada (sem eventos ou nome inválido)")
+                    "⚠  Gravação descartada (sem eventos ou nome inválido)")
             else:
                 count = self.me.macros.get(result, {}).get("count", 0)
                 suffix = " — TRUNCADA no teto de eventos" \
                     if self.me.last_recording_truncated else ""
                 self.record_status.setText(
-                    f"✅ Macro '{result}' salva! ({count} eventos){suffix}")
+                    f"Macro '{result}' salva! ({count} eventos){suffix}")
             self._refresh_list()
         elif kind == "cancel":
             self._set_recording_ui(False)
             self.record_status.setText(
-                "⚠️  Gravação cancelada — eventos descartados")
+                "⚠  Gravação cancelada — eventos descartados")
 
     def _update_play_status(self) -> None:
         """Reflete o estado real do playback: em execução ou FAILED com
         o motivo do último erro. Sincroniza também os botões Play —
-        durante a reprodução qualquer botão vira '❌ Cancel'."""
+        durante a reprodução qualquer botão vira ' Cancel'."""
         state = self.me.playback_state
         running = state == "running"
         if running:
-            self.play_status.setText("▶️  Reproduzindo...")
+            self.play_status.setText("Reproduzindo...")
         elif state == "failed":
             reason = self.me.playback_error or "falha de emissão"
-            self.play_status.setText(f"❌ Playback falhou: {reason}")
+            self.play_status.setText(f"Playback falhou: {reason}")
         else:
             self.play_status.setText("")
         for child in self.macro_list_widget.findChildren(QPushButton):
-            if child.text() in ("▶️ Play", "❌ Cancel") and child is not getattr(
+            if child.text() in (" Play", " Cancel") and child is not getattr(
                 self, "_last_del_btn", None
             ):
-                child.setText("❌ Cancel" if running else "▶️ Play")
+                child.setText("Cancel" if running else " Play")
 
     def _refresh_list(self):
         # Clear
@@ -2113,7 +2146,7 @@ class MacrosPage(QWidget):
         if not macros:
             empty = QLabel(
                 "Nenhuma macro gravada ainda.\n"
-                "Use ⏺️  Gravar Macro acima para criar a primeira.")
+                "Use   Gravar Macro acima para criar a primeira.")
             empty.setAlignment(Qt.AlignCenter)
             empty.setStyleSheet(f"color: {COLORS['text_muted']}; padding: 30px; font-size: 13px; background: transparent;")
             self.macro_list_layout.addWidget(empty)
@@ -2136,7 +2169,7 @@ class MacrosPage(QWidget):
             il = QHBoxLayout(item)
 
             info_col = QVBoxLayout()
-            name_label = QLabel(f"🎬  {name}")
+            name_label = QLabel(f" {name}")
             name_label.setStyleSheet(f"font-size: 14px; font-weight: 700; background: transparent;")
             info_col.addWidget(name_label)
 
@@ -2147,7 +2180,7 @@ class MacrosPage(QWidget):
 
             il.addStretch()
 
-            play_btn = QPushButton("▶️ Play")
+            play_btn = QPushButton("Play")
             play_btn.setFixedSize(80, 32)
             play_btn.setCursor(QCursor(Qt.PointingHandCursor))
             play_btn.setStyleSheet(f"""
@@ -2164,19 +2197,19 @@ class MacrosPage(QWidget):
 
             def on_play(btn, n=name):
                 """Play/Cancel — o botão espelha o estado do playback:
-                durante a execução vira '❌ Cancel' e encerra a
+                durante a execução vira ' Cancel' e encerra a
                 emissão em curso (worker exato, sem criar substituto)."""
                 if self.me.playing:
                     self.me.cancel_playback()
-                    btn.setText("▶️ Play")
+                    btn.setText("Play")
                 else:
                     if self.me.play(n):
-                        btn.setText("❌ Cancel")
+                        btn.setText("Cancel")
 
             play_btn.clicked.connect(lambda _, b=play_btn: on_play(b))
             il.addWidget(play_btn)
 
-            del_btn = QPushButton("🗑️")
+            del_btn = QPushButton("")
             del_btn.setFixedSize(32, 32)
             del_btn.setCursor(QCursor(Qt.PointingHandCursor))
             del_btn.setStyleSheet(f"""
@@ -2235,9 +2268,15 @@ class ProfilesPage(QWidget):
         layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(12)
 
-        title = QLabel("👤  Perfis")
+        title = QLabel("Perfis")
         title.setStyleSheet("font-size: 24px; font-weight: 900; background: transparent;")
-        layout.addWidget(title)
+        title_icon = ui_icons.icon_label("profiles", COLORS["accent_light"], 24)
+        title_row = QHBoxLayout()
+        if title_icon is not None:
+            title_row.addWidget(title_icon)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        layout.addLayout(title_row)
 
         # Estado da configuracao (fonte de verdade).
         self.config_hint = QLabel("")
@@ -2262,7 +2301,7 @@ class ProfilesPage(QWidget):
         self._grid_cols = 3
 
         # ── Criacao/edicao de perfil customizado ────────────────────
-        form_label = QLabel("✏️  Criar / Editar Perfil")
+        form_label = QLabel("Criar / Editar Perfil")
         form_label.setStyleSheet("font-size: 16px; font-weight: 700; background: transparent;")
         layout.addWidget(form_label)
 
@@ -2288,9 +2327,9 @@ class ProfilesPage(QWidget):
         self.sens_input.setRange(0, 100)
         self.sens_input.setValue(SENSITIVITY_DEFAULT)
         self.sens_input.setSuffix("%")
-        self.save_btn = AccentButton("💾 Salvar Perfil")
+        self.save_btn = AccentButton("Salvar Perfil")
         self.save_btn.clicked.connect(self._save_custom)
-        self.clear_btn = QPushButton("✖ Cancelar")
+        self.clear_btn = QPushButton("Cancelar")
         self.clear_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.clear_btn.clicked.connect(self._clear_form)
         form.addWidget(self.name_input, 0, 0, 1, 2)
@@ -2321,7 +2360,7 @@ class ProfilesPage(QWidget):
             profiles = self.store.list_profiles()
         except ConfigError as exc:
             self.config_hint.setText(
-                "🔴 Nao foi possivel ler os perfis: %s "
+                "● Nao foi possivel ler os perfis: %s "
                 "O arquivo de configuracao NAO foi alterado." % str(exc)
             )
             self.config_hint.setStyleSheet(
@@ -2372,7 +2411,7 @@ class ProfilesPage(QWidget):
         cl.setSpacing(4)
 
         top = QHBoxLayout()
-        ic = QLabel("🖱️")
+        ic = QLabel("")
         ic.setStyleSheet("font-size: 20px; background: transparent;")
         top.addWidget(ic)
         top.addStretch()
@@ -2510,7 +2549,7 @@ class ProfilesPage(QWidget):
                     (profile.name, _result_text(dpi_result)))
             color = COLORS["warning"]
         else:
-            text = ("✘ Perfil '%s' NAO aplicado: DPI falhou "
+            text = (" Perfil '%s' NAO aplicado: DPI falhou "
                     "(%s); sensibilidade falhou (%s)." %
                     (profile.name, _result_text(dpi_result),
                      _result_text(sens_result)))
@@ -2536,7 +2575,7 @@ class ProfilesPage(QWidget):
         )
         if not outcome.success:
             self.apply_hint.setText(
-                "✘ Nao foi possivel salvar o perfil '%s': %s" % (name, outcome.message)
+                " Nao foi possivel salvar o perfil '%s': %s" % (name, outcome.message)
             )
             self.apply_hint.setStyleSheet(
                 "color: %s; font-size: 12px; background: transparent;" % COLORS["danger"]
@@ -2587,12 +2626,18 @@ class SettingsPage(QWidget):
         layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(12)
 
-        title = QLabel("⚙️  Configurações")
+        title = QLabel("Configurações")
         title.setStyleSheet(f"font-size: 24px; font-weight: 900; background: transparent;")
-        layout.addWidget(title)
+        title_icon = ui_icons.icon_label("settings", COLORS["accent_light"], 24)
+        title_row = QHBoxLayout()
+        if title_icon is not None:
+            title_row.addWidget(title_icon)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        layout.addLayout(title_row)
 
         # HID Permissions
-        hid_group = QGroupBox("🔐  Permissões HID (DPI via Hardware)")
+        hid_group = QGroupBox(" Permissões HID (DPI via Hardware)")
         hid_layout = QVBoxLayout(hid_group)
 
         hid_info = QLabel(
@@ -2615,7 +2660,7 @@ class SettingsPage(QWidget):
         hid_layout.addWidget(self._permission_status)
 
         self._permission_btn = QPushButton(
-            "🔓  Conceder acesso ao hardware  (senha de administrador)"
+            " Conceder acesso ao hardware  (senha de administrador)"
         )
         self._permission_btn.setStyleSheet(f"""
             QPushButton {{
@@ -2637,14 +2682,14 @@ class SettingsPage(QWidget):
         layout.addWidget(hid_group)
 
         # Auto-clicker settings
-        ac_group = QGroupBox("⚡  Auto-Clicker — Segurança")
+        ac_group = QGroupBox(" Auto-Clicker — Segurança")
         ac_layout = QVBoxLayout(ac_group)
 
         safety_text = QLabel(
-            "✅ O auto-clicker só funciona quando Minecraft/Lunar Client está em foco.\n"
-            "✅ O detector lê o nome da janela ativa direto via X11, "
+            " O auto-clicker só funciona quando Minecraft/Lunar Client está em foco.\n"
+            " O detector lê o nome da janela ativa direto via X11, "
             "com cache de 500 ms (TTL) entre consultas.\n"
-            "✅ Nenhum clique é feito fora do jogo."
+            " Nenhum clique é feito fora do jogo."
         )
         safety_text.setWordWrap(True)
         safety_text.setStyleSheet(f"color: {COLORS['mc_green']}; font-size: 12px; background: transparent;")
@@ -2653,7 +2698,7 @@ class SettingsPage(QWidget):
         layout.addWidget(ac_group)
 
         # System info
-        info_group = QGroupBox("💻  Informações do Sistema")
+        info_group = QGroupBox(" Informações do Sistema")
         info_layout = QVBoxLayout(info_group)
 
         paths = ConfigPaths.xdg()
@@ -2692,7 +2737,7 @@ class SettingsPage(QWidget):
             return
         if caps.is_available("hid_available"):
             self._permission_status.setText(
-                "✅ Acesso HID ativo — controle de DPI físico operável.")
+                " Acesso HID ativo — controle de DPI físico operável.")
             self._permission_status.setStyleSheet(
                 f"font-size: 12px; color: {COLORS['success']}; background: transparent;")
             self._permission_btn.setEnabled(False)
@@ -2704,7 +2749,7 @@ class SettingsPage(QWidget):
             self._permission_btn.setText(_PERMISSION_BTN_LABEL)
         if is_hid_permission_issue(reason):
             self._permission_status.setText(
-                f"🔓 Sem acesso HID: {reason}. "
+                f"Sem acesso HID: {reason}. "
                 "Clique abaixo e informe sua senha para o app resolver.")
             self._permission_status.setStyleSheet(
                 f"font-size: 12px; color: {COLORS['warning']}; background: transparent;")
@@ -2714,7 +2759,7 @@ class SettingsPage(QWidget):
             if self._permission_btn.text() != _PERMISSION_BTN_LABEL:
                 self._permission_btn.setText(_PERMISSION_BTN_LABEL)
             self._permission_status.setText(
-                f"⚠️ Sem acesso HID por outra causa: {reason}")
+                f"⚠ Sem acesso HID por outra causa: {reason}")
             self._permission_status.setStyleSheet(
                 f"font-size: 12px; color: {COLORS['text_secondary']}; background: transparent;")
             self._permission_btn.setEnabled(False)
@@ -2727,7 +2772,7 @@ class SettingsPage(QWidget):
             return  # já em andamento
         self._permission_btn.setEnabled(False)
         self._permission_status.setText(
-            "⏳ Aguardando autenticação de administrador…")
+            " Aguardando autenticação de administrador…")
         self._permission_status.setStyleSheet(
             f"font-size: 12px; color: {COLORS['text_secondary']}; background: transparent;")
         self._permission_result = None
@@ -2757,13 +2802,13 @@ class SettingsPage(QWidget):
                     self.state.refresh()
             except Exception:  # noqa: BLE001
                 pass
-            self._permission_status.setText("✅ " + result.message)
+            self._permission_status.setText("" + result.message)
             self._permission_status.setStyleSheet(
                 f"font-size: 12px; color: {COLORS['success']}; background: transparent;")
             self._permission_btn.setEnabled(False)
         else:
             self._permission_status.setText(
-                ("✅ " if result.status.value == "permission_denied" else "⚠️ ")
+                (" " if result.status.value == "permission_denied" else "⚠ ")
                 + result.message)
             self._permission_status.setStyleSheet(
                 f"font-size: 12px; color: {COLORS['warning']}; background: transparent;")
@@ -2781,7 +2826,7 @@ class MouseHubApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🖱️ Mouse Hub — Controlador Gaymer")
+        self.setWindowTitle(" Mouse Hub — Controlador Gaymer")
         # Mínimo coerente com o conteúdo (issue #66): abaixo disso as
         # páginas entram em scroll em vez de sobrepor widgets.
         self.setMinimumSize(720, 520)
@@ -2838,31 +2883,39 @@ class MouseHubApp(QMainWindow):
         sidebar = QFrame()
         sidebar.setFixedWidth(190)
         sidebar.setObjectName("sidebar")
-        sidebar        .setStyleSheet(f"""
+        sidebar.setStyleSheet(f"""
             QFrame#sidebar {{
-                background-color: {COLORS['sidebar_bg']};
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {COLORS['sidebar_bg']}, stop:1 {COLORS['bg_darkest']});
                 border-right: 1px solid {COLORS['border']};
             }}
         """)
         sb_layout = QVBoxLayout(sidebar)
-        sb_layout.setContentsMargins(10, 12, 10, 12)
-        sb_layout.setSpacing(2)
+        sb_layout.setContentsMargins(12, 16, 12, 12)
+        sb_layout.setSpacing(3)
 
-        # Logo
+        # Logo — bloco de marca com acento (sem emoji: tofu na fonte
+        # do usuário; identidade vem de tipografia + barra de acento)
         logo_frame = QFrame()
-        logo_frame.setFixedHeight(50)
+        logo_frame.setFixedHeight(56)
         logo_layout = QHBoxLayout(logo_frame)
         logo_layout.setContentsMargins(4, 0, 4, 0)
-        icon = QLabel("🖱️")
-        icon.setStyleSheet("font-size: 24px; background: transparent;")
-        logo_layout.addWidget(icon)
-        logo_text = QLabel("MOUSE\nHUB")
+        logo_layout.setSpacing(10)
+        accent_bar = QFrame()
+        accent_bar.setFixedSize(4, 36)
+        accent_bar.setStyleSheet(f"""
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 {COLORS['accent_light']}, stop:1 {COLORS['accent_dark']});
+                border-radius: 2px;
+        """)
+        logo_layout.addWidget(accent_bar)
+        logo_text = QLabel("MOUSE HUB")
         logo_text.setStyleSheet(f"""
-            font-size: 16px;
+            font-size: {TYPE_SCALE['logo']}px;
             font-weight: 900;
-            color: {COLORS['accent_light']};
+            color: {COLORS['text_primary']};
             background: transparent;
-            line-height: 1.1;
+            letter-spacing: 1.5px;
         """)
         logo_layout.addWidget(logo_text)
         logo_layout.addStretch()
@@ -2883,8 +2936,14 @@ class MouseHubApp(QMainWindow):
         """)
         si_layout = QHBoxLayout(self.status_indicator)
         si_layout.setContentsMargins(8, 0, 8, 0)
-        self._status_dot = QLabel("●")
-        self._status_dot.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; background: transparent;")
+        # Ponto de estado: círculo PINTADO via QSS (não-glyph — não
+        # depende da fonte do usuário; Pedido explícito: zero emoji).
+        self._status_dot = QLabel()
+        self._status_dot.setFixedSize(8, 8)
+        self._status_dot.setStyleSheet(f"""
+            background: {COLORS['text_muted']};
+            border-radius: 4px;
+        """)
         si_layout.addWidget(self._status_dot)
         self._status_text = QLabel("Offline")
         self._status_text.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-weight: 600; background: transparent;")
@@ -2897,13 +2956,13 @@ class MouseHubApp(QMainWindow):
         # Nav buttons
         self.nav_buttons = []
         pages_data = [
-            ("📊", "Dashboard", 0),
-            ("🎯", "DPI", 1),
-            ("🎚️", "Sensibilidade", 2),
-            ("⚡", "Auto-Clicker", 3),
-            ("🎬", "Macros", 4),
-            ("👤", "Perfis", 5),
-            ("⚙️", "Configurações", 6),
+            ("dashboard", "Dashboard", 0),
+            ("dpi", "DPI", 1),
+            ("sensitivity", "Sensibilidade", 2),
+            ("clicker", "Auto-Clicker", 3),
+            ("macros", "Macros", 4),
+            ("profiles", "Perfis", 5),
+            ("settings", "Configurações", 6),
         ]
 
         for icon, text, idx in pages_data:
@@ -3072,7 +3131,10 @@ class MouseHubApp(QMainWindow):
             text, color = "Detectado", COLORS["warning"]
         else:
             text, color = "Offline", COLORS["text_muted"]
-        self._status_dot.setStyleSheet(f"color: {color}; font-size: 11px; background: transparent;")
+        self._status_dot.setStyleSheet(f"""
+            background: {color};
+            border-radius: 4px;
+        """)
         self._status_text.setText(text)
 
     def closeEvent(self, event):
