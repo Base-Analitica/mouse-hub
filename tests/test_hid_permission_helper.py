@@ -79,9 +79,12 @@ def test_sucesso_aplica_e_limpa_temp():
     run = _runner(0)
     result = fix_hid_permissions(runner=run)
     assert result.status == OperationStatus.APPLIED
-    # o arquivo temporário de regra existiu e foi removido
+    # o arquivo temporário de regra existiu e foi removido.
+    # NÃO assumimos /tmp/: respeitamos o TMPDIR do ambiente.
     (cmd, _), = run.calls
-    tmp_in_script = [p for p in cmd[3].split("'") if p.startswith("/tmp/")]
+    tmp_in_script = [
+        p for p in cmd[3].split("'") if "mouse-hub-rule-" in p
+    ]
     assert tmp_in_script, "script não referencia a regra temporária"
     import os
     assert not os.path.exists(tmp_in_script[0])

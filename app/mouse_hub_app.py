@@ -1588,7 +1588,7 @@ class AutoClickerPage(QWidget):
         layout.addWidget(self.mc_status)
 
         # CPS Control
-        cps_title = QLabel("CPS (Clicks Por Segundo)")
+        cps_title = QLabel("CPS (Cliques por segundo)")
         cps_title.setStyleSheet(f"font-size: 16px; font-weight: 700; background: transparent;")
         layout.addWidget(cps_title)
 
