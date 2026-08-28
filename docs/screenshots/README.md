@@ -30,3 +30,11 @@ Usos:
 Capturadas em 1050×680, tema dark, com estado fake determinístico
 (G403 presente, HID disponível). Se uma tela nova for adicionada ao
 app, inclua-a em `PAGES` no script.
+
+## Determinismo
+
+A captura é determinística dentro do processo. Raramente, uma primeira
+execução após um reload do ambiente pode divergir de um processo já
+aquecido (fonts/HarfBuzz); se um PNG divergir do commitado, rode o
+script uma segunda vez antes de investigar: 8/8 capturas em sequência
+foram byte-idênticas ao PNG commitado quando partem de execução aquecida.
