@@ -15,6 +15,23 @@ agente de código responsável por este repositório a partir de
   de skills do ecossistema público (skills.sh / `npx skills`), com nota
   de adaptação para instalação project-local neste repo.
 
+## Spec Kit (SDD)
+
+O projeto usa [Spec Kit](https://github.com/github/spec-kit) v1.0.1 para
+Desenvolvimento Dirigido por Especificação. A CLI `specify` está
+instalada no nível de usuário (`uv tool install specify-cli --from
+git+https://github.com/github/spec-kit.git@v1.0.1`).
+
+- Skills geradas em `.agents/skills/speckit-*/` — o Jcode as carrega
+  nativamente (10 skills, comandos `/speckit-*`).
+- Templates, scripts e workflows em `.specify/`.
+- Fluxo: `/speckit-constitution` (uma vez) → `/speckit-specify` →
+  `/speckit-plan` → `/speckit-tasks` → `/speckit-implement` →
+  `/speckit-converge` até convergir.
+- `specs/` contém uma pasta por feature (`specs/NNN-nome/spec.md`).
+- `.specify/feature.json` é estado local por checkout e não vai ao git
+  (ver `.specify/.gitignore`).
+
 ## Camadas de prompt que o Jcode lê neste repositório
 
 1. `AGENTS.md` (raiz) — convenções do projeto, regras para agentes e
