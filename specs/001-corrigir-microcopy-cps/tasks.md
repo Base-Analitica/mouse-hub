@@ -6,6 +6,8 @@
 
 **Tests**: Incluídos conforme FR-005 da spec (regressão com teste, Princípio IV).
 
+**Status final**: CONVERGED — 544/544 testes, CI da PR #119 verde.
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
@@ -24,14 +26,14 @@
 
 ### Tests for User Story 1 ⚠️ (escrever primeiro, ver FALHAR)
 
-- [ ] T002 [US1] Teste `test_clicker_cps_heading_copy` em
+- [x] T002 [US1] Teste `test_clicker_cps_heading_copy` em
       `tests/test_issue66_ui_craft.py`: construir página do clicker offscreen e
       assegurar que o texto do heading é exatamente `CPS (Cliques por segundo)`
-      (deve FALHAR antes de T003)
+      (falhou com o texto antigo, conforme esperado)
 
 ### Implementation for User Story 1
 
-- [ ] T003 [US1] Trocar literal em `app/mouse_hub_app.py` (~linha 1591):
+- [x] T003 [US1] Trocar literal em `app/mouse_hub_app.py` (~linha 1591):
       `"CPS (Clicks Por Segundo)"` → `"CPS (Cliques por segundo)"`
 
 **Checkpoint**: US1 completa — heading corrigido, teste verde, comportamento
@@ -45,19 +47,19 @@ do auto-clicker inalterado (suíte existente passa).
 
 ### Implementation for User Story 2
 
-- [ ] T004 [US2] Regenerar screenshots com
+- [x] T004 [US2] Regenerar screenshots com
       `python3 scripts/capture_screenshots.py` e commitar
       `docs/screenshots/3_clicker.png`, `small_clicker.png` e `preview.png`
+      (pixel diff confirma mudança localizada só na linha do heading)
 
 **Checkpoint**: US2 completa — material público consistente com o produto.
 
 ## Phase 4: Polish & Cross-Cutting
 
-- [ ] T005 Convergência: rodar suíte completa
-      (`TMPDIR=/tmp QT_QPA_PLATFORM=offscreen pytest tests/`), marcar
-      checkboxes da spec e registrar veredito do `/speckit-converge`
-- [ ] T006 PR: abrir/ atualizar PR vinculada à issue #117 com
-      `Closes #117` (merge é do mantenedor)
+- [x] T005 Convergência: suíte completa **544 passed** (543 anteriores + 1
+      teste novo); checkboxes da spec marcados; CI da PR #119 verde
+- [x] T006 PR: atualizada na branch `chore/spec-kit-setup` (PR #119) com
+      `Closes #117` no commit do fix (merge é do mantenedor)
 
 ## Dependencies & Execution Order
 
