@@ -1,3 +1,5 @@
+APP_VERSION = "1.4.0"
+
 """Parâmetros de domínio fixos do Logitech G403 HERO.
 
 Este módulo centraliza os limites e presets que hoje estão duplicados

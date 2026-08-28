@@ -11,3 +11,4 @@ mouse_hub.egg-info/
 .tools/
 .cache/
 dist/
+uv.lock

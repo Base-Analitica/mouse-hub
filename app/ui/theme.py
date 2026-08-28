@@ -24,6 +24,9 @@ COLORS = {
     "accent_light":  "#a78bfa",
     "accent_dark":   "#5b21b6",
     "accent_glow":   "rgba(124, 58, 237, 0.3)",
+    "accent_lighter": "#c4b5fd",
+    "danger_light":  "#f87171",
+    "danger_lighter": "#fca5a5",
     "success":       "#22c55e",
     "success_dark":  "#166534",
     "danger":        "#ef4444",
@@ -34,6 +37,9 @@ COLORS = {
     "text_secondary": "#94a3b8",
     "text_muted":    "#64748b",
     "text_dim":      "#475569",
+    # NOTA (audit impeccable): text_muted/text_dim NÃO passam 4.5:1
+    # sobre bg_card/bg_dark — use apenas em estados DESABILITADOS ou
+    # decoração; texto real de leitura usa text_secondary ou acima.
     "mc_green":      "#4ade80",
     "mc_dark":       "#166534",
     "sidebar_bg":    "#0b0b14",
@@ -185,6 +191,17 @@ QLineEdit {{
 }}
 QLineEdit:focus {{
     border-color: {c['accent']};
+}}
+
+/* ─── Foco por teclado visível (audit impeccable B-6) ───── */
+QPushButton:focus {{
+    border: 1px solid {c['accent_light']};
+}}
+QComboBox:focus {{
+    border: 1px solid {c['accent']};
+}}
+QSlider::handle:horizontal:focus {{
+    border: 2px solid {c['accent_light']};
 }}
 QTextEdit {{
     background-color: {c['bg_card']};
