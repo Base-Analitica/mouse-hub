@@ -543,15 +543,25 @@ class TestDpiSetFailureInvalidatesCapability:
 
     def test_success_clears_previous_set_error(self, qapp, monkeypatch):
         """Após um timeout, um SetSensorDPI bem-sucedido (ACK) recupera
-        a capability por evidência nova."""
+        a capability por evidência nova.
+
+        Issue #95: com a capability morta a UI desabilita os controles
+        de DPI — a reautorização passa pelo refresh/re-probe (a causa
+        do estado indica exatamente isso). O recovery do core continua
+        comprovado: o apply pós-reprobe confirma o ACK e limpa o erro."""
         state, core, hid, page = self._healthy(qapp, monkeypatch)
         hid.ack_timeout = True
         page.dpi_input.setText("1200")
         page.apply_btn.click()
         caps = state.capability_state()
         assert not caps.is_available("hardware_dpi_available")
+        # issue #95: sem capability, o controle de efeito físico sai da
+        # tela (a UI não deixa a ação partir de estado não autorizado).
+        assert not page.apply_btn.isEnabled()
 
         hid.ack_timeout = False
+        page.showEvent(None)  # nova evidência: re-probe reautoriza
+        assert page.apply_btn.isEnabled()
         page.dpi_input.setText("1400")
         page.apply_btn.click()
         assert state.applied_dpi == 1400
