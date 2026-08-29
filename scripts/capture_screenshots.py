@@ -26,6 +26,17 @@ sys.path.insert(0, str(REPO))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
+from PyQt5.QtTest import QTest  # noqa: E402
+
+
+def _settle(qapp, ms=120):
+    """Assenta layouts antes do grab (issue #100): deleteLater e
+    invalidações de relayout são processadas pelo event loop; sem o
+    tempo de assentamento o frame capturado pode ser transitório
+    (cards sobrepostos / scrollbar fantasma)."""
+    qapp.processEvents()
+    QTest.qWait(ms)
+    qapp.processEvents()
 
 PAGES = [
     ("dashboard", "Dashboard"),
@@ -142,17 +153,17 @@ def main() -> int:
     written = []
     for i, (slug, label) in enumerate(PAGES):
         window._switch_page(i)
-        qapp.processEvents()
+        _settle(qapp)
         target = out_dir / f"{i}_{slug}.png"
         window.grab().save(str(target))
         written.append((target, label))
 
     # variante estreita (prova de responsividade, issue #66)
     window.resize(760, 560)
-    qapp.processEvents()
+    _settle(qapp)
     for i, (slug, label) in enumerate(PAGES):
         window._switch_page(i)
-        qapp.processEvents()
+        _settle(qapp)
         target = out_dir / f"small_{slug}.png"
         window.grab().save(str(target))
 
@@ -166,12 +177,11 @@ def main() -> int:
         window._switch_page(macros_page_index)
         window.macros_page.me = qa_engine
         window.macros_page._refresh_list()
-        qapp.processEvents()
         if target_name.startswith("small_"):
             window.resize(760, 560)
         else:
             window.resize(args.width, args.height)
-        qapp.processEvents()
+        _settle(qapp)
         (out_dir / target_name).unlink(missing_ok=True)
         window.grab().save(str(out_dir / target_name))
     window.resize(args.width, args.height)

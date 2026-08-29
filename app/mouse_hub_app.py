@@ -2280,6 +2280,9 @@ class ProfilesPage(QWidget):
         self.store = store if store is not None else ProfileStore(ConfigPaths.xdg())
         self.profiles = []
         self.profile_cards = {}  # name -> dict de widgets do card
+        # Issue #100: mede o maior card p/ reflow por largura (antes de
+        # _build, que já consulta _columns_for_width).
+        self._card_hint_w = 0
         self._build()
 
     def _build(self):
@@ -2317,7 +2320,7 @@ class ProfilesPage(QWidget):
         self.grid = QGridLayout()
         self.grid.setSpacing(16)
         layout.addLayout(self.grid)
-        self._grid_cols = 3
+        self._grid_cols = self._columns_for_width(self.width())
 
         # ── Criacao/edicao de perfil customizado ────────────────────
         form_label = QLabel("Criar / Editar Perfil")
@@ -2364,6 +2367,51 @@ class ProfilesPage(QWidget):
         # existir (o estado de erro da config desabilita os campos).
         self._reload()
 
+    def _columns_for_width(self, width: int) -> int:
+        """Issue #100: maior número de colunas (3/2/1) cuja grade CAIBE
+        na largura disponível — medido do sizeHint REAL dos cards
+        (margens 24px de cada lado, espaçamento 16px), não em números
+        mágicos. Grade que não cabe produz o relayout transitório com
+        cards sobrepostos e h-scrollbar — o frame que vira screenshot."""
+        hint = self._card_hint_w or 170  # conservador antes do 1º card
+        for cols in (3, 2, 1):
+            needed = 48 + cols * hint + (cols - 1) * 16
+            if needed <= max(width, 1):
+                return cols
+        return 1
+
+    def _repopulate_grid(self):
+        """Re-coloca os cards existentes no grid com _grid_cols colunas
+        (recarrega do store — fonte única; barato: poucos cards)."""
+        profiles = self.profiles
+        while self.grid.count():
+            item = self.grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.profile_cards = {}
+        for i, profile in enumerate(profiles):
+            self._add_card(profile, i)
+        self._refresh_active()
+
+    def resizeEvent(self, event):
+        """Issue #100: re-monta a grade quando a largura muda de faixa
+        de colunas (reflow real; nada é escondido)."""
+        super().resizeEvent(event)
+        cols = self._columns_for_width(self.width())
+        if cols != self._grid_cols and self.profiles:
+            self._grid_cols = cols
+            self._repopulate_grid()
+
+    def showEvent(self, event):
+        """Issue #100: garante colunas corretas já no primeiro paint —
+        o widget nasce com width() pequeno antes de ser mostrado."""
+        super().showEvent(event)
+        cols = self._columns_for_width(self.width())
+        if cols != self._grid_cols and self.profiles:
+            self._grid_cols = cols
+            self._repopulate_grid()
+
     def _reload(self):
         """Rele a fonte unica (ProfileStore). Config corrompida ou
         ilegivel → estado de erro visivel, sem sobrescrever o arquivo
@@ -2392,6 +2440,12 @@ class ProfilesPage(QWidget):
         self.profiles = profiles
         for i, profile in enumerate(profiles):
             self._add_card(profile, i)
+        # Issue #100: com os cards medidos, escolhe o maior número de
+        # colunas que cabe e re-monta UMA vez se necessário.
+        cols = self._columns_for_width(self.width())
+        if cols != self._grid_cols and profiles:
+            self._grid_cols = cols
+            self._repopulate_grid()
         self._refresh_active()
 
     def _set_form_enabled(self, enabled):
@@ -2479,6 +2533,8 @@ class ProfilesPage(QWidget):
 
         self.grid.addWidget(card, index // self._grid_cols,
                      index % self._grid_cols)
+        # Issue #100: mede o card real para o reflow por largura.
+        self._card_hint_w = max(self._card_hint_w, card.sizeHint().width())
         self.profile_cards[profile.name] = {
             "card": card,
             "active_badge": active_badge,
