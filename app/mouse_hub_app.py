@@ -177,6 +177,13 @@ _PERMISSION_BTN_LABEL = " Conceder acesso ao hardware  (senha de administrador)"
 _MACRO_DELETE_LABEL = "Excluir"
 _MACRO_DELETE_TOOLTIP = "Excluir esta macro (ação destrutiva)"
 
+# Issue #114: labels PERSISTENTES do formulário de Perfis — placeholder
+# não substitui label (some ao digitar); "800 DPI"/"50%" não se
+# explicam sozinhos.
+_PROFILE_FORM_NAME_LABEL = "Nome do perfil"
+_PROFILE_FORM_DPI_LABEL = "DPI"
+_PROFILE_FORM_SENS_LABEL = "Sensibilidade"
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CORE STATE (issue #3)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2354,11 +2361,26 @@ class ProfilesPage(QWidget):
         self.clear_btn = QPushButton("Cancelar")
         self.clear_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.clear_btn.clicked.connect(self._clear_form)
-        form.addWidget(self.name_input, 0, 0, 1, 2)
-        form.addWidget(self.dpi_input, 1, 0)
-        form.addWidget(self.sens_input, 1, 1)
-        form.addWidget(self.save_btn, 2, 0)
-        form.addWidget(self.clear_btn, 2, 1)
+
+        def _form_label(text, buddy):
+            lb = QLabel(text)
+            lb.setStyleSheet(
+                "color: %s; font-size: 11px; font-weight: 700;"
+                "background: transparent;" % COLORS["text_secondary"]
+            )
+            buddy.setAccessibleName(text)
+            return lb
+
+        # Issue #114: label em linha própria acima de cada campo —
+        # identificável preenchido/focado; accessibleName = label.
+        form.addWidget(_form_label(_PROFILE_FORM_NAME_LABEL, self.name_input), 0, 0, 1, 2)
+        form.addWidget(self.name_input, 1, 0, 1, 2)
+        form.addWidget(_form_label(_PROFILE_FORM_DPI_LABEL, self.dpi_input), 2, 0)
+        form.addWidget(self.dpi_input, 3, 0)
+        form.addWidget(_form_label(_PROFILE_FORM_SENS_LABEL, self.sens_input), 2, 1)
+        form.addWidget(self.sens_input, 3, 1)
+        form.addWidget(self.save_btn, 4, 0)
+        form.addWidget(self.clear_btn, 4, 1)
         layout.addLayout(form)
 
         layout.addStretch()
