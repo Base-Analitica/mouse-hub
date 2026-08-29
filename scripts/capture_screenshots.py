@@ -76,6 +76,54 @@ def _build_app():
     return window, qapp, mp
 
 
+def _qa_macro_engine():
+    """Engine fake com macros gravadas para o estado de QA da tela de
+    Macros (issue #88): lista NÃO vazia — o botão de excluir só existe
+    com itens; o artefato visual precisa desse estado representado.
+
+    Superfície compatível com MacroEngine (nenhuma operação real)."""
+    class _QAMacroEngine:
+        recording = False
+        playing = False
+        capture_failed = False
+        playback_state = "idle"
+        playback_error = None
+        last_recording_truncated = False
+
+        def __init__(self):
+            self.deleted = []
+
+        def list_all(self):
+            return {
+                "combo_market_1": {"count": 12, "created": "2026-08-28"},
+                "fishing_combo": {"count": 8, "created": "2026-08-28"},
+            }
+
+        def play(self, name, repeat=1):
+            return True
+
+        def cancel_playback(self):
+            pass
+
+        def start_recording(self, name):
+            pass
+
+        def stop_recording(self):
+            return None
+
+        def cancel_recording(self):
+            pass
+
+        def delete(self, name):
+            self.deleted.append(name)
+            return True
+
+        def cleanup(self):
+            pass
+
+    return _QAMacroEngine()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="docs/screenshots")
@@ -107,6 +155,27 @@ def main() -> int:
         qapp.processEvents()
         target = out_dir / f"small_{slug}.png"
         window.grab().save(str(target))
+
+    # Estado de QA (issue #88): Macros com lista NÃO vazia — prova
+    # visual do botão de excluir rotulado. Nenhuma operação real.
+    qa_engine = _qa_macro_engine()
+    macros_page_index = next(
+        i for i, (slug, _) in enumerate(PAGES) if slug == "macros"
+    )
+    for target_name in ("qa_macros.png", "small_qa_macros.png"):
+        window._switch_page(macros_page_index)
+        window.macros_page.me = qa_engine
+        window.macros_page._refresh_list()
+        qapp.processEvents()
+        if target_name.startswith("small_"):
+            window.resize(760, 560)
+        else:
+            window.resize(args.width, args.height)
+        qapp.processEvents()
+        (out_dir / target_name).unlink(missing_ok=True)
+        window.grab().save(str(out_dir / target_name))
+    window.resize(args.width, args.height)
+
     window.close()
     mp.undo()
 
