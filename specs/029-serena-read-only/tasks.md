@@ -30,7 +30,7 @@ description: "Tarefas da issue #63: configuração Serena somente leitura"
 - [x] T006 [US1] Criar `tests/test_issue63_serena_read_only.py` para validar YAML booleano, parser e launcher.
 - [x] T007 [US1] Exigir `read_only: true` e rejeitar a configuração gravável.
 - [x] T008 [US1] Exigir os subcomandos `tools`, `overview`, `find`, `refs` e `diagnostics` sem comandos de edição.
-- [x] T009 [US1] Executar o teste dedicado antes da alteração e registrar RED.
+- [x] T009 [US1] Executar o teste dedicado antes da alteração e registrar RED. Resultado: 2 falhas e 2 aprovações com `read_only: false`.
 
 ### Implementation
 
