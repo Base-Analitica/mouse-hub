@@ -2,7 +2,7 @@
 
 **Feature Branch**: `029-serena-read-only`
 **Created**: 2026-08-30
-**Status**: Implementação e validação local concluídas; PR e CI remoto pendentes
+**Status**: PR #150 aberto; CI remoto verde no commit validado; sem merge
 **Issue**: #63
 **Input**: Alinhar a configuração Serena ao uso somente leitura já exposto pela ponte semântica do projeto.
 
@@ -62,7 +62,8 @@ Como agente ou mantenedor que usa a navegação semântica do projeto, quero que
 - A ponte Serena real foi exercitada sem erro de transporte: `tools`, `overview`, `find`, `refs` e `diagnostics` retornaram exit code 0. O comando `tools` retornou seis ferramentas MCP de consulta; `find` localizou `SettingsPage` e `refs` retornou referências no app e nos testes.
 - `diagnostics` retornou diagnósticos Pyright existentes, incluindo imports PyQt5 não resolvidos e problemas de tipagem, mas não falhou por causa do modo `read_only` ou do handshake.
 - O smoke Xvfb passou com 1 teste, `compileall` e `git diff --check` passaram, e o pacote Debian foi construído a partir de staging isolado. O arquivo `app/mouse_hub_app.py` no pacote tem o mesmo SHA-256 do worktree.
-- Os gates de PR e CI remoto ainda precisam ser executados e registrados antes de concluir SC-006.
+- O PR #150 foi aberto com `Closes #63` e permanece aberto, não draft e não merged. O workflow `33284387807` do commit `0f76a45` confirmou os três jobs reais como SUCCESS: lint/testes determinísticos, pacote `.deb` e smoke Xvfb.
+- Qualquer commit posterior ao workflow precisa passar novamente pelos três jobs antes de declarar a entrega final.
 
 ## Assumptions
 

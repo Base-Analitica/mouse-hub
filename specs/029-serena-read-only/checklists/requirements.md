@@ -13,4 +13,4 @@ description: "Checklist de qualidade da configuração Serena read-only"
 - [x] O teste dedicado registra RED e GREEN.
 - [x] A suíte completa, smoke, compileall, diff check e pacote passam.
 - [x] O handshake real é executado ou a ausência da Serena é registrada como bloqueio.
-- [ ] O PR de #63 fica aberto, com CI verde e sem merge.
+- [x] O PR de #63 fica aberto, com CI verde e sem merge no commit validado (`0f76a45`, workflow `33284387807`). Revalidar após qualquer commit posterior.

@@ -45,8 +45,8 @@ description: "Tarefas da issue #63: configuração Serena somente leitura"
 - [x] T015 [US1] Construir/extrair o pacote `.deb` e verificar árvore sem alteração indevida. Staging Debian passou e o SHA do app empacotado coincide com o worktree.
 - [ ] T016 [US1] Executar revisão read-only com agente autorizado.
 - [x] T017 [US1] Atualizar Spec Kit com matriz requisito→teste→resultado e limitações honestas.
-- [ ] T018 [US1] Fazer commits convencionais, confirmar branch limpa e diff check.
-- [ ] T019 [US1] Publicar branch, abrir PR com `Closes #63`, aguardar três jobs reais e manter sem merge.
+- [x] T018 [US1] Fazer commits convencionais, confirmar branch limpa e diff check. Commits convencionais e worktree limpo confirmados após o registro documental.
+- [x] T019 [US1] Publicar branch, abrir PR com `Closes #63`, aguardar três jobs reais e manter sem merge. PR #150; workflow `33284387807`: 3/3 SUCCESS. Revalidar após qualquer commit posterior.
 
 ## Traceability
 

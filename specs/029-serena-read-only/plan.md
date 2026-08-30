@@ -74,4 +74,4 @@ specs/029-serena-read-only/                       # artefatos Spec Kit
 | FR-004 / SC-003: escopo fora do produto | `git diff --name-status` e teste dedicado | **PASS**: alterações de produção restritas a `.serena/project.yml`; teste e docs são os únicos demais arquivos da feature. |
 | FR-005 / SC-004: regressão do projeto | suíte, smoke Xvfb, compileall, diff check e pacote Debian | **PASS**: baseline 544, pós-mudança 548, smoke 1 teste, compileall, diff check e staging Debian passaram; SHA do app empacotado coincide com o worktree. |
 | SC-005: evidência Spec Kit | RED/GREEN, baseline, handshake, gates locais e esta matriz | **PASS**: evidências locais e limitações dos diagnósticos estão registradas; PR/CI são o gate remoto separado. |
-| SC-006: entrega remota | PR com `Closes #63` e três jobs reais | **PENDENTE**: branch ainda não publicada. |
+| SC-006: entrega remota | PR #150, workflow `33284387807` e estado do PR | **PASS no commit validado**: os três jobs reais estão SUCCESS; PR aberto e não merged. Uma nova execução será necessária se houver novo commit. |
