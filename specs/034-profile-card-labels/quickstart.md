@@ -73,3 +73,11 @@ Depois de commitar e publicar a branch, abrir um PR com `Closes #85` e `Closes #
 - `Pacote .deb`
 
 O PR deve permanecer aberto e não merged. Testes offscreen, Xvfb e CI comprovam comportamento de software, não validação física do G403 HERO ou de sessão X11 real.
+
+## Estado observado nesta execução
+
+- Baseline: 544 testes, exit 0.
+- RED dedicado: 4 pass e 4 fail; GREEN dedicado: 8 pass.
+- Suíte final local: 552 testes, exit 0; smoke Xvfb, compileall, diff-check e pacote Debian também passaram.
+- Capturas oficiais: 15/15 PNGs byte a byte idênticos em duas execuções; dimensões e bboxes dentro do escopo esperado.
+- Antes da entrega, ainda é obrigatório revisar, commitar os três PNGs, abrir o PR e confirmar exatamente os três checks reais do CI no HEAD final.

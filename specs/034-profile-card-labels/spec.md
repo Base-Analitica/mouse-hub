@@ -3,7 +3,7 @@
 **Feature Branch**: `fix/profile-card-labels-empty-header`
 **Feature Directory**: `034-profile-card-labels`
 **Created**: 2026-08-30
-**Status**: Draft
+**Status**: Implementação e validação local concluídas; revisão independente, PR e CI remoto pendentes
 **Issues**: [#85](https://github.com/Base-Analitica/mouse-hub/issues/85) e [#86](https://github.com/Base-Analitica/mouse-hub/issues/86)
 
 **Input**: Os cards da página de Perfis exibem diretamente chaves internas de persistência (`minecraft`, `csgo`, `fortnite` e `default`) e criam uma linha superior composta por placeholders vazios. A correção deve separar identidade de armazenamento da apresentação e remover o espaço estrutural morto, sem alterar persistência, aplicação de perfis, estado ativo ou regras de domínio.
@@ -113,3 +113,11 @@ As screenshots versionadas da página de Perfis devem mostrar os nomes de aprese
 - A identidade persistida não será renomeada ao alterar a apresentação. O formulário de edição e o fluxo de salvamento existentes ficam fora desta feature, salvo para confirmar que os callbacks continuam usando a identidade original.
 - A branch parte de `origin/main`, que está no baseline do projeto. PRs abertos que alteram `ProfilesPage` ou screenshots próximas não são base desta implementação.
 - Testes offscreen, Xvfb e CI comprovam comportamento de software. Eles não constituem validação física do G403 HERO.
+
+## Validation Status
+
+- O desenho combinado foi aprovado explicitamente pelo usuário em 2026-08-30.
+- O teste dedicado cobriu labels oficiais, fallback, identidade dos callbacks, composição do header, estados ativo/desconhecido/troca e os dois viewports. O ciclo TDD observado foi RED com 4 pass e 4 fail, seguido de GREEN com 8 pass.
+- As regressões de Perfis/config/UI, smoke Xvfb, compileall, `git diff --check`, empacotamento Debian e a suíte completa passaram localmente. A suíte completa terminou com 552 testes e exit 0.
+- O capturador oficial foi executado duas vezes em diretórios temporários. Os 15 PNGs foram byte a byte idênticos; `5_perfis.png` (1050×680), `small_perfis.png` (760×560) e `preview.png` (2130×2770) mudaram somente nas regiões esperadas contra `origin/main`.
+- Os três PNGs afetados estão copiados no worktree, mas ainda aguardam commit. A revisão independente, o PR e os três checks reais do CI no HEAD final permanecem pendentes.

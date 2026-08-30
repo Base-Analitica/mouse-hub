@@ -138,4 +138,8 @@ Não alterar `ProfileStore`, `active_profile()`, `MouseCoreState`, limites, serv
 - O usuário aprovou explicitamente o desenho combinado de #85/#86 em 2026-08-30.
 - Worktree isolado criado em `/home/pedro/.jcode/scratch/issue85-86-profile-cards`, branch `fix/profile-card-labels-empty-header`, baseado em `origin/main` no SHA `abad8b13877ab9b870f1bbe92c12d2d21738f569`.
 - Baseline completo executado antes dos testes novos: exit 0, 544 testes aprovados. Log fora do repositório em `/home/pedro/.jcode/scratch/issue85-86-baseline-suite.log`.
-- A implementação e a captura ainda não foram iniciadas neste ponto do plano.
+- O teste dedicado passou pelo ciclo TDD: RED reproduzível com 4 pass e 4 fail, seguido de GREEN com 8 pass.
+- A produção usa `_PROFILE_DISPLAY_NAMES` apenas na UI, remove `ic = QLabel(\"\")`, coloca o título no header e alterna o badge `✔ Ativo` conforme o estado confirmado. `ProfileStore`, `active_profile()`, `profile_cards` e callbacks continuam usando a identidade original.
+- Regressões de Perfis/config/UI, smoke Xvfb, compileall, `git diff --check`, empacotamento Debian (7 testes) e a suíte completa (552 testes) terminaram com exit 0.
+- O capturador oficial foi executado duas vezes em diretórios temporários; os 15 PNGs foram byte a byte idênticos. As dimensões oficiais foram preservadas, e contra `origin/main` somente `5_perfis.png`, `small_perfis.png` e `preview.png` mudaram nas regiões esperadas.
+- O diff ainda não contém os três PNGs, pois eles foram apenas copiados para o worktree. A revisão independente, os commits finais, o PR e os checks remotos permanecem pendentes.
