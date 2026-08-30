@@ -48,8 +48,10 @@ def test_serena_project_is_configured_as_boolean_read_only():
 
 
 def test_semantic_bridge_keeps_all_read_only_query_commands():
-    assert EXPECTED_COMMANDS <= _parser_subcommands()
-    assert not EXPECTED_COMMANDS.intersection({"edit", "write", "replace", "delete"})
+    commands = _parser_subcommands()
+
+    assert EXPECTED_COMMANDS <= commands
+    assert not commands.intersection({"edit", "write", "replace", "delete"})
 
 
 def test_semantic_bridge_launcher_still_targets_local_bridge():
