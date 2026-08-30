@@ -20,6 +20,14 @@ scripts/agent/semantic-code diagnostics app/mouse_hub_app.py
 
 Se `.tools/serena/venv/bin/serena` não existir, registre a execução como bloqueada e use o teste estático, sem instalar dependências no CI.
 
+### Resultado observado nesta feature
+
+Com Serena 1.7.0 instalada localmente, os cinco comandos acima retornaram exit
+code 0. O comando `tools` listou as ferramentas MCP de consulta; `find` e
+`refs` retornaram resultados para `SettingsPage`. `diagnostics` retornou os
+diagnósticos Pyright existentes, sem erro de transporte ou de configuração
+`read_only`.
+
 ## Regressão do projeto
 
 ```bash

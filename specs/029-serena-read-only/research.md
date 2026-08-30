@@ -24,3 +24,14 @@ Trocar somente o valor booleano para `true`. Não alterar a ponte, o runtime do 
 
 - `app/`, `mouse_hub/`, `.github/`, launchers e packaging do Mouse Hub.
 - Adição de comandos de edição ou alteração da ponte semântica.
+
+## Validação executada
+
+- A Serena 1.7.0 e o MCP 1.28.1 foram instalados no venv ignorado de tooling para
+  exercitar a interface real, sem alterar dependências do produto.
+- `tools`, `overview`, `find`, `refs` e `diagnostics` retornaram exit code 0.
+- `find SettingsPage --path app/mouse_hub_app.py` localizou a classe e `refs`
+  retornou referências no app e nos testes.
+- `diagnostics` retornou avisos Pyright existentes, como imports PyQt5 não
+  resolvidos e problemas de tipagem; isso não impediu o handshake nem foi
+  apresentado como uma árvore sem diagnósticos.

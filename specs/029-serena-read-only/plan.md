@@ -24,7 +24,7 @@
 | IV. Regressão Com Teste Junto do Fix | PASS | O teste dedicado falha com `read_only: false` e passa com `true`. |
 | V. Regras de Domínio Somente no Core | N/A | Nenhuma regra de domínio é tocada. |
 | VI. Menor Mudança Completa | PASS | Uma chave YAML, teste, Spec Kit e validações. |
-| VII. Verificação Dupla (Software e Realidade) | PASS | O handshake real será separado da validação estática e reportado honestamente. |
+| VII. Verificação Dupla (Software e Realidade) | PASS | O contrato estático e o handshake real da ponte foram executados separadamente; os diagnósticos retornados foram registrados sem mascarar avisos existentes. |
 | VIII. UX Honesta e Consistente | N/A | Não há superfície de usuário alterada. |
 
 ## Project Structure
@@ -63,3 +63,15 @@ specs/029-serena-read-only/                       # artefatos Spec Kit
 - Handshake `tools`, `overview`, `find`, `refs` e `diagnostics` executado se Serena estiver disponível.
 - Suíte, smoke, compileall, diff check e pacote validados.
 - PR aberto com `Closes #63`, três jobs reais verdes e sem merge.
+
+## Observed Traceability (2026-08-30)
+
+| Requisito/saída | Verificação executada | Resultado observado |
+| --- | --- | --- |
+| FR-001 / SC-001: `read_only` booleano verdadeiro | `tests/test_issue63_serena_read_only.py` | **PASS**: 4 testes dedicados; `read_only: true` confirmado no arquivo versionado. |
+| FR-002 / SC-002: consultas preservadas | parser estático + `semantic-code tools`, `overview`, `find`, `refs` e `diagnostics` | **PASS**: todos os cinco comandos retornaram exit code 0; `find` localizou `SettingsPage` e `refs` retornou referências. |
+| FR-003 / SC-002: ponte sem escrita e projeto local | AST do parser + inspeção do launcher + handshake real | **PASS**: nenhum subcomando de edição; launcher usa o venv local e o `--project` aponta para `ROOT`. |
+| FR-004 / SC-003: escopo fora do produto | `git diff --name-status` e teste dedicado | **PASS**: alterações de produção restritas a `.serena/project.yml`; teste e docs são os únicos demais arquivos da feature. |
+| FR-005 / SC-004: regressão do projeto | suíte, smoke Xvfb, compileall, diff check e pacote Debian | **PASS**: baseline 544, pós-mudança 548, smoke 1 teste, compileall, diff check e staging Debian passaram; SHA do app empacotado coincide com o worktree. |
+| SC-005: evidência Spec Kit | RED/GREEN, baseline, handshake, gates locais e esta matriz | **PASS**: evidências locais e limitações dos diagnósticos estão registradas; PR/CI são o gate remoto separado. |
+| SC-006: entrega remota | PR com `Closes #63` e três jobs reais | **PENDENTE**: branch ainda não publicada. |

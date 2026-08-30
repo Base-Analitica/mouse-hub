@@ -2,7 +2,7 @@
 
 **Feature Branch**: `029-serena-read-only`
 **Created**: 2026-08-30
-**Status**: Spec ready; implementation pending
+**Status**: Implementação e validação local concluídas; PR e CI remoto pendentes
 **Issue**: #63
 **Input**: Alinhar a configuração Serena ao uso somente leitura já exposto pela ponte semântica do projeto.
 
@@ -52,6 +52,16 @@ Como agente ou mantenedor que usa a navegação semântica do projeto, quero que
 - **SC-004**: A suíte completa, smoke Xvfb, compilação, diff check e pacote Debian passam.
 - **SC-005**: Os artefatos Spec Kit registram RED/GREEN, resultados observados e as limitações de execução local.
 - **SC-006**: O PR fica aberto com CI real verde e sem merge automático.
+
+## Observed Validation (2026-08-30)
+
+- A baseline fresca em `origin/main` (`abad8b1`) passou com **544 testes**, exit code 0.
+- A suíte pós-mudança no HEAD passou com **548 testes**, exit code 0. Os quatro testes adicionais são os testes dedicados desta issue.
+- O teste dedicado passou com **4 testes**, incluindo `read_only: true`, preservação do parser e do launcher.
+- A ponte Serena real foi exercitada sem erro de transporte: `tools`, `overview`, `find`, `refs` e `diagnostics` retornaram exit code 0. O comando `tools` retornou seis ferramentas MCP de consulta; `find` localizou `SettingsPage` e `refs` retornou referências no app e nos testes.
+- `diagnostics` retornou diagnósticos Pyright existentes, incluindo imports PyQt5 não resolvidos e problemas de tipagem, mas não falhou por causa do modo `read_only` ou do handshake.
+- O smoke Xvfb passou com 1 teste, `compileall` e `git diff --check` passaram, e o pacote Debian foi construído a partir de staging isolado. O arquivo `app/mouse_hub_app.py` no pacote tem o mesmo SHA-256 do worktree.
+- Os gates de PR e CI remoto ainda precisam ser executados e registrados antes de concluir SC-006.
 
 ## Assumptions
 
