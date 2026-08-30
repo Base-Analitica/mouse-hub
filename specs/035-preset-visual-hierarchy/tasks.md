@@ -28,8 +28,8 @@ Formato: `[ID] [P?] Descrição`
 
 - [x] T014 Atualizar este registro com as contagens finais e evidências locais.
 - [x] T015 Commitar a mudança em branch isolada: `b51e35d`.
-- [ ] T016 Publicar branch e abrir PR com `Closes #94`.
-- [ ] T017 Confirmar os três jobs reais do CI no SHA final.
+- [x] T016 Publicar branch e abrir PR com `Closes #94`: PR **#157**.
+- [x] T017 Confirmar os três jobs reais do CI no SHA publicado: run **33338689515**, todos SUCCESS.
 - [x] T018 Não fazer merge sem autorização explícita; nenhum merge foi executado.
 
 ## Evidências observadas
@@ -46,5 +46,10 @@ Formato: `[ID] [P?] Descrição`
 - `compileall`, `git diff --check`, smoke Xvfb e `tests/test_deb_packaging.py`
   passaram. Nenhum arquivo de `mouse_hub/core` ou `mouse_hub/platform` foi
   alterado.
-- O PR e os três checks remotos ainda não existem para esta branch. T016 e
-  T017 continuam pendentes até o push e a confirmação no SHA final.
+- O PR #157 está aberto, não é draft e não foi merged. O SHA publicado
+  `7f118e84eecfef0ce27ccce28b183a1dfe7b79d3` foi confirmado no run
+  `33338689515`; os três checks reais terminaram com `success`:
+  lint `99330169160`, pacote `99330169322` e smoke `99330169347`.
+- A repetição final da captura confirmou 15/15 PNGs idênticos, inclusive
+  `small_clicker.png`, resolvendo a ressalva de determinismo apontada na
+  revisão independente.
