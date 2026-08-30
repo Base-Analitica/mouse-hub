@@ -35,3 +35,7 @@ Trocar somente o valor booleano para `true`. Não alterar a ponte, o runtime do 
 - `diagnostics` retornou avisos Pyright existentes, como imports PyQt5 não
   resolvidos e problemas de tipagem; isso não impediu o handshake nem foi
   apresentado como uma árvore sem diagnósticos.
+- A consulta `get_current_config` mostrou que as ferramentas de edição ficam
+  fora do conjunto ativo quando `read_only: true`. A tentativa segura de
+  `replace_content` retornou “Tool ... is not active” e o SHA da configuração
+  não mudou.

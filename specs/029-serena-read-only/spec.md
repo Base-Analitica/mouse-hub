@@ -61,6 +61,7 @@ Como agente ou mantenedor que usa a navegação semântica do projeto, quero que
 - No ciclo TDD, a execução dedicada antes da alteração apresentou **2 falhas e 2 aprovações** com `read_only: false`; após a alteração, as 4 verificações passaram.
 - A ponte Serena real foi exercitada sem erro de transporte: `tools`, `overview`, `find`, `refs` e `diagnostics` retornaram exit code 0. O comando `tools` retornou seis ferramentas MCP de consulta; `find` localizou `SettingsPage` e `refs` retornou referências no app e nos testes.
 - `diagnostics` retornou diagnósticos Pyright existentes, incluindo imports PyQt5 não resolvidos e problemas de tipagem, mas não falhou por causa do modo `read_only` ou do handshake.
+- A configuração efetiva foi consultada pelo tool `get_current_config`: as ferramentas de edição ficaram em “Available but not active tools”. Um probe real de `replace_content` retornou “Tool 'replace_content' is not active”, e o SHA de `.serena/project.yml` permaneceu idêntico antes e depois.
 - O smoke Xvfb passou com 1 teste, `compileall` e `git diff --check` passaram, e o pacote Debian foi construído a partir de staging isolado. O arquivo `app/mouse_hub_app.py` no pacote tem o mesmo SHA-256 do worktree.
 - O PR #150 foi aberto com `Closes #63` e permanece aberto, não draft e não merged. O workflow `33284387807` do commit `0f76a45` confirmou os três jobs reais como SUCCESS: lint/testes determinísticos, pacote `.deb` e smoke Xvfb.
 - Qualquer commit posterior ao workflow precisa passar novamente pelos três jobs antes de declarar a entrega final.
