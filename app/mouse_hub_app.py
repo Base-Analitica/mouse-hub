@@ -920,10 +920,21 @@ class DashboardPage(QWidget):
     def _quick_dpi(self, dpi):
         """Ação rápida: só altera DPI físico pelo core — separação issue #3.
 
+        Autorização (issue #95): sem `hardware_dpi_available` confirmado,
+        a ação NÃO parte da UI — nenhum comando parte de um estado não
+        confirmado (o core já é fail-closed; a UI não oferece o caminho).
+
         A sensibilidade do ponteiro NUNCA é alterada aqui (nem como
         fallback): o resultado real da operação vai ao log, e a UI
         exibe apenas o valor confirmado pelo hardware."""
         if self.state is None:
+            return
+        caps = self.state.capability_state()
+        if not caps.is_available("hardware_dpi_available"):
+            self.log_msg(
+                "DPI não aplicado: capacidade de DPI físico não "
+                "confirmada neste momento."
+            )
             return
         result = self.state.set_hardware_dpi(dpi)
         self.log_msg(
@@ -1121,10 +1132,28 @@ class DPIPage(QWidget):
         presets.setColumnStretch(3, 1)
         layout.addLayout(presets)
 
+        # issue #95: o estado real manda — os presets (criados acima)
+        # também só ficam autorizados com a capability confirmada.
+        self._sync_hint()
+
         layout.addStretch()
 
+    def _set_dpi_controls_enabled(self, enabled: bool) -> None:
+        """Autoriza os controles de EFEITO FÍSICO de DPI (issue #95).
+
+        Slider, valor manual, Aplicar e presets só ficam habilitados com
+        `hardware_dpi_available` confirmado — estado correto → ação
+        autorizada; hid_available sozinho NÃO autoriza escrita no
+        sensor (o core é fail-closed e a UI acompanha)."""
+        for widget in (self.slider, self.dpi_input, self.apply_btn):
+            widget.setEnabled(enabled)
+        for _, _, btn in getattr(self, "preset_buttons", []):
+            btn.setEnabled(enabled)
+
     def _sync_hint(self):
-        """Exibe o estado real da capacidade HID/DPI no hardware.
+        """Exibe o estado real da capacidade HID/DPI no hardware e
+        alinha a autorização dos controles a `hardware_dpi_available`
+        (issue #95), exibindo a causa real quando indisponível.
 
         (Correção estrutural da revisão PR #21: este método SÓ atualiza o
         indicador — a construção da página vive inteira em _build; antes,
@@ -1136,21 +1165,21 @@ class DPIPage(QWidget):
         caps = self.state.capability_state()
         hid = caps.is_available("hid_available")
         hw_dpi = caps.is_available("hardware_dpi_available")
+        self._set_dpi_controls_enabled(hid and hw_dpi)
         if hid and hw_dpi:
             self.hid_hint.setText("● DPI físico aplicável no hardware do mouse (HID++)")
             self.hid_hint.setStyleSheet(f"color: {COLORS['mc_green']}; font-size: 12px; background: transparent;")
-            self.slider.setEnabled(True)
-            self.dpi_input.setEnabled(True)
         elif hid:
-            self.hid_hint.setText("● Endpoint HID conhecido, mas DPI físico não confirmado — a configuração do sensor pode exigir nova detecção")
+            reason = caps.reason_for("hardware_dpi_available") or \
+                "DPI físico não confirmado neste endpoint"
+            self.hid_hint.setText(
+                f"● DPI físico não confirmado: {reason} — "
+                "controles desabilitados por segurança"
+            )
             self.hid_hint.setStyleSheet(f"color: {COLORS['warning']}; font-size: 12px; background: transparent;")
-            self.slider.setEnabled(True)
-            self.dpi_input.setEnabled(True)
         else:
             self.hid_hint.setText("● Sem acesso HID ao mouse — controles de DPI físico indisponíveis")
             self.hid_hint.setStyleSheet(f"color: {COLORS['danger']}; font-size: 12px; background: transparent;")
-            self.slider.setEnabled(False)
-            self.dpi_input.setEnabled(False)
 
     def _on_slider_preview(self, val):
         """PREVIEW apenas (revisão PR #21): atualiza o display com o
