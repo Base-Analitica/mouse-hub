@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=Mouse Hub
-GenericName=Mouse Controller
-Comment=Controlador nativo do Logitech G403 HERO — DPI, sensibilidade, perfis, macros e auto-clicker
+GenericName=Input Automation Hub
+Comment=Controle e automação local de mouse e teclado, com hardware baseado em capabilities
 Exec=/bin/bash -c 'cd /opt/mouse-hub && ./launcher.sh'
 Icon=mouse-hub
 Terminal=false
 Categories=Utility;Settings;HardwareSettings;
-Keywords=mouse;logitech;g403;dpi;gaming;
+Keywords=mouse;keyboard;input;automation;macros;logitech;g403;dpi;
 StartupNotify=true
