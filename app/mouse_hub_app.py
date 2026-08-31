@@ -170,6 +170,13 @@ UNKNOWN_VALUE_TEXT = "—"
 _PERMISSION_BTN_LABEL = " Conceder acesso ao hardware  (senha de administrador)"
 
 
+# Issue #88: ação destrutiva não pode ser um botão vazio — rótulo
+# textual curto (o subset de ícones não tem lixeira; ícone ausente
+# nunca derruba a UI), tooltip e acessibilidade identificam a função
+# ANTES do clique, sem depender só da cor.
+_MACRO_DELETE_LABEL = "Excluir"
+_MACRO_DELETE_TOOLTIP = "Excluir esta macro (ação destrutiva)"
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CORE STATE (issue #3)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2238,19 +2245,31 @@ class MacrosPage(QWidget):
             play_btn.clicked.connect(lambda _, b=play_btn: on_play(b))
             il.addWidget(play_btn)
 
-            del_btn = QPushButton("")
-            del_btn.setFixedSize(32, 32)
+            del_btn = QPushButton(_MACRO_DELETE_LABEL)
+            del_btn.setFixedSize(80, 32)
             del_btn.setCursor(QCursor(Qt.PointingHandCursor))
+            del_btn.setToolTip(_MACRO_DELETE_TOOLTIP)
+            del_btn.setAccessibleName(f"Excluir macro {name}")
+            del_btn.setAccessibleDescription(
+                "Ação destrutiva: remove a macro gravada permanentemente"
+            )
             del_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent;
                     border: 1px solid {COLORS['border']};
+                    color: {COLORS['text_secondary']};
                     border-radius: 8px;
-                    font-size: 14px;
+                    font-size: 12px;
+                    font-weight: 700;
                 }}
                 QPushButton:hover {{
                     border-color: {COLORS['danger']};
                     background: rgba(239, 68, 68, 0.1);
+                    color: {COLORS['danger']};
+                }}
+                QPushButton:focus {{
+                    border-color: {COLORS['danger']};
+                    color: {COLORS['danger']};
                 }}
             """)
             del_btn.clicked.connect(lambda _, n=name: self._delete(n))
