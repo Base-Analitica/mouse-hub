@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mouse-hub"
 version = "1.1.0"
-description = "Controlador nativo do Logitech G403 HERO para Linux: DPI, sensibilidade e perfis via protocolo HID++."
+description = "Motor local de controle e automação de entrada para Linux, com mouse, teclado e hardware baseado em capabilities."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-keywords = ["logitech", "g403", "dpi", "linux", "mint"]
+keywords = ["mouse", "keyboard", "automation", "input", "linux", "logitech", "g403"]
 classifiers = [
     "Environment :: X11 Applications :: Qt",
     "Operating System :: POSIX :: Linux",
