@@ -686,6 +686,87 @@ class AccentButton(QPushButton):
         """)
 
 
+_DPI_PRESET_LABEL_KEYS = (
+    ("CS:GO AWP", "Low (CS:GO AWP)"),
+    ("FPS Geral", "Medium (FPS Geral)"),
+    ("Minecraft PvP", "High (Minecraft PvP)"),
+    ("Flick Shots", "Ultra (Flick Shots)"),
+    ("Max Speed", "Max Speed"),
+)
+
+
+def _dpi_preset_data():
+    """Retorna labels de UI e valores da única fonte de presets do core."""
+    return [
+        (label, DPI_PRESETS[key])
+        for label, key in _DPI_PRESET_LABEL_KEYS
+    ]
+
+
+class PresetButton(QPushButton):
+    """Alvo clicável compacto com hierarquia tipográfica explícita.
+
+    O botão permanece um único controle para preservar os callbacks de
+    Dashboard e DPI. Os dois labels internos permitem que o contexto fique
+    neutro e que o valor acionável seja escaneado primeiro.
+    """
+
+    def __init__(self, name, dpi, parent=None):
+        super().__init__(parent)
+        self.preset_name = name
+        self.preset_dpi = dpi
+        self.setAccessibleName(f"{name}, {dpi} DPI")
+        self.setCursor(QCursor(Qt.PointingHandCursor))
+        self.setFixedHeight(70)
+        self.setMinimumWidth(96)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
+        self.name_label = QLabel(name, self)
+        self.name_label.setObjectName("presetName")
+        self.name_label.setAlignment(Qt.AlignCenter)
+        self.name_label.setWordWrap(True)
+        self.name_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.name_label.setStyleSheet(f"""
+            color: {COLORS['text_secondary']};
+            font-size: {TYPE_SCALE['caption']}px;
+            font-weight: 600;
+            background: transparent;
+        """)
+
+        self.value_label = QLabel(f"{dpi} DPI", self)
+        self.value_label.setObjectName("presetValue")
+        self.value_label.setAlignment(Qt.AlignCenter)
+        self.value_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.value_label.setStyleSheet(f"""
+            color: {COLORS['accent_light']};
+            font-size: {TYPE_SCALE['subtitle']}px;
+            font-weight: 900;
+            background: transparent;
+        """)
+
+        content = QVBoxLayout(self)
+        content.setContentsMargins(8, 6, 8, 6)
+        content.setSpacing(0)
+        content.addWidget(self.name_label)
+        content.addWidget(self.value_label)
+
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background: {COLORS['bg_card']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 12px;
+                padding: 0;
+            }}
+            QPushButton:hover {{
+                border-color: {COLORS['accent']};
+                background: {COLORS['bg_card_hover']};
+            }}
+            QPushButton:pressed {{
+                background: {COLORS['accent_dark']};
+            }}
+        """)
+
+
 class DangerButton(QPushButton):
     """Botao de perigo"""
     def __init__(self, text, icon=""):
@@ -786,29 +867,13 @@ class DashboardPage(QWidget):
         presets = QHBoxLayout()
         presets.setSpacing(12)
 
-        for name, dpi in [("CS:GO AWP", 400), ("FPS Geral", 800),
-                          ("Minecraft PvP", 1200), ("Flick Shots", 1600)]:
-            btn = AccentButton(f"{name}\n{dpi} DPI", COLORS["bg_card"])
+        self.quick_preset_buttons = []
+        for name, dpi in _dpi_preset_data()[:4]:
+            btn = PresetButton(name, dpi)
             # issue #66: largura mínima flexível — 4 presets nunca
             # estouram a linha (setFixedSize(130) somava 556px mínimos).
-            btn.setMinimumHeight(52)
-            btn.setMinimumWidth(96)
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {COLORS['bg_card']};
-                    color: {COLORS['text_primary']};
-                    border: 1px solid {COLORS['border']};
-                    border-radius: 12px;
-                    padding: 8px;
-                    font-size: 12px;
-                    font-weight: 600;
-                }}
-                QPushButton:hover {{
-                    border-color: {COLORS['accent']};
-                    background: {COLORS['bg_card_hover']};
-                }}
-            """)
             btn.clicked.connect(lambda _, d=dpi: self._quick_dpi(d))
+            self.quick_preset_buttons.append(btn)
             presets.addWidget(btn)
         presets.addStretch()
         layout.addLayout(presets)
@@ -1101,38 +1166,12 @@ class DPIPage(QWidget):
 
         # Presets com valores vindos da fonte unica de verdade
         # (DPI_PRESETS em core/constants) — issue #6.
-        preset_data = [
-            (" CS:GO AWP", DPI_PRESETS["Low (CS:GO AWP)"]),
-            (" FPS Geral", DPI_PRESETS["Medium (FPS Geral)"]),
-            (" Minecraft PvP", DPI_PRESETS["High (Minecraft PvP)"]),
-            (" Flick Shots", DPI_PRESETS["Ultra (Flick Shots)"]),
-            (" Max Speed", DPI_PRESETS["Max Speed"]),
-        ]
+        preset_data = _dpi_preset_data()
 
         # Botões expostos para a suíte de integração (QTest/direct emit).
         self.preset_buttons = []
         for pos, (name, dpi) in enumerate(preset_data):
-            btn = QPushButton(f"{name}\n{dpi} DPI")
-            btn.setFixedHeight(70)
-            btn.setCursor(QCursor(Qt.PointingHandCursor))
-            # Operate: nome neutro, valor em destaque — cor SEMÂNTICA
-            # não decora botão (a cor por jogo era salada visual).
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {COLORS['bg_card']};
-                    color: {COLORS['text_secondary']};
-                    border: 1px solid {COLORS['border']};
-                    border-radius: 12px;
-                    padding: 10px;
-                    font-size: 12px;
-                    font-weight: 700;
-                }}
-                QPushButton:hover {{
-                    border-color: {COLORS['accent']};
-                    background: {COLORS['bg_card_hover']};
-                    color: {COLORS['text_primary']};
-                }}
-            """)
+            btn = PresetButton(name, dpi)
             btn.clicked.connect(lambda _, d=dpi: self._set_preset(d))
             self.preset_buttons.append((name, dpi, btn))
             presets.addWidget(btn, pos // 3, pos % 3)
