@@ -9,7 +9,7 @@
 <h1 align="center">Mouse Hub</h1>
 
 <p align="center">
-  Aplicativo desktop nativo para o <strong>Logitech G403 HERO</strong> no Linux Mint.
+  Motor local de <strong>controle e automação de entrada</strong> para Linux, com mouse e teclado como domínio e suporte de hardware iniciado pelo <strong>Logitech G403 HERO</strong>.
 </p>
 
 <p align="center">
@@ -21,13 +21,48 @@
 
 ## Estado do projeto
 
-O produto principal é a aplicação PyQt5 em `app/`. O foco atual é exclusivamente o Logitech G403 HERO (VID `046d`, PID `c08f`) no Linux Mint; o projeto não tenta ser uma suíte universal de periféricos.
+O produto principal é a aplicação PyQt5 em `app/`. A implementação atual continua centrada no Logitech G403 HERO (VID `046d`, PID `c08f`) para controle físico de hardware e em X11 para automação, mas o G403 deixa de definir o limite conceitual do produto.
+
+A direção arquitetural do Mouse Hub é ser um **local input control and automation engine for mouse and keyboard, with capability-aware hardware control**. Mouse e teclado pertencem ao domínio de entrada; configuração proprietária de hardware entra somente quando existir um adapter/capability explícito para o dispositivo.
 
 O core diferencia dispositivo detectado, acesso HID, DPI físico, sensibilidade do sistema e demais capabilities. Operações de hardware só são consideradas bem-sucedidas quando há evidência do protocolo; falha não é convertida em sucesso visual ou persistido.
 
 A suíte automatizada usa fakes/adapters e não substitui validação física. O caminho HID++ de DPI está implementado e testado deterministicamente, mas ainda não deve ser descrito como fisicamente validado no G403 até o teste ser executado no hardware real.
 
 O antigo servidor HTTP e a interface web foram removidos após a consolidação do fluxo nativo. O Mouse Hub não precisa de navegador ou porta local para funcionar.
+
+## Direção arquitetural
+
+O projeto evolui em quatro responsabilidades separadas:
+
+```text
+Mouse Hub
+│
+├── Input Engine
+│   ├── Mouse
+│   ├── Keyboard
+│   ├── Timing
+│   ├── Sequences
+│   └── Scheduler
+│
+├── Automation
+│   ├── Auto-clicker
+│   ├── Macros
+│   ├── Hotkeys
+│   └── Profiles
+│
+├── Device Control
+│   └── capability-aware adapters
+│       └── Logitech G403 HERO (primeiro adapter)
+│
+└── UI
+```
+
+Auto-clicker, macros e futuras hotkeys devem reutilizar primitivas do Input Engine em vez de criar emissores paralelos. O suporte de teclado inclui emissão de teclas e captura **explícita e observável** quando uma feature de gravação exigir; captura global contínua/keylogging não faz parte da arquitetura.
+
+O Mouse Hub também **não** é um sistema de RPA ou agente de desktop. Sua fronteira é deliberada: **executa ações de entrada, mas não decide semanticamente como operar aplicações**. Reconhecimento de tela, interpretação de intenção e decisões como “qual botão clicar” pertencem a camadas superiores.
+
+Detalhes e invariantes: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Capacidades atuais
 
@@ -40,7 +75,7 @@ O antigo servidor HTTP e a interface web foram removidos após a consolidação 
 | **Polling rate** | Indisponível no stack atual | — | A UI não simula sucesso nem marca frequência ativa sem capacidade confirmada. |
 | **Auto-clicker** | Funcional, em hardening | Sessão X11 (XTest + leitura de foco) | 1–50 CPS, três botões e restrição por janela em foco; CPS/botão persistem no config XDG. Sem X11, os controles ficam desabilitados com a causa visível. |
 | **Macros — persistência/playback** | Implementados | Sessão X11 (XTest) | Modelo, armazenamento e reprodução existem no core; timing usa o clock do servidor X na captura e relógio monotônico na reprodução. |
-| **Macros — captura** | Implementada no software | Sessão X11 (extensão XRecord) | Backend XRecord captura teclado/cliques com handshake, cancelamento durante a inicialização e lifecycle testado deterministicamente; validação end-to-end em sessão X11 real ainda deve ser tratada como evidência separada. |
+| **Macros — captura** | Implementada no software | Sessão X11 (extensão XRecord) | Backend XRecord captura teclado/cliques em modo explícito com handshake, cancelamento durante a inicialização e lifecycle testado deterministicamente; validação end-to-end em sessão X11 real ainda deve ser tratada como evidência separada. |
 
 ## Requisitos
 
@@ -99,7 +134,7 @@ python3 app/mouse_hub_app.py
 O core usa diretórios XDG:
 
 - configuração: `${XDG_CONFIG_HOME:-~/.config}/mouse-hub/`;
-- dados: `${XDG_DATA_HOME:-~/.local/share}/mouse-hub/`.
+- dados: `${XDG_DATA_HOME:-~/.local/share/mouse-hub/`.
 
 Existe migração não destrutiva do layout legado em `~/mouse-hub/`. Configuração existente porém ilegível/corrompida não deve ser sobrescrita silenciosamente.
 
@@ -123,10 +158,10 @@ A descoberta do endpoint é feita pelo aplicativo; não escolha manualmente `/de
 | Caminho | Responsabilidade |
 | --- | --- |
 | [`app/`](app/) | UI desktop PyQt5 e composição das páginas. |
-| [`mouse_hub/core/`](mouse_hub/core/) | Estado, DPI, sensibilidade, perfis, configuração e automações. |
-| [`mouse_hub/platform/`](mouse_hub/platform/) | HID++ e integrações de plataforma. |
+| [`mouse_hub/core/`](mouse_hub/core/) | Estado, perfis e regras de domínio; deve concentrar a evolução do Input Engine e das automações. |
+| [`mouse_hub/platform/`](mouse_hub/platform/) | HID++, integrações de plataforma e backends de input/hardware. |
 | [`tests/`](tests/) | Regressões determinísticas, fakes, benchmarks e smoke da UI. |
-| [`docs/`](docs/) | Documentação técnica, regras udev e metodologia de performance. |
+| [`docs/`](docs/) | Arquitetura, documentação técnica, regras udev e metodologia de performance. |
 
 A UI projeta o estado do core; não é fonte de verdade sobre o hardware.
 
