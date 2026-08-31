@@ -134,7 +134,7 @@ python3 app/mouse_hub_app.py
 O core usa diretórios XDG:
 
 - configuração: `${XDG_CONFIG_HOME:-~/.config}/mouse-hub/`;
-- dados: `${XDG_DATA_HOME:-~/.local/share/mouse-hub/`.
+- dados: `${XDG_DATA_HOME:-~/.local/share}/mouse-hub/`.
 
 Existe migração não destrutiva do layout legado em `~/mouse-hub/`. Configuração existente porém ilegível/corrompida não deve ser sobrescrita silenciosamente.
 
