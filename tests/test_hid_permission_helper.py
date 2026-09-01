@@ -186,6 +186,7 @@ def _make_page(qapp, monkeypatch, hid_available: bool, permission_issue: bool = 
 
 def test_botao_visivel_quando_permissao_e_o_problema(qapp, monkeypatch):
     page, state, calls = _make_page(qapp, monkeypatch, hid_available=False)
+    assert not page._permission_btn.isHidden()
     assert page._permission_btn.isEnabled()
     assert "permiss" in page._permission_status.text().lower() or \
         "regra udev" in page._permission_status.text().lower()
@@ -193,6 +194,7 @@ def test_botao_visivel_quando_permissao_e_o_problema(qapp, monkeypatch):
 
 def test_botao_inativo_quando_hid_ja_disponivel(qapp, monkeypatch):
     page, state, calls = _make_page(qapp, monkeypatch, hid_available=True)
+    assert page._permission_btn.isHidden()
     assert not page._permission_btn.isEnabled()
     assert "ativo" in page._permission_status.text().lower()
 
@@ -205,6 +207,7 @@ def test_botao_inativo_quando_causa_nao_e_permissao(qapp, monkeypatch):
     page.state._core._invalidate_access_state(OperationStatus.FAILED)
     page.state._caps = page.state._evaluate()  # caps são cacheadas
     page._sync_permission_ui()
+    assert page._permission_btn.isHidden()
     assert not page._permission_btn.isEnabled()
     assert "outra causa" in page._permission_status.text().lower()
 
@@ -235,6 +238,7 @@ def test_clique_concede_e_reavalia_hardware(qapp, monkeypatch):
     assert state.capability_state().is_available("hid_available")
     assert "concedido" in page._permission_status.text().lower() or \
         "ativo" in page._permission_status.text().lower()
+    assert page._permission_btn.isHidden()
     assert not page._permission_btn.isEnabled()
 
 
