@@ -1497,7 +1497,7 @@ class SensitivityPage(QWidget):
         explícito, sem polling periódico)."""
         if self.state is None:
             self.polling_hint.setText(
-                f"● {POLLING_UNAVAILABLE_COPY}"
+                f"● Polling rate indisponível: {POLLING_UNAVAILABLE_COPY}"
             )
             self.polling_hint.setStyleSheet(
                 "color: %s; font-size: 12px; background: transparent;"
@@ -1510,28 +1510,24 @@ class SensitivityPage(QWidget):
             return
         caps = self.state.capability_state()
         available = caps.is_available("polling_rate_available")
+        # A capability do snapshot não é suficiente para habilitar uma ação.
+        # O core mantém a causa técnica, mas a UI usa copy segura para o
+        # usuário até existir uma operação Report Rate verificável.
         if available:
-            self.polling_hint.setText("● Polling rate disponível")
-            self.polling_hint.setStyleSheet(
-                "color: %s; font-size: 12px; background: transparent;"
-                % COLORS["mc_green"]
-            )
-            for btn in self.polling_buttons:
-                btn.setEnabled(True)
-            self.polling_controls.setEnabled(True)
-            self.polling_controls.setVisible(True)
+            summary = "alteração não disponível nesta versão"
         else:
-            # Causa técnica permanece no core; a copy operacional
-            # pertence à camada de apresentação (issue #101).
-            self.polling_hint.setText(f"● {POLLING_UNAVAILABLE_COPY}")
-            self.polling_hint.setStyleSheet(
-                "color: %s; font-size: 12px; background: transparent;"
-                % COLORS["warning"]
-            )
-            for btn in self.polling_buttons:
-                btn.setEnabled(False)
-            self.polling_controls.setEnabled(False)
-            self.polling_controls.setVisible(False)
+            summary = POLLING_UNAVAILABLE_COPY
+        self.polling_hint.setText(
+            "● Polling rate indisponível: %s" % summary
+        )
+        self.polling_hint.setStyleSheet(
+            "color: %s; font-size: 12px; background: transparent;"
+            % COLORS["danger"]
+        )
+        for btn in self.polling_buttons:
+            btn.setEnabled(False)
+        self.polling_controls.setEnabled(False)
+        self.polling_controls.setVisible(False)
 
     def _on_slider_preview(self, val):
         """PREVIEW apenas: altera somente o display. O efeito no

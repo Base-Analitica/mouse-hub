@@ -8,7 +8,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PyQt5.QtWidgets import QApplication, QLabel
 
-from app.mouse_hub_app import MouseController, MouseCoreState, SensitivityPage
+from app.mouse_hub_app import (
+    POLLING_UNAVAILABLE_COPY,
+    MouseController,
+    MouseCoreState,
+    SensitivityPage,
+)
 from mouse_hub.core.dpi_persistence import NeverDpiPersister
 from mouse_hub.core.mouse_controller import MouseController as CoreMouseController
 from tests.fakes import FakeHidAccess, FakeSystemInput
@@ -88,7 +93,8 @@ def test_unavailable_polling_controls_are_hidden_but_reason_stays_visible(
 
     controls = _polling_controls(page)
     assert _polling_title(page).isVisible()
-    assert "Report Rate" in page.polling_hint.text()
+    assert POLLING_UNAVAILABLE_COPY in page.polling_hint.text()
+    assert "Report Rate" not in page.polling_hint.text()
     assert controls.isHidden()
     assert not controls.isEnabled()
     assert all(not button.isVisible() for button in page.polling_buttons)
@@ -99,7 +105,7 @@ def test_unavailable_polling_controls_are_hidden_but_reason_stays_visible(
 
 
 @pytest.mark.parametrize("size", _VIEWPORTS)
-def test_confirmed_polling_capability_shows_existing_controls_without_selection(
+def test_confirmed_polling_capability_stays_hidden_without_operation(
     qapp, size
 ):
     state, hid, _ = _state_with_polling_capability(True)
@@ -107,20 +113,13 @@ def test_confirmed_polling_capability_shows_existing_controls_without_selection(
     _show(page, qapp, size)
 
     controls = _polling_controls(page)
-    assert controls.isVisible()
-    assert controls.isEnabled()
-    assert [button.text() for button in page.polling_buttons] == [
-        "125 Hz",
-        "250 Hz",
-        "500 Hz",
-        "1000 Hz",
-    ]
-    assert all(button.isVisible() for button in page.polling_buttons)
-    assert all(button.isEnabled() for button in page.polling_buttons)
+    assert controls.isHidden()
+    assert page.polling_hint.text() == (
+        "● Polling rate indisponível: alteração não disponível nesta versão"
+    )
+    assert all(not button.isVisible() for button in page.polling_buttons)
+    assert all(not button.isEnabled() for button in page.polling_buttons)
     assert all(not button.isChecked() for button in page.polling_buttons)
-    assert page.polling_controls.layout().contentsMargins().left() == 0
-    assert page.polling_controls.layout().contentsMargins().right() == 0
-    assert page.polling_controls.layout().spacing() == 12
 
     for button in page.polling_buttons:
         button.click()
@@ -143,8 +142,11 @@ def test_polling_controls_follow_an_explicit_capability_transition(qapp):
     snapshot["value"] = _CapabilitySnapshot(True)
     page._sync_polling()
     qapp.processEvents()
-    assert controls.isVisible()
-    assert all(button.isEnabled() for button in page.polling_buttons)
+    assert controls.isHidden()
+    assert page.polling_hint.text() == (
+        "● Polling rate indisponível: alteração não disponível nesta versão"
+    )
+    assert all(not button.isEnabled() for button in page.polling_buttons)
     assert all(not button.isChecked() for button in page.polling_buttons)
 
     snapshot["value"] = _CapabilitySnapshot(False, "capacidade revogada")
@@ -176,9 +178,7 @@ def test_unavailable_polling_controls_keep_the_fallback_reason(qapp):
 
     controls = _polling_controls(page)
     assert controls.isHidden()
-    assert "capacidade não disponível no ambiente atual" in (
-        page.polling_hint.text()
-    )
+    assert POLLING_UNAVAILABLE_COPY in page.polling_hint.text()
 
     page.close()
 
@@ -199,7 +199,7 @@ def test_polling_sync_keeps_capability_decision_in_state(monkeypatch, qapp):
     assert calls
     controls = _polling_controls(page)
     assert controls.isHidden()
-    assert "razão controlada" in page.polling_hint.text()
+    assert POLLING_UNAVAILABLE_COPY in page.polling_hint.text()
 
     page.close()
 
@@ -222,9 +222,7 @@ def test_show_event_refresh_reprojects_polling_capability(qapp):
     page.show()
     qapp.processEvents()
 
-    assert controls.isVisible()
-    assert controls.isEnabled()
-    assert all(button.isEnabled() for button in page.polling_buttons)
-    assert all(not button.isChecked() for button in page.polling_buttons)
+    assert controls.isHidden()
+    assert all(not button.isEnabled() for button in page.polling_buttons)
 
     page.close()
