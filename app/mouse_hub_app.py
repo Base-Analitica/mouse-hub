@@ -60,6 +60,7 @@ from app.ui.theme import (
     COLORS,
     build_app_stylesheet,
     TYPE_SCALE,
+    RADIUS,
     SPACE,
     normal_font_size,
 )
@@ -676,13 +677,13 @@ class AccentButton(QPushButton):
                 color: white;
                 border: none;
                 border-radius: 10px;
-                padding: 8px 20px;
+                padding: {SPACE['sm']}px {SPACE['card']}px;
                 font-size: 14px;
                 font-weight: 700;
             }}
             QPushButton:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {COLORS['accent_light']}, stop:1 #c4b5fd);
+                    stop:0 {COLORS['accent_light']}, stop:1 {COLORS['accent_lighter']});
             }}
             QPushButton:pressed {{
                 background: {COLORS['accent_dark']};
@@ -786,7 +787,7 @@ class DangerButton(QPushButton):
                 color: white;
                 border: none;
                 border-radius: 10px;
-                padding: 8px 20px;
+                padding: {SPACE['sm']}px {SPACE['card']}px;
                 font-size: 14px;
                 font-weight: 700;
             }}
@@ -1058,8 +1059,8 @@ class DPIPage(QWidget):
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                     stop:0 {COLORS['bg_card']}, stop:1 {COLORS['bg_mid']});
                 border: 1px solid {COLORS['border']};
-                border-radius: 16px;
-                padding: 20px;
+                border-radius: {RADIUS['card']}px;
+                padding: {SPACE['card']}px;
             }}
         """)
         dl = QVBoxLayout(display)
@@ -1364,7 +1365,7 @@ class SensitivityPage(QWidget):
             QFrame#sensDisplay {{
                 background: {COLORS['bg_card']};
                 border: 1px solid {COLORS['border']};
-                border-radius: 16px;
+                border-radius: {RADIUS['card']}px;
             }}
         """)
         dl = QVBoxLayout(display)
@@ -1632,8 +1633,8 @@ class AutoClickerPage(QWidget):
             QFrame#clickerStatus {{
                 background: {COLORS['bg_card']};
                 border: 2px solid {COLORS['border']};
-                border-radius: 16px;
-                padding: 20px;
+                border-radius: {RADIUS['card']}px;
+                padding: {SPACE['card']}px;
             }}
         """)
         sl = QHBoxLayout(self.status_frame)
@@ -1808,13 +1809,13 @@ class AutoClickerPage(QWidget):
                     color: white;
                     border: none;
                     border-radius: 10px;
-                    padding: 8px 20px;
+                    padding: {SPACE['sm']}px {SPACE['card']}px;
                     font-size: 14px;
                     font-weight: 700;
                 }}
                 QPushButton:hover {{
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 {COLORS['accent_light']}, stop:1 #c4b5fd);
+                        stop:0 {COLORS['accent_light']}, stop:1 {COLORS['accent_lighter']});
                 }}
             """)
             self.status_title.setText("Auto-Clicker Desligado")
@@ -1825,8 +1826,8 @@ class AutoClickerPage(QWidget):
                 QFrame#clickerStatus {{
                     background: {COLORS['bg_card']};
                     border: 2px solid {COLORS['border']};
-                    border-radius: 16px;
-                    padding: 20px;
+                    border-radius: {RADIUS['card']}px;
+                    padding: {SPACE['card']}px;
                 }}
             """)
         else:
@@ -1836,17 +1837,17 @@ class AutoClickerPage(QWidget):
             self.toggle_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 {COLORS['danger']}, stop:1 #f87171);
+                        stop:0 {COLORS['danger']}, stop:1 {COLORS['danger_light']});
                     color: white;
                     border: none;
                     border-radius: 10px;
-                    padding: 8px 20px;
+                    padding: {SPACE['sm']}px {SPACE['card']}px;
                     font-size: 14px;
                     font-weight: 700;
                 }}
                 QPushButton:hover {{
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                        stop:0 #f87171, stop:1 #fca5a5);
+                        stop:0 {COLORS['danger_light']}, stop:1 {COLORS['danger_lighter']});
                 }}
             """)
             self.status_title.setText("Auto-Clicker Ativo!")
@@ -1856,8 +1857,8 @@ class AutoClickerPage(QWidget):
                 QFrame#clickerStatus {{
                     background: {COLORS['bg_card']};
                     border: 2px solid {COLORS['danger']};
-                    border-radius: 16px;
-                    padding: 20px;
+                    border-radius: {RADIUS['card']}px;
+                    padding: {SPACE['card']}px;
                 }}
             """)
 
@@ -2228,7 +2229,7 @@ class MacrosPage(QWidget):
                 "Nenhuma macro gravada ainda.\n"
                 "Use   Gravar Macro acima para criar a primeira.")
             empty.setAlignment(Qt.AlignCenter)
-            empty.setStyleSheet(f"color: {COLORS['text_muted']}; padding: 30px; font-size: 13px; background: transparent;")
+            empty.setStyleSheet(f"color: {COLORS['text_muted']}; padding: {SPACE['empty_state']}px; font-size: 13px; background: transparent;")
             self.macro_list_layout.addWidget(empty)
             return
 
@@ -2494,9 +2495,9 @@ class ProfilesPage(QWidget):
         card.setObjectName("profileCard")
         card.setStyleSheet(
             "QFrame#profileCard { background: %s; border: 2px solid %s;"
-            "border-radius: 16px; padding: 12px; }"
+            "border-radius: %dpx; padding: 12px; }"
             "QFrame#profileCard:hover { border-color: %s; }"
-            % (COLORS["bg_card"], COLORS["border"], color)
+            % (COLORS["bg_card"], COLORS["border"], RADIUS["card"], color)
         )
         cl = QVBoxLayout(card)
         cl.setContentsMargins(12, 10, 12, 10)
@@ -2572,16 +2573,16 @@ class ProfilesPage(QWidget):
                 )
                 card.setStyleSheet(
                     "QFrame#profileCard { background: %s; border: 2px solid %s;"
-                    "border-radius: 16px; padding: 12px; }"
-                    % (COLORS["bg_card"], COLORS["mc_green"])
+                    "border-radius: %dpx; padding: 12px; }"
+                    % (COLORS["bg_card"], COLORS["mc_green"], RADIUS["card"])
                 )
             else:
                 badge.setText("")
                 card.setStyleSheet(
                     "QFrame#profileCard { background: %s; border: 2px solid %s;"
-                    "border-radius: 16px; padding: 12px; }"
+                    "border-radius: %dpx; padding: 12px; }"
                     "QFrame#profileCard:hover { border-color: %s; }"
-                    % (COLORS["bg_card"], COLORS["border"], COLORS["accent"])
+                    % (COLORS["bg_card"], COLORS["border"], RADIUS["card"], COLORS["accent"])
                 )
 
     def active_profile(self):
@@ -3022,7 +3023,7 @@ class MouseHubApp(QMainWindow):
         self.status_indicator        .setStyleSheet(f"""
             QFrame#statusIndicator {{
                 background: {COLORS['bg_card']};
-                border-radius: 18px;
+                border-radius: {RADIUS['pill']}px;
                 padding: 4px 12px;
             }}
         """)

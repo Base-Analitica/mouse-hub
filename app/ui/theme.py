@@ -64,7 +64,7 @@ TYPE_SCALE = {
     "logo":     17,   # wordmark da sidebar (única exceção de marca)
 }
 
-# ── Espaçamento (px) — base 4 ───────────────────────────────
+# ── Espaçamento (px) — base 4. Exceções têm nome por componente ──
 SPACE = {
     "xs": 4,
     "sm": 8,
@@ -72,10 +72,12 @@ SPACE = {
     "lg": 16,
     "xl": 24,
     "xxl": 32,
+    "card": 20,
+    "empty_state": 30,
 }
 
 # ── Raios ────────────────────────────────────────────────────
-RADIUS = {"sm": 6, "md": 8, "lg": 10, "xl": 12, "pill": 18}
+RADIUS = {"sm": 6, "md": 8, "lg": 10, "xl": 12, "card": 16, "pill": 18}
 
 
 def normal_font_size(px: int) -> int:
