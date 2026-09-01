@@ -171,7 +171,7 @@ class MouseController:
 # confirmou o valor). Unknown NUNCA vira default na UI (revisão PR #21):
 # requested != applied != persisted; sem confirmação, não há valor a exibir.
 UNKNOWN_VALUE_TEXT = "—"
-_PERMISSION_BTN_LABEL = " Conceder acesso ao hardware  (senha de administrador)"
+_PERMISSION_BTN_LABEL = "Conceder acesso ao hardware (senha de administrador)"
 
 
 # Issue #88: ação destrutiva não pode ser um botão vazio — rótulo
@@ -835,7 +835,7 @@ class DashboardPage(QWidget):
 
         # issue #7: o texto real vem de _sync_subtitle() (capacidades do
         # core); nenhum estado é afirmado antes da avaliação.
-        self.subtitle = QLabel(f"Mouse: {MOUSE_NAME}  •  Avaliando capacidades…")
+        self.subtitle = QLabel(f"Mouse: {MOUSE_NAME} • Avaliando capacidades…")
         self.subtitle.setStyleSheet(f"font-size: 11px; color: {COLORS['text_muted']}; background: transparent;")
         layout.addWidget(self.subtitle)
 
@@ -972,21 +972,21 @@ class DashboardPage(QWidget):
         detected = caps.is_available("mouse_detected")
         dpi = caps.is_available("hardware_dpi_available")
         if detected and hid and dpi:
-            text = f"{MOUSE_NAME}  •  Hardware DPI disponível"
+            text = f"{MOUSE_NAME} • Hardware DPI disponível"
             color = COLORS["mc_green"]
         elif detected and hid:
             # Acesso HID confirmado não implica DPI ajustável (issue #7):
             # o texto declara apenas o que o core evidenciou.
             reason = caps.reason_for("hardware_dpi_available")
-            text = f"{MOUSE_NAME}  •  Acesso HID — DPI físico indisponível"
+            text = f"{MOUSE_NAME} • Acesso HID — DPI físico indisponível"
             if reason:
                 text += f" ({reason})"
             color = COLORS["warning"]
         elif detected:
-            text = f"{MOUSE_NAME}  •  Detectado — sem acesso HID"
+            text = f"{MOUSE_NAME} • Detectado — sem acesso HID"
             color = COLORS["warning"]
         else:
-            text = f"{MOUSE_NAME}  •  Sem G403 detectado no sistema"
+            text = f"{MOUSE_NAME} • Sem G403 detectado no sistema"
             color = COLORS["text_muted"]
         self.subtitle.setText(text)
         self.subtitle.setStyleSheet(
@@ -1704,8 +1704,8 @@ class AutoClickerPage(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(12)
         self.btn_buttons = []
-        for i, (name, icon) in enumerate([(  "Esquerdo", ""), ("Meio", ""), ("Direito", "")]):
-            btn = QPushButton(f"{icon}  {name}")
+        for i, (name, icon) in enumerate([("Esquerdo", ""), ("Meio", ""), ("Direito", "")]):
+            btn = QPushButton(f"{icon} {name}".strip())
             btn.setFixedHeight(44)
             btn.setCursor(QCursor(Qt.PointingHandCursor))
             active = (i + 1) == self.ac.button
@@ -2074,7 +2074,7 @@ class MacrosPage(QWidget):
             self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["danger"])
 
     def _set_recording_ui(self, recording: bool) -> None:
-        self.record_btn.setText("Parar Gravação" if recording else " Gravar Macro")
+        self.record_btn.setText("Parar Gravação" if recording else "Gravar Macro")
         self.cancel_btn.setVisible(recording)
         self.name_input.setEnabled(not recording)
         if not recording and self._op_kind is None:
@@ -2120,7 +2120,7 @@ class MacrosPage(QWidget):
             self.name_input.setEnabled(False)
             self.cancel_btn.setVisible(True)
             self.record_status.setText(
-                " Iniciando captura XRecord… (aguardando o servidor X)")
+                "Iniciando captura XRecord… (aguardando o servidor X)")
             self._start_async("start", lambda: self.me.start_recording(name),
                               name=name)
 
@@ -2183,7 +2183,7 @@ class MacrosPage(QWidget):
                     f"Erro ao encerrar a gravação: {error}")
             elif result is None:
                 self.record_status.setText(
-                    "⚠  Gravação descartada (sem eventos ou nome inválido)")
+                    "⚠ Gravação descartada (sem eventos ou nome inválido)")
             else:
                 count = self.me.macros.get(result, {}).get("count", 0)
                 suffix = " — TRUNCADA no teto de eventos" \
@@ -2194,12 +2194,12 @@ class MacrosPage(QWidget):
         elif kind == "cancel":
             self._set_recording_ui(False)
             self.record_status.setText(
-                "⚠  Gravação cancelada — eventos descartados")
+                "⚠ Gravação cancelada — eventos descartados")
 
     def _update_play_status(self) -> None:
         """Reflete o estado real do playback: em execução ou FAILED com
         o motivo do último erro. Sincroniza também os botões Play —
-        durante a reprodução qualquer botão vira ' Cancel'."""
+        durante a reprodução qualquer botão vira 'Cancel'."""
         state = self.me.playback_state
         running = state == "running"
         if running:
@@ -2210,10 +2210,10 @@ class MacrosPage(QWidget):
         else:
             self.play_status.setText("")
         for child in self.macro_list_widget.findChildren(QPushButton):
-            if child.text() in (" Play", " Cancel") and child is not getattr(
+            if child.text() in ("Play", "Cancel") and child is not getattr(
                 self, "_last_del_btn", None
             ):
-                child.setText("Cancel" if running else " Play")
+                child.setText("Cancel" if running else "Play")
 
     def _refresh_list(self):
         # Clear
@@ -2226,7 +2226,7 @@ class MacrosPage(QWidget):
         if not macros:
             empty = QLabel(
                 "Nenhuma macro gravada ainda.\n"
-                "Use   Gravar Macro acima para criar a primeira.")
+                "Use Gravar Macro acima para criar a primeira.")
             empty.setAlignment(Qt.AlignCenter)
             empty.setStyleSheet(f"color: {COLORS['text_muted']}; padding: 30px; font-size: 13px; background: transparent;")
             self.macro_list_layout.addWidget(empty)
@@ -2249,11 +2249,11 @@ class MacrosPage(QWidget):
             il = QHBoxLayout(item)
 
             info_col = QVBoxLayout()
-            name_label = QLabel(f" {name}")
+            name_label = QLabel(name)
             name_label.setStyleSheet(f"font-size: 14px; font-weight: 700; background: transparent;")
             info_col.addWidget(name_label)
 
-            meta = QLabel(f"{info['count']} eventos  •  {info['created'][:10]}")
+            meta = QLabel(f"{info['count']} eventos • {info['created'][:10]}")
             meta.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; background: transparent;")
             info_col.addWidget(meta)
             il.addLayout(info_col)
@@ -2277,7 +2277,7 @@ class MacrosPage(QWidget):
 
             def on_play(btn, n=name):
                 """Play/Cancel — o botão espelha o estado do playback:
-                durante a execução vira ' Cancel' e encerra a
+                durante a execução vira 'Cancel' e encerra a
                 emissão em curso (worker exato, sem criar substituto)."""
                 if self.me.playing:
                     self.me.cancel_playback()
@@ -2519,7 +2519,7 @@ class ProfilesPage(QWidget):
         )
         cl.addWidget(nm)
 
-        det = QLabel("DPI: %d  •  Sens: %d%%" % (profile.dpi, profile.sensitivity))
+        det = QLabel("DPI: %d • Sens: %d%%" % (profile.dpi, profile.sensitivity))
         det.setStyleSheet(
             "color: %s; font-size: 11px; background: transparent;" % COLORS["text_secondary"]
         )
@@ -2641,7 +2641,7 @@ class ProfilesPage(QWidget):
                     (profile.name, _result_text(dpi_result)))
             color = COLORS["warning"]
         else:
-            text = (" Perfil '%s' NAO aplicado: DPI falhou "
+            text = ("Perfil '%s' NAO aplicado: DPI falhou "
                     "(%s); sensibilidade falhou (%s)." %
                     (profile.name, _result_text(dpi_result),
                      _result_text(sens_result)))
@@ -2667,7 +2667,7 @@ class ProfilesPage(QWidget):
         )
         if not outcome.success:
             self.apply_hint.setText(
-                " Nao foi possivel salvar o perfil '%s': %s" % (name, outcome.message)
+                "Nao foi possivel salvar o perfil '%s': %s" % (name, outcome.message)
             )
             self.apply_hint.setStyleSheet(
                 "color: %s; font-size: 12px; background: transparent;" % COLORS["danger"]
@@ -2729,7 +2729,7 @@ class SettingsPage(QWidget):
         layout.addLayout(title_row)
 
         # HID Permissions
-        hid_group = QGroupBox(" Permissões HID (DPI via Hardware)")
+        hid_group = QGroupBox("Permissões HID (DPI via Hardware)")
         hid_layout = QVBoxLayout(hid_group)
 
         hid_info = QLabel(
@@ -2751,9 +2751,7 @@ class SettingsPage(QWidget):
         self._permission_status.setStyleSheet("font-size: 12px; background: transparent;")
         hid_layout.addWidget(self._permission_status)
 
-        self._permission_btn = QPushButton(
-            " Conceder acesso ao hardware  (senha de administrador)"
-        )
+        self._permission_btn = QPushButton(_PERMISSION_BTN_LABEL)
         self._permission_btn.setStyleSheet(f"""
             QPushButton {{
                 background: {COLORS['bg_card']};
@@ -2774,14 +2772,14 @@ class SettingsPage(QWidget):
         layout.addWidget(hid_group)
 
         # Auto-clicker settings
-        ac_group = QGroupBox(" Auto-Clicker — Segurança")
+        ac_group = QGroupBox("Auto-Clicker — Segurança")
         ac_layout = QVBoxLayout(ac_group)
 
         safety_text = QLabel(
-            " O auto-clicker só funciona quando Minecraft/Lunar Client está em foco.\n"
-            " O detector lê o nome da janela ativa direto via X11, "
+            "O auto-clicker só funciona quando Minecraft/Lunar Client está em foco.\n"
+            "O detector lê o nome da janela ativa direto via X11, "
             "com cache de 500 ms (TTL) entre consultas.\n"
-            " Nenhum clique é feito fora do jogo."
+            "Nenhum clique é feito fora do jogo."
         )
         safety_text.setWordWrap(True)
         safety_text.setStyleSheet(f"color: {COLORS['mc_green']}; font-size: 12px; background: transparent;")
@@ -2790,7 +2788,7 @@ class SettingsPage(QWidget):
         layout.addWidget(ac_group)
 
         # System info
-        info_group = QGroupBox(" Informações do Sistema")
+        info_group = QGroupBox("Informações do Sistema")
         info_layout = QVBoxLayout(info_group)
 
         paths = ConfigPaths.xdg()
@@ -2829,12 +2827,12 @@ class SettingsPage(QWidget):
             return
         if caps.is_available("hid_available"):
             self._permission_status.setText(
-                " Acesso HID ativo — controle de DPI físico operável.")
+                "Acesso HID ativo — controle de DPI físico operável.")
             self._permission_status.setStyleSheet(
                 f"font-size: 12px; color: {COLORS['success']}; background: transparent;")
             self._permission_btn.setEnabled(False)
             self._permission_btn.setToolTip("Acesso já concedido")
-            self._permission_btn.setText("✔  Acesso HID já concedido")
+            self._permission_btn.setText("✔ Acesso HID já concedido")
             return
         reason = caps.reason_for("hid_available")
         if self._permission_btn.text() != _PERMISSION_BTN_LABEL:
@@ -2864,7 +2862,7 @@ class SettingsPage(QWidget):
             return  # já em andamento
         self._permission_btn.setEnabled(False)
         self._permission_status.setText(
-            " Aguardando autenticação de administrador…")
+            "Aguardando autenticação de administrador…")
         self._permission_status.setStyleSheet(
             f"font-size: 12px; color: {COLORS['text_secondary']}; background: transparent;")
         self._permission_result = None
@@ -2900,8 +2898,8 @@ class SettingsPage(QWidget):
             self._permission_btn.setEnabled(False)
         else:
             self._permission_status.setText(
-                (" " if result.status.value == "permission_denied" else "⚠ ")
-                + result.message)
+                result.message if result.status.value == "permission_denied"
+                else "⚠ " + result.message)
             self._permission_status.setStyleSheet(
                 f"font-size: 12px; color: {COLORS['warning']}; background: transparent;")
             self._sync_permission_ui()
@@ -2918,7 +2916,7 @@ class MouseHubApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(" Mouse Hub — Controlador Gaymer")
+        self.setWindowTitle("Mouse Hub — Controlador Gaymer")
         # Mínimo coerente com o conteúdo (issue #66): abaixo disso as
         # páginas entram em scroll em vez de sobrepor widgets.
         self.setMinimumSize(720, 520)
