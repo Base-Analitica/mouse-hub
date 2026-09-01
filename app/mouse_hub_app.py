@@ -1704,8 +1704,8 @@ class AutoClickerPage(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(12)
         self.btn_buttons = []
-        for i, (name, icon) in enumerate([(  "Esquerdo", ""), ("Meio", ""), ("Direito", "")]):
-            btn = QPushButton(f"{icon}  {name}")
+        for i, name in enumerate(["Esquerdo", "Meio", "Direito"]):
+            btn = QPushButton(name)
             btn.setFixedHeight(44)
             btn.setCursor(QCursor(Qt.PointingHandCursor))
             active = (i + 1) == self.ac.button
