@@ -836,7 +836,7 @@ class DashboardPage(QWidget):
         # issue #7: o texto real vem de _sync_subtitle() (capacidades do
         # core); nenhum estado é afirmado antes da avaliação.
         self.subtitle = QLabel(f"Mouse: {MOUSE_NAME}  •  Avaliando capacidades…")
-        self.subtitle.setStyleSheet(f"font-size: 11px; color: {COLORS['text_muted']}; background: transparent;")
+        self.subtitle.setStyleSheet(f"font-size: 11px; color: {COLORS['text_secondary']}; background: transparent;")
         layout.addWidget(self.subtitle)
 
         # Stats em GRID 2×2 (issue #66): cabe em qualquer largura sem
@@ -987,7 +987,7 @@ class DashboardPage(QWidget):
             color = COLORS["warning"]
         else:
             text = f"{MOUSE_NAME}  •  Sem G403 detectado no sistema"
-            color = COLORS["text_muted"]
+            color = COLORS["text_secondary"]
         self.subtitle.setText(text)
         self.subtitle.setStyleSheet(
             f"font-size: 11px; color: {color}; background: transparent;"
@@ -1099,7 +1099,7 @@ class DPIPage(QWidget):
         # Indicador de capacidade HID/DPI (issue #3)
         self.hid_hint = QLabel("")
         self.hid_hint.setWordWrap(True)
-        self.hid_hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px; background: transparent;")
+        self.hid_hint.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px; background: transparent;")
         layout.addWidget(self.hid_hint)
         if self.state is not None:
             initial = self.state.applied_dpi
@@ -1409,7 +1409,7 @@ class SensitivityPage(QWidget):
         # issue #7: a capacidade real manda — sem libinput/xinput, o
         # controle fica desabilitado COM a causa, nunca mascarado.
         self.caps_hint = QLabel("")
-        self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["text_muted"])
+        self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["text_secondary"])
         self.caps_hint.setWordWrap(True)
         layout.addWidget(self.caps_hint)
         self._sync_sensitivity_caps()
@@ -1451,7 +1451,7 @@ class SensitivityPage(QWidget):
         self.polling_hint.setWordWrap(True)
         self.polling_hint.setStyleSheet(
             "color: %s; font-size: 12px; background: transparent;"
-            % COLORS["text_muted"]
+            % COLORS["text_secondary"]
         )
         layout.addWidget(self.polling_hint)
 
@@ -1646,7 +1646,7 @@ class AutoClickerPage(QWidget):
         self.status_title = QLabel("Auto-Clicker Desligado")
         self.status_title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {COLORS['text_primary']}; background: transparent;")
         self.status_sub = QLabel("Clique em iniciar para começar")
-        self.status_sub.setStyleSheet(f"font-size: 12px; color: {COLORS['text_muted']}; background: transparent;")
+        self.status_sub.setStyleSheet(f"font-size: 12px; color: {COLORS['text_secondary']}; background: transparent;")
         info.addWidget(self.status_title)
         info.addWidget(self.status_sub)
         sl.addLayout(info)
@@ -1692,7 +1692,7 @@ class AutoClickerPage(QWidget):
         cps_row.addWidget(self.cps_display)
 
         cps_unit = QLabel("CPS")
-        cps_unit.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 14px; font-weight: 600; background: transparent;")
+        cps_unit.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 14px; font-weight: 600; background: transparent;")
         cps_row.addWidget(cps_unit)
         layout.addLayout(cps_row)
 
@@ -1730,7 +1730,7 @@ class AutoClickerPage(QWidget):
 
         # Start / Stop
         self.caps_hint = QLabel("")
-        self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["text_muted"])
+        self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["text_secondary"])
         self.caps_hint.setWordWrap(True)
 
         self.toggle_btn = AccentButton("Iniciar Auto-Clicker")
@@ -2001,7 +2001,7 @@ class MacrosPage(QWidget):
 
         # issue #7: disponibilidade real da captura, com a causa.
         self.caps_hint = QLabel("")
-        self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["text_muted"])
+        self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["text_secondary"])
         self.caps_hint.setWordWrap(True)
         rl.addWidget(self.caps_hint)
 
@@ -2010,7 +2010,7 @@ class MacrosPage(QWidget):
         # apenas leitura de estado em memória do serviço.
         self.play_status = QLabel("")
         self.play_status.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 12px; "
+            f"color: {COLORS['text_secondary']}; font-size: 12px; "
             "font-weight: 600; background: transparent;"
         )
         rl.addWidget(self.play_status)
@@ -2228,7 +2228,7 @@ class MacrosPage(QWidget):
                 "Nenhuma macro gravada ainda.\n"
                 "Use   Gravar Macro acima para criar a primeira.")
             empty.setAlignment(Qt.AlignCenter)
-            empty.setStyleSheet(f"color: {COLORS['text_muted']}; padding: 30px; font-size: 13px; background: transparent;")
+            empty.setStyleSheet(f"color: {COLORS['text_secondary']}; padding: 30px; font-size: 13px; background: transparent;")
             self.macro_list_layout.addWidget(empty)
             return
 
@@ -2374,7 +2374,7 @@ class ProfilesPage(QWidget):
         self.config_hint = QLabel("")
         self.config_hint.setWordWrap(True)
         self.config_hint.setStyleSheet(
-            "color: %s; font-size: 12px; background: transparent;" % COLORS["text_muted"]
+            "color: %s; font-size: 12px; background: transparent;" % COLORS["text_secondary"]
         )
         layout.addWidget(self.config_hint)
 
@@ -2382,7 +2382,7 @@ class ProfilesPage(QWidget):
         self.apply_hint = QLabel("")
         self.apply_hint.setWordWrap(True)
         self.apply_hint.setStyleSheet(
-            "color: %s; font-size: 12px; background: transparent;" % COLORS["text_muted"]
+            "color: %s; font-size: 12px; background: transparent;" % COLORS["text_secondary"]
         )
         layout.addWidget(self.apply_hint)
 
@@ -2819,7 +2819,7 @@ class SettingsPage(QWidget):
             self._permission_status.setText(
                 "Estado de hardware não disponível nesta página.")
             self._permission_status.setStyleSheet(
-                f"font-size: 12px; color: {COLORS['text_muted']}; background: transparent;")
+                f"font-size: 12px; color: {COLORS['text_secondary']}; background: transparent;")
             self._permission_btn.setEnabled(False)
             return
         try:
