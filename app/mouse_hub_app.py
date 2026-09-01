@@ -2779,12 +2779,11 @@ class SettingsPage(QWidget):
 
         safety_text = QLabel(
             " O auto-clicker só funciona quando Minecraft/Lunar Client está em foco.\n"
-            " O detector lê o nome da janela ativa direto via X11, "
-            "com cache de 500 ms (TTL) entre consultas.\n"
-            " Nenhum clique é feito fora do jogo."
+            " O app verifica a janela ativa antes de clicar.\n"
+            " Fora do jogo, nenhum clique é realizado."
         )
         safety_text.setWordWrap(True)
-        safety_text.setStyleSheet(f"color: {COLORS['mc_green']}; font-size: 12px; background: transparent;")
+        safety_text.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px; background: transparent;")
         ac_layout.addWidget(safety_text)
 
         layout.addWidget(ac_group)
