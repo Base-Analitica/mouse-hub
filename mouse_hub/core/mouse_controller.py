@@ -770,6 +770,9 @@ class MouseController:
             # suportadas e ACK, implementar seria inventar contrato —
             # proibido pela issue #6. A capacidade permanece
             # indisponível e a UI deve refletir isso sem simular valores.
+            #
+            # A causa técnica permanece no reason da capability para
+            # diagnóstico; a camada de apresentação decide como traduzi-la.
             polling_rate_available=lambda: (
                 False,
                 "polling rate do G403 não é alterável/confirmável pelo "

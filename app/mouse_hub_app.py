@@ -97,6 +97,10 @@ from PyQt5.QtGui import (
 # ═══════════════════════════════════════════════════════════════════════════════
 
 COLORS = dict(COLORS)  # alias local (fonte única: app/ui/theme.py)
+POLLING_UNAVAILABLE_COPY = (
+    "Polling Rate não pode ser configurado neste dispositivo nesta "
+    "versão do Mouse Hub."
+)
 
 STYLESHEET = build_app_stylesheet()
 
@@ -1483,24 +1487,24 @@ class SensitivityPage(QWidget):
 
     def _sync_polling(self):
         """Reflete o estado REAL da capacidade polling_rate_available
-        (issue #6): indisponível → razão precisa exibida, botões
-        desabilitados, nenhuma frequência ativa. Chamado no build e no
-        showEvent (refresh explícito, sem polling periódico)."""
+        (issue #6): indisponível → mensagem orientada ao usuário
+        (issue #101 — sem stack, feature ID ou referência interna; a
+        causa técnica permanece no core), botões desabilitados, nenhuma
+        frequência ativa. Chamado no build e no showEvent (refresh
+        explícito, sem polling periódico)."""
         if self.state is None:
             self.polling_hint.setText(
-                "● Polling rate indisponível: o stack HID++ atual não "
-                "implementa a feature Report Rate do G403."
+                f"● {POLLING_UNAVAILABLE_COPY}"
             )
             self.polling_hint.setStyleSheet(
                 "color: %s; font-size: 12px; background: transparent;"
-                % COLORS["danger"]
+                % COLORS["warning"]
             )
             for btn in self.polling_buttons:
                 btn.setEnabled(False)
             return
         caps = self.state.capability_state()
         available = caps.is_available("polling_rate_available")
-        reason = caps.reason_for("polling_rate_available")
         if available:
             self.polling_hint.setText("● Polling rate disponível")
             self.polling_hint.setStyleSheet(
@@ -1510,16 +1514,12 @@ class SensitivityPage(QWidget):
             for btn in self.polling_buttons:
                 btn.setEnabled(True)
         else:
-            summary = (
-                reason if reason else
-                "capacidade não disponível no ambiente atual"
-            )
-            self.polling_hint.setText(
-                "● Polling rate indisponível: %s" % summary
-            )
+            # Causa técnica permanece no core; a copy operacional
+            # pertence à camada de apresentação (issue #101).
+            self.polling_hint.setText(f"● {POLLING_UNAVAILABLE_COPY}")
             self.polling_hint.setStyleSheet(
                 "color: %s; font-size: 12px; background: transparent;"
-                % COLORS["danger"]
+                % COLORS["warning"]
             )
             for btn in self.polling_buttons:
                 btn.setEnabled(False)
