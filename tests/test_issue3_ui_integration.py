@@ -38,6 +38,7 @@ from app.mouse_hub_app import (
     MouseController,
     MouseCoreState,
     SensitivityPage,
+    UNKNOWN_STATE_TEXT,
     UNKNOWN_VALUE_TEXT,
 )
 
@@ -93,7 +94,7 @@ class TestUnknownNeverDefault:
     def test_dpi_page_renders_unknown(self, qapp):
         state, core, hid, si = _make_state()
         page = DPIPage(MouseController(), state=state)
-        assert page.dpi_value.text() == UNKNOWN_VALUE_TEXT
+        assert page.dpi_value.text() == UNKNOWN_STATE_TEXT
         assert page.dpi_input.text() == UNKNOWN_VALUE_TEXT
         # Slider fica em posição NEUTRA (controle de entrada — não
         # alega valor aplicado).
@@ -102,7 +103,7 @@ class TestUnknownNeverDefault:
     def test_sensitivity_page_renders_unknown(self, qapp):
         state, core, hid, si = _make_state()
         page = SensitivityPage(MouseController(), state=state)
-        assert page.sens_value.text() == UNKNOWN_VALUE_TEXT
+        assert page.sens_value.text() == UNKNOWN_STATE_TEXT
         assert page.slider.value() == SENSITIVITY_DEFAULT
 
     def test_dashboard_renders_unknown(self, qapp):
@@ -132,8 +133,8 @@ class TestUnknownNeverDefault:
         )
         page.timer.stop()
         page._update()
-        assert page.dpi_card.value_label.text() == UNKNOWN_VALUE_TEXT
-        assert page.sens_card.value_label.text() == UNKNOWN_VALUE_TEXT
+        assert page.dpi_card.value_label.text() == UNKNOWN_STATE_TEXT
+        assert page.sens_card.value_label.text() == UNKNOWN_STATE_TEXT
 
 
 # ---------------------------------------------------------------------------
@@ -511,7 +512,7 @@ class TestDpiSetFailureInvalidatesCapability:
         assert "Sem acesso" not in page.hid_hint.text() or "DPI" in page.hid_hint.text()
         # O valor solicitado NÃO é apresentado como aplicado.
         assert page.dpi_value.text() != "1200"
-        assert page.dpi_value.text() == UNKNOWN_VALUE_TEXT
+        assert page.dpi_value.text() == UNKNOWN_STATE_TEXT
 
     def test_protocol_error_on_set_kills_hardware_dpi_available(self, qapp, monkeypatch):
         state, core, hid, page = self._healthy(qapp, monkeypatch)
@@ -524,7 +525,7 @@ class TestDpiSetFailureInvalidatesCapability:
         assert not caps.is_available("hardware_dpi_available")
         assert "protocolo" in caps.reason_for("hardware_dpi_available").lower() or             "rejeitado" in caps.reason_for("hardware_dpi_available").lower()
         assert caps.is_available("hid_available")
-        assert page.dpi_value.text() == UNKNOWN_VALUE_TEXT
+        assert page.dpi_value.text() == UNKNOWN_STATE_TEXT
 
     def test_reprobe_recovers_hardware_dpi_available(self, qapp, monkeypatch):
         state, core, hid, page = self._healthy(qapp, monkeypatch)

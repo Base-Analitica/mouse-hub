@@ -171,6 +171,7 @@ class MouseController:
 # confirmou o valor). Unknown NUNCA vira default na UI (revisão PR #21):
 # requested != applied != persisted; sem confirmação, não há valor a exibir.
 UNKNOWN_VALUE_TEXT = "—"
+UNKNOWN_STATE_TEXT = "Aguardando leitura"
 _PERMISSION_BTN_LABEL = " Conceder acesso ao hardware  (senha de administrador)"
 
 
@@ -582,12 +583,7 @@ class StatCard(QFrame):
         layout.addLayout(top)
 
         self.value_label = QLabel(value)
-        self.value_label.setStyleSheet(f"""
-            color: {color};
-            font-size: 24px;
-            font-weight: 900;
-            background: transparent;
-        """)
+        self._set_value_style(color)
         layout.addWidget(self.value_label)
 
         title_label = QLabel(title)
@@ -600,8 +596,18 @@ class StatCard(QFrame):
         """)
         layout.addWidget(title_label)
 
-    def set_value(self, val):
+    def _set_value_style(self, color):
+        self.value_label.setStyleSheet(f"""
+            color: {color};
+            font-size: 24px;
+            font-weight: 900;
+            background: transparent;
+        """)
+
+    def set_value(self, val, color=None):
         self.value_label.setText(str(val))
+        if color is not None:
+            self._set_value_style(color)
 
 
 class SidebarButton(QPushButton):
@@ -932,10 +938,12 @@ class DashboardPage(QWidget):
             dpi = self.state.applied_dpi
             sens = self.state.applied_sensitivity
             self.dpi_card.set_value(
-                UNKNOWN_VALUE_TEXT if dpi is None else str(dpi)
+                UNKNOWN_STATE_TEXT if dpi is None else str(dpi),
+                COLORS["text_secondary"] if dpi is None else COLORS["accent_light"],
             )
             self.sens_card.set_value(
-                UNKNOWN_VALUE_TEXT if sens is None else f"{sens}%"
+                UNKNOWN_STATE_TEXT if sens is None else f"{sens}%",
+                COLORS["text_secondary"] if sens is None else COLORS["success"],
             )
         else:
             self.dpi_card.set_value(str(self.mc.current_dpi))
@@ -1106,7 +1114,8 @@ class DPIPage(QWidget):
             if initial is None:
                 # Desconhecido: exibe UNKNOWN; o slider fica em posição
                 # NEUTRA (controle de entrada — não alega estado aplicado).
-                self.dpi_value.setText(UNKNOWN_VALUE_TEXT)
+                self.dpi_value.setText(UNKNOWN_STATE_TEXT)
+                self._set_value_style(COLORS["text_secondary"], size=24)
                 self.dpi_state.setText("AGUARDANDO LEITURA DO HARDWARE")
                 self.slider.setValue(DPI_DEFAULT)
             else:
@@ -1231,12 +1240,21 @@ class DPIPage(QWidget):
             self.hid_hint.setText("● Sem acesso HID ao mouse — controles de DPI físico indisponíveis")
             self.hid_hint.setStyleSheet(f"color: {COLORS['danger']}; font-size: 12px; background: transparent;")
 
+    def _set_value_style(self, color, size=44):
+        self.dpi_value.setStyleSheet(f"""
+            color: {color};
+            font-size: {size}px;
+            font-weight: 900;
+            background: transparent;
+        """)
+
     def _on_slider_preview(self, val):
         """PREVIEW apenas (revisão PR #21): atualiza o display com o
         valor em consideração. NENHUM efeito físico aqui — o commit
         acontece em sliderReleased/Aplicar/preset. Arrastar o slider
         nunca gera dezenas de comandos HID++."""
         val = round_to_step(val)
+        self._set_value_style(COLORS["accent_light"])
         self.dpi_value.setText(str(val))
         self.dpi_state.setText("DOTS PER INCH")
         self.dpi_input.setText(str(val))
@@ -1280,7 +1298,8 @@ class DPIPage(QWidget):
                 self.dpi_input.setText(str(confirmed))
                 self.slider.setValue(confirmed)
             else:
-                self.dpi_value.setText(UNKNOWN_VALUE_TEXT)
+                self.dpi_value.setText(UNKNOWN_STATE_TEXT)
+                self._set_value_style(COLORS["text_secondary"], size=24)
                 self.dpi_state.setText("AGUARDANDO LEITURA DO HARDWARE")
         self._sync_hint()
 
@@ -1296,6 +1315,7 @@ class DPIPage(QWidget):
             self._render_result(result, val)
         else:
             self.mc.set_dpi(val)
+            self._set_value_style(COLORS["accent_light"])
             self.dpi_value.setText(str(val))
             self.dpi_state.setText("DOTS PER INCH")
 
@@ -1306,6 +1326,7 @@ class DPIPage(QWidget):
             self._render_result(result, dpi)
         else:
             self.mc.set_dpi(dpi)
+            self._set_value_style(COLORS["accent_light"])
             self.dpi_value.setText(str(dpi))
             self.dpi_state.setText("DOTS PER INCH")
 
@@ -1324,12 +1345,14 @@ class DPIPage(QWidget):
             return
         confirmed = self.state.applied_dpi
         if confirmed is not None:
+            self._set_value_style(COLORS["accent_light"])
             self.dpi_value.setText(str(confirmed))
             self.dpi_state.setText("DOTS PER INCH")
             self.dpi_input.setText(str(confirmed))
             self.slider.setValue(confirmed)
         else:
-            self.dpi_value.setText(UNKNOWN_VALUE_TEXT)
+            self.dpi_value.setText(UNKNOWN_STATE_TEXT)
+            self._set_value_style(COLORS["text_secondary"], size=24)
             self.dpi_state.setText("AGUARDANDO LEITURA DO HARDWARE")
 
 
@@ -1375,7 +1398,7 @@ class SensitivityPage(QWidget):
             if initial is not None:
                 self.mc.current_sensitivity = initial
         self.sens_value = QLabel(
-            f"{initial}%" if initial is not None else UNKNOWN_VALUE_TEXT
+            f"{initial}%" if initial is not None else UNKNOWN_STATE_TEXT
         )
         self.sens_value.setAlignment(Qt.AlignCenter)
         self.sens_value.setStyleSheet(f"""
@@ -1384,6 +1407,8 @@ class SensitivityPage(QWidget):
             font-weight: 900;
             background: transparent;
         """)
+        if initial is None and self.state is not None:
+            self._set_value_style(COLORS["text_secondary"], size=24)
         dl.addWidget(self.sens_value)
 
         self.sens_state = QLabel("VELOCIDADE DO SISTEMA (libinput)")
@@ -1529,10 +1554,19 @@ class SensitivityPage(QWidget):
         self.polling_controls.setEnabled(False)
         self.polling_controls.setVisible(False)
 
+    def _set_value_style(self, color, size=44):
+        self.sens_value.setStyleSheet(f"""
+            color: {color};
+            font-size: {size}px;
+            font-weight: 900;
+            background: transparent;
+        """)
+
     def _on_slider_preview(self, val):
         """PREVIEW apenas: altera somente o display. O efeito no
         ponteiro (libinput) acontece no commit (sliderReleased) — um
         gesto gera no máximo uma operação de sensibilidade."""
+        self._set_value_style(COLORS["success"])
         self.sens_value.setText(f"{val}%")
         self.sens_state.setText("VELOCIDADE DO SISTEMA (libinput)")
 
@@ -1563,7 +1597,8 @@ class SensitivityPage(QWidget):
                 self.sens_state.setText("VELOCIDADE DO SISTEMA (libinput)")
                 self.slider.setValue(confirmed)
             else:
-                self.sens_value.setText(UNKNOWN_VALUE_TEXT)
+                self.sens_value.setText(UNKNOWN_STATE_TEXT)
+                self._set_value_style(COLORS["text_secondary"], size=24)
                 self.sens_state.setText("aguardando leitura do hardware…")
 
     def showEvent(self, event):
@@ -1574,11 +1609,13 @@ class SensitivityPage(QWidget):
             self.state.refresh()
             confirmed = self.state.applied_sensitivity
             if confirmed is not None:
+                self._set_value_style(COLORS["success"])
                 self.sens_value.setText(f"{confirmed}%")
                 self.sens_state.setText("VELOCIDADE DO SISTEMA (libinput)")
                 self.slider.setValue(confirmed)
             else:
-                self.sens_value.setText(UNKNOWN_VALUE_TEXT)
+                self.sens_value.setText(UNKNOWN_STATE_TEXT)
+                self._set_value_style(COLORS["text_secondary"], size=24)
                 self.sens_state.setText("aguardando leitura do hardware…")
         self._sync_sensitivity_caps()
         self._sync_polling()
