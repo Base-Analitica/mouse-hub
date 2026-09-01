@@ -2227,8 +2227,8 @@ class MacrosPage(QWidget):
             empty = QLabel(
                 "Nenhuma macro gravada ainda.\n"
                 "Use   Gravar Macro acima para criar a primeira.")
-            empty.setAlignment(Qt.AlignCenter)
-            empty.setStyleSheet(f"color: {COLORS['text_muted']}; padding: 30px; font-size: 13px; background: transparent;")
+            empty.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            empty.setStyleSheet(f"color: {COLORS['text_muted']}; padding: 12px; font-size: 13px; background: transparent;")
             self.macro_list_layout.addWidget(empty)
             return
 
