@@ -1638,10 +1638,6 @@ class AutoClickerPage(QWidget):
         """)
         sl = QHBoxLayout(self.status_frame)
 
-        self.status_icon = QLabel("")
-        self.status_icon.setStyleSheet("font-size: 44px; background: transparent;")
-        sl.addWidget(self.status_icon)
-
         info = QVBoxLayout()
         self.status_title = QLabel("Auto-Clicker Desligado")
         self.status_title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {COLORS['text_primary']}; background: transparent;")
@@ -1819,7 +1815,6 @@ class AutoClickerPage(QWidget):
             """)
             self.status_title.setText("Auto-Clicker Desligado")
             self.status_sub.setText("Clique em iniciar para começar")
-            self.status_icon.setText("")
             self.status_frame.setObjectName("clickerStatus")
             self.status_frame            .setStyleSheet(f"""
                 QFrame#clickerStatus {{
@@ -1850,7 +1845,6 @@ class AutoClickerPage(QWidget):
                 }}
             """)
             self.status_title.setText("Auto-Clicker Ativo!")
-            self.status_icon.setText("")
             self.status_frame.setObjectName("clickerStatus")
             self.status_frame            .setStyleSheet(f"""
                 QFrame#clickerStatus {{
@@ -1896,23 +1890,19 @@ class AutoClickerPage(QWidget):
                 self.ac.button, "?")
             self.status_title.setText("Auto-Clicker Ativo!")
             self.status_sub.setText(f"{self.ac.cps} CPS — Botão {btn_name}")
-            self.status_icon.setText("")
             self.toggle_btn.setText("Parar Auto-Clicker")
         elif state.value == "blocked_by_focus":
             self.status_title.setText("Aguardando jogo em foco...")
             self.status_sub.setText(
                 "Ligado, mas só clica com Minecraft/Lunar Client ativo")
-            self.status_icon.setText("")
             self.toggle_btn.setText("Parar Auto-Clicker")
         elif state.value == "failed":
             self.status_title.setText("Auto-Clicker com erro")
             self.status_sub.setText(f"Falha: {self.ac.error or 'desconhecida'}")
-            self.status_icon.setText("⚠")
             self.toggle_btn.setText("Iniciar Auto-Clicker")
         else:
             self.status_title.setText("Auto-Clicker Desligado")
             self.status_sub.setText("Clique em iniciar para começar")
-            self.status_icon.setText("")
             self.toggle_btn.setText("Iniciar Auto-Clicker")
 
 
