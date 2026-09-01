@@ -1961,7 +1961,13 @@ class MacrosPage(QWidget):
         """)
         rl = QVBoxLayout(rec_frame)
 
-        rl.addWidget(QLabel("Nome da macro:"))
+        name_label = QLabel("Nome da macro:")
+        name_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; "
+            f"font-size: {TYPE_SCALE['body']}px; "
+            "font-weight: 600; background: transparent; padding: 0;"
+        )
+        rl.addWidget(name_label)
         self.name_input = QLineEdit("minha_macro")
         self.name_input.setMaxLength(32)
         self.name_input.setStyleSheet(f"padding: 10px; font-size: 14px;")
