@@ -1456,7 +1456,10 @@ class SensitivityPage(QWidget):
         layout.addWidget(self.polling_hint)
 
         self.polling_buttons = []
-        pr_row = QHBoxLayout()
+        self.polling_controls = QWidget()
+        self.polling_controls.setObjectName("pollingControls")
+        pr_row = QHBoxLayout(self.polling_controls)
+        pr_row.setContentsMargins(0, 0, 0, 0)
         pr_row.setSpacing(12)
         for hz in ["125 Hz", "250 Hz", "500 Hz", "1000 Hz"]:
             btn = QPushButton(hz)
@@ -1478,7 +1481,7 @@ class SensitivityPage(QWidget):
             pr_row.addWidget(btn)
             self.polling_buttons.append(btn)
         pr_row.addStretch()
-        layout.addLayout(pr_row)
+        layout.addWidget(self.polling_controls)
 
         layout.addStretch()
 
@@ -1502,6 +1505,8 @@ class SensitivityPage(QWidget):
             )
             for btn in self.polling_buttons:
                 btn.setEnabled(False)
+            self.polling_controls.setEnabled(False)
+            self.polling_controls.setVisible(False)
             return
         caps = self.state.capability_state()
         available = caps.is_available("polling_rate_available")
@@ -1513,6 +1518,8 @@ class SensitivityPage(QWidget):
             )
             for btn in self.polling_buttons:
                 btn.setEnabled(True)
+            self.polling_controls.setEnabled(True)
+            self.polling_controls.setVisible(True)
         else:
             # Causa técnica permanece no core; a copy operacional
             # pertence à camada de apresentação (issue #101).
@@ -1523,6 +1530,8 @@ class SensitivityPage(QWidget):
             )
             for btn in self.polling_buttons:
                 btn.setEnabled(False)
+            self.polling_controls.setEnabled(False)
+            self.polling_controls.setVisible(False)
 
     def _on_slider_preview(self, val):
         """PREVIEW apenas: altera somente o display. O efeito no
