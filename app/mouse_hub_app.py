@@ -173,6 +173,12 @@ class MouseController:
 UNKNOWN_VALUE_TEXT = "—"
 _PERMISSION_BTN_LABEL = " Conceder acesso ao hardware  (senha de administrador)"
 
+# Issue #102: a página de Sensibilidade descreve ESTADO DO SISTEMA —
+# nunca leitura do hardware do mouse. Os textos do hero são separados
+# do unknown de DPI para os dois domínios não se fundirem na UI.
+_SENS_STATE_TEXT = "VELOCIDADE DO PONTEIRO NO SISTEMA"
+_SENS_UNKNOWN_TEXT = "valor atual do sistema indisponível"
+
 
 # Issue #88: ação destrutiva não pode ser um botão vazio — rótulo
 # textual curto (o subset de ícones não tem lixeira; ícone ausente
@@ -1386,7 +1392,9 @@ class SensitivityPage(QWidget):
         """)
         dl.addWidget(self.sens_value)
 
-        self.sens_state = QLabel("VELOCIDADE DO SISTEMA (libinput)")
+        self.sens_state = QLabel(
+            _SENS_STATE_TEXT if initial is not None else _SENS_UNKNOWN_TEXT
+        )
         self.sens_state.setAlignment(Qt.AlignCenter)
         self.sens_state.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-weight: 700; background: transparent;")
         dl.addWidget(self.sens_state)
@@ -1534,7 +1542,7 @@ class SensitivityPage(QWidget):
         ponteiro (libinput) acontece no commit (sliderReleased) — um
         gesto gera no máximo uma operação de sensibilidade."""
         self.sens_value.setText(f"{val}%")
-        self.sens_state.setText("VELOCIDADE DO SISTEMA (libinput)")
+        self.sens_state.setText(_SENS_STATE_TEXT)
 
     def _commit_slider(self):
         """sliderReleased: uma operação de sensibilidade por gesto.
@@ -1554,17 +1562,17 @@ class SensitivityPage(QWidget):
         applied = result.details.get("applied")
         if ok and applied is not None:
             self.sens_value.setText(f"{applied}%")
-            self.sens_state.setText("VELOCIDADE DO SISTEMA (libinput)")
+            self.sens_state.setText(_SENS_STATE_TEXT)
             self.slider.setValue(applied)
         else:
             confirmed = self.state.applied_sensitivity
             if confirmed is not None:
                 self.sens_value.setText(f"{confirmed}%")
-                self.sens_state.setText("VELOCIDADE DO SISTEMA (libinput)")
+                self.sens_state.setText(_SENS_STATE_TEXT)
                 self.slider.setValue(confirmed)
             else:
                 self.sens_value.setText(UNKNOWN_VALUE_TEXT)
-                self.sens_state.setText("aguardando leitura do hardware…")
+                self.sens_state.setText(_SENS_UNKNOWN_TEXT)
 
     def showEvent(self, event):
         """Refresh explícito ao abrir a página (revisão PR #21 — sem
@@ -1575,11 +1583,11 @@ class SensitivityPage(QWidget):
             confirmed = self.state.applied_sensitivity
             if confirmed is not None:
                 self.sens_value.setText(f"{confirmed}%")
-                self.sens_state.setText("VELOCIDADE DO SISTEMA (libinput)")
+                self.sens_state.setText(_SENS_STATE_TEXT)
                 self.slider.setValue(confirmed)
             else:
                 self.sens_value.setText(UNKNOWN_VALUE_TEXT)
-                self.sens_state.setText("aguardando leitura do hardware…")
+                self.sens_state.setText(_SENS_UNKNOWN_TEXT)
         self._sync_sensitivity_caps()
         self._sync_polling()
 
@@ -1592,7 +1600,7 @@ class SensitivityPage(QWidget):
         reason = caps.reason_for("sensitivity_available") or "capacidade não disponível no ambiente atual"
         self.slider.setEnabled(available)
         if available:
-            self.caps_hint.setText("● Sensibilidade do sistema disponível (libinput)")
+            self.caps_hint.setText("● Sensibilidade do sistema disponível")
             self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["mc_green"])
         else:
             self.caps_hint.setText(f"● Sensibilidade indisponível: {reason}")

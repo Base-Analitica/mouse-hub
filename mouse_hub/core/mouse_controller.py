@@ -143,6 +143,13 @@ class MouseController:
         # Persister do DPI: quem chama injeta (tests: NeverDpiPersister;
         # produção: DpiConfigPersister via make_linux_controller).
         self._dpi_persister = dpi_persister or NeverDpiPersister()
+        # Sensibilidade: leitura REAL do estado atual do sistema no
+        # startup (issue #102). Sensibilidade do sistema é propriedade
+        # do ponteiro, não do mouse: o valor inicial NÃO nasce desconhecido
+        # nem depende de probe de hardware — quem responde é o
+        # SystemInput (libinput/xinput). Falha de leitura permanece
+        # None (desconhecido honesto), nunca default conveniente.
+        self._applied_sensitivity = self.get_sensitivity()
 
     # ── Descoberta ────────────────────────────────────────────────
 

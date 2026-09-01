@@ -245,9 +245,11 @@ class TestProfileApplyServices:
 
     def test_partial_state_dpi_ok_sens_fail(self, qapp, tmp_path, monkeypatch):
         """Estado parcial explicito: DPI confirmado, sensibilidade
-        falhou."""
+        falhou. verify_after_write=False: a leitura pós-falha e
+        honestamente desconhecida (sem valor confirmado)."""
         si = _CountingInput()
         si.set_succeeds = False  # set_accel_speed falha
+        si.verify_after_write = False  # leitura pós-falha: None (honesto)
         state, core, hid, si2, store, page = self._ready(
             qapp, tmp_path, monkeypatch, si=si
         )

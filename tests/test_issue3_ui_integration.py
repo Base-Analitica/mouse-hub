@@ -26,7 +26,7 @@ import pytest
 from PyQt5.QtWidgets import QApplication
 
 from mouse_hub.core.config import ConfigPaths
-from mouse_hub.core.constants import DPI_DEFAULT, SENSITIVITY_DEFAULT
+from mouse_hub.core.constants import DPI_DEFAULT
 from mouse_hub.core.dpi_persistence import NeverDpiPersister
 from mouse_hub.core.mouse_controller import MouseController as CoreMouseController
 from mouse_hub.core.operation import OperationStatus
@@ -86,9 +86,11 @@ class TestUnknownNeverDefault:
     nunca 800 DPI / 50% sem confirmação."""
 
     def test_applied_values_are_none_before_confirmation(self):
+        """DPI físico é unknown até ACK; a sensibilidade do SISTEMA é
+        lida no startup (issue #102) — no fake default, 50%."""
         state, core, hid, si = _make_state()
         assert state.applied_dpi is None
-        assert state.applied_sensitivity is None
+        assert state.applied_sensitivity == 50
 
     def test_dpi_page_renders_unknown(self, qapp):
         state, core, hid, si = _make_state()
@@ -99,15 +101,17 @@ class TestUnknownNeverDefault:
         # alega valor aplicado).
         assert page.slider.value() == DPI_DEFAULT
 
-    def test_sensitivity_page_renders_unknown(self, qapp):
+    def test_sensitivity_page_renders_system_value(self, qapp):
+        """Issue #102: o hero exibe o valor lido do SISTEMA (fake default
+        50%), não um unknown de leitura de hardware."""
         state, core, hid, si = _make_state()
         page = SensitivityPage(MouseController(), state=state)
-        assert page.sens_value.text() == UNKNOWN_VALUE_TEXT
-        assert page.slider.value() == SENSITIVITY_DEFAULT
+        assert page.sens_value.text() == "50%"
+        assert page.slider.value() == 50
 
     def test_dashboard_renders_unknown(self, qapp):
-        """Dashboard exibe UNKNOWN nos cards enquanto não há valor
-        confirmado pelo hardware."""
+        """Dashboard: DPI card UNKNOWN (sem ACK); card de sensibilidade
+        exibe o valor lido do sistema (issue #102)."""
         from app.mouse_hub_app import DashboardPage
 
         class _FakeWindowService:
@@ -133,7 +137,8 @@ class TestUnknownNeverDefault:
         page.timer.stop()
         page._update()
         assert page.dpi_card.value_label.text() == UNKNOWN_VALUE_TEXT
-        assert page.sens_card.value_label.text() == UNKNOWN_VALUE_TEXT
+        # Sensibilidade é estado do sistema (lida no startup, issue #102).
+        assert page.sens_card.value_label.text() == "50%"
 
 
 # ---------------------------------------------------------------------------
