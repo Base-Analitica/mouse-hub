@@ -2353,6 +2353,7 @@ class ProfilesPage(QWidget):
         self.store = store if store is not None else ProfileStore(ConfigPaths.xdg())
         self.profiles = []
         self.profile_cards = {}  # name -> dict de widgets do card
+        self._editing_profile_name = None
         self._build()
 
     def _build(self):
@@ -2393,9 +2394,11 @@ class ProfilesPage(QWidget):
         self._grid_cols = 3
 
         # ── Criacao/edicao de perfil customizado ────────────────────
-        form_label = QLabel("Criar / Editar Perfil")
-        form_label.setStyleSheet("font-size: 16px; font-weight: 700; background: transparent;")
-        layout.addWidget(form_label)
+        self.form_label = QLabel("Criar Perfil")
+        self.form_label.setStyleSheet(
+            "font-size: 16px; font-weight: 700; background: transparent;"
+        )
+        layout.addWidget(self.form_label)
 
         # Grid (issue #66): nome em linha própria, controles e botões
         # em duas colunas — nunca soma 668px de largura mínima.
@@ -2430,6 +2433,7 @@ class ProfilesPage(QWidget):
         form.addWidget(self.save_btn, 2, 0)
         form.addWidget(self.clear_btn, 2, 1)
         layout.addLayout(form)
+        self._set_form_mode()
 
         layout.addStretch()
 
@@ -2655,7 +2659,11 @@ class ProfilesPage(QWidget):
         """Cria/atualiza um perfil atraves do ProfileStore (fonte
         persistente real). Falha (incluindo config corrompida ou
         ilegivel) nunca vira sucesso e nunca sobrescreve o arquivo."""
-        name = self.name_input.text().strip()
+        name = (
+            self._editing_profile_name
+            if self._editing_profile_name is not None
+            else self.name_input.text().strip()
+        )
         if not name:
             self.apply_hint.setText("⚠ Informe um nome para o perfil.")
             self.apply_hint.setStyleSheet(
@@ -2682,11 +2690,24 @@ class ProfilesPage(QWidget):
 
     def _start_edit(self, profile):
         """Carrega os valores do perfil no formulario de edicao."""
+        self._set_form_mode(profile.name)
         self.name_input.setText(profile.name)
         self.dpi_input.setValue(profile.dpi)
         self.sens_input.setValue(profile.sensitivity)
 
+    def _set_form_mode(self, profile_name=None):
+        """Atualiza o estado visual de criacao ou edicao do formulario."""
+        self._editing_profile_name = profile_name
+        self.name_input.setReadOnly(profile_name is not None)
+        if profile_name:
+            self.form_label.setText("Editar %s" % profile_name)
+            self.clear_btn.show()
+        else:
+            self.form_label.setText("Criar Perfil")
+            self.clear_btn.hide()
+
     def _clear_form(self):
+        self._set_form_mode()
         self.name_input.clear()
         self.dpi_input.setValue(DPI_DEFAULT)
         self.sens_input.setValue(SENSITIVITY_DEFAULT)
