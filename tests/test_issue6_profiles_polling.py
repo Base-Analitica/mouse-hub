@@ -125,7 +125,7 @@ class TestProfilesSingleSource:
         paths = ConfigPaths(config_dir, tmp_path / "d")
         store = ProfileStore(paths)
         page = ProfilesPage(MouseController(), store=store)
-        assert "Nao foi possivel ler os perfis" in page.config_hint.text()
+        assert "Não foi possível ler os perfis" in page.config_hint.text()
         # arquivo ainda intacto
         assert config_file.read_text(encoding="utf-8") == "{corrupt json"
         # formulario desabilitado (mutacao bloqueada)
@@ -144,13 +144,13 @@ class TestProfilesSingleSource:
             paths = ConfigPaths(config_dir, tmp_path / "d")
             store = ProfileStore(paths)
             page = ProfilesPage(MouseController(), store=store)
-            assert "Nao foi possivel ler os perfis" in page.config_hint.text()
+            assert "Não foi possível ler os perfis" in page.config_hint.text()
             # tentativa programatica de salvar nao vira sucesso
             page.name_input.setText("x")
             page.dpi_input.setValue(1000)
             page.sens_input.setValue(50)
             page._save_custom()
-            assert "Nao foi possivel salvar" in page.apply_hint.text()
+            assert "Não foi possível salvar" in page.apply_hint.text()
         finally:
             osmod.chmod(str(config_file), 0o644)
 

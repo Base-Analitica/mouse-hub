@@ -2452,8 +2452,8 @@ class ProfilesPage(QWidget):
             profiles = self.store.list_profiles()
         except ConfigError as exc:
             self.config_hint.setText(
-                "● Nao foi possivel ler os perfis: %s "
-                "O arquivo de configuracao NAO foi alterado." % str(exc)
+                "● Não foi possível ler os perfis: %s "
+                "O arquivo de configuração NÃO foi alterado." % str(exc)
             )
             self.config_hint.setStyleSheet(
                 "color: %s; font-size: 12px; background: transparent;" % COLORS["danger"]
@@ -2565,7 +2565,7 @@ class ProfilesPage(QWidget):
             badge = widgets["active_badge"]
             card = widgets["card"]
             if name == active:
-                badge.setText("✔ Ativo")
+                badge.setText("Ativo")
                 badge.setStyleSheet(
                     "color: %s; font-size: 11px; font-weight: 700; background: transparent;"
                     % COLORS["mc_green"]
@@ -2641,7 +2641,7 @@ class ProfilesPage(QWidget):
                     (profile.name, _result_text(dpi_result)))
             color = COLORS["warning"]
         else:
-            text = (" Perfil '%s' NAO aplicado: DPI falhou "
+            text = (" Perfil '%s' NÃO aplicado: DPI falhou "
                     "(%s); sensibilidade falhou (%s)." %
                     (profile.name, _result_text(dpi_result),
                      _result_text(sens_result)))
@@ -2667,13 +2667,13 @@ class ProfilesPage(QWidget):
         )
         if not outcome.success:
             self.apply_hint.setText(
-                " Nao foi possivel salvar o perfil '%s': %s" % (name, outcome.message)
+                " Não foi possível salvar o perfil '%s': %s" % (name, outcome.message)
             )
             self.apply_hint.setStyleSheet(
                 "color: %s; font-size: 12px; background: transparent;" % COLORS["danger"]
             )
             return
-        self.apply_hint.setText("✔ Perfil '%s' salvo na configuracao." % name)
+        self.apply_hint.setText("✔ Perfil '%s' salvo na configuração." % name)
         self.apply_hint.setStyleSheet(
             "color: %s; font-size: 12px; background: transparent;" % COLORS["mc_green"]
         )
