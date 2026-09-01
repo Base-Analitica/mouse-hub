@@ -347,13 +347,15 @@ class TestPollingRateUnavailable:
 
     def test_ui_shows_no_frequency_as_active(self, qapp):
         """A UI nao apresenta nenhuma frequencia como ativa (nenhum
-        botao com estado ativo, todos desabilitados)."""
+        botao com estado ativo, todos desabilitados). Issue #101: a
+        mensagem e a copy de usuario do core, sem jargao interno."""
         state, core, hid, si = _make_state()
         page = SensitivityPage(MouseController(), state=state)
         assert len(page.polling_buttons) == 4
         for btn in page.polling_buttons:
             assert not btn.isEnabled()
-        assert "indispon" in page.polling_hint.text().lower()
+        from app.mouse_hub_app import POLLING_UNAVAILABLE_COPY
+        assert POLLING_UNAVAILABLE_COPY in page.polling_hint.text()
 
     def test_no_1000hz_active_by_default_in_source(self):
         """O codigo-fonte nao define 'active = hz == "1000 Hz"'."""
