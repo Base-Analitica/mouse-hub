@@ -2404,6 +2404,7 @@ class ProfilesPage(QWidget):
         form.setVerticalSpacing(10)
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("Nome do perfil")
+        self.name_input.setAccessibleName("Nome do perfil")
         self.name_input.setMinimumWidth(120)
         self.name_input.setStyleSheet(
             "QLineEdit { background: %s; border: 1px solid %s;"
@@ -2411,11 +2412,13 @@ class ProfilesPage(QWidget):
             % (COLORS["bg_input"], COLORS["border"])
         )
         self.dpi_input = QSpinBox()
+        self.dpi_input.setAccessibleName("DPI")
         self.dpi_input.setRange(DPI_MIN, DPI_MAX)
         self.dpi_input.setSingleStep(DPI_STEP)
         self.dpi_input.setValue(DPI_DEFAULT)
         self.dpi_input.setSuffix(" DPI")
         self.sens_input = QSpinBox()
+        self.sens_input.setAccessibleName("Sensibilidade")
         self.sens_input.setRange(0, 100)
         self.sens_input.setValue(SENSITIVITY_DEFAULT)
         self.sens_input.setSuffix("%")
@@ -2424,11 +2427,30 @@ class ProfilesPage(QWidget):
         self.clear_btn = QPushButton("Cancelar")
         self.clear_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.clear_btn.clicked.connect(self._clear_form)
-        form.addWidget(self.name_input, 0, 0, 1, 2)
-        form.addWidget(self.dpi_input, 1, 0)
-        form.addWidget(self.sens_input, 1, 1)
-        form.addWidget(self.save_btn, 2, 0)
-        form.addWidget(self.clear_btn, 2, 1)
+
+        self.name_label = QLabel("Nome do perfil")
+        self.name_label.setBuddy(self.name_input)
+        self.dpi_label = QLabel("DPI")
+        self.dpi_label.setBuddy(self.dpi_input)
+        self.sens_label = QLabel("Sensibilidade")
+        self.sens_label.setBuddy(self.sens_input)
+        for label in (self.name_label, self.dpi_label, self.sens_label):
+            label.setStyleSheet(
+                "color: %s; font-size: 12px; font-weight: 600; "
+                "background: transparent;" % COLORS["text_secondary"]
+            )
+
+        # Labels ficam em linhas próprias para continuarem visíveis quando o
+        # formulário estiver preenchido; o sufixo do spinbox permanece apenas
+        # como unidade complementar (issue #114).
+        form.addWidget(self.name_label, 0, 0, 1, 2)
+        form.addWidget(self.name_input, 1, 0, 1, 2)
+        form.addWidget(self.dpi_label, 2, 0)
+        form.addWidget(self.sens_label, 2, 1)
+        form.addWidget(self.dpi_input, 3, 0)
+        form.addWidget(self.sens_input, 3, 1)
+        form.addWidget(self.save_btn, 4, 0)
+        form.addWidget(self.clear_btn, 4, 1)
         layout.addLayout(form)
 
         layout.addStretch()
