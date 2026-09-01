@@ -2733,11 +2733,10 @@ class SettingsPage(QWidget):
         hid_layout = QVBoxLayout(hid_group)
 
         hid_info = QLabel(
-            "Para controle direto de DPI no hardware do mouse, o "
-            "aplicativo detecta o G403 HERO por identidade (VID/PID). "
-            "Sem permissão de escrita no nó hidraw, o acesso HID fica "
-            "indisponível — crie uma regra udev permanente em vez de "
-            "alterar permissões manualmente:"
+            "Para controlar o DPI físico do mouse, o Mouse Hub precisa de "
+            "acesso HID ao G403 HERO. Se faltar permissão de escrita, "
+            "clique em “Conceder acesso ao hardware” para o aplicativo "
+            "solicitar autorização administrativa e instalar a regra necessária."
         )
         hid_info.setWordWrap(True)
         hid_info.setStyleSheet(f"color: {COLORS['text_secondary']}; background: transparent;")
