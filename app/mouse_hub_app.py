@@ -172,6 +172,9 @@ class MouseController:
 # requested != applied != persisted; sem confirmação, não há valor a exibir.
 UNKNOWN_VALUE_TEXT = "—"
 _PERMISSION_BTN_LABEL = " Conceder acesso ao hardware  (senha de administrador)"
+_STATUS_CONNECTED_TEXT = "G403 conectado"
+_STATUS_DETECTED_TEXT = "Mouse detectado"
+_STATUS_NOT_DETECTED_TEXT = "Mouse não detectado"
 
 
 # Issue #88: ação destrutiva não pode ser um botão vazio — rótulo
@@ -3037,7 +3040,7 @@ class MouseHubApp(QMainWindow):
             border-radius: 4px;
         """)
         si_layout.addWidget(self._status_dot)
-        self._status_text = QLabel("Offline")
+        self._status_text = QLabel(_STATUS_NOT_DETECTED_TEXT)
         self._status_text.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-weight: 600; background: transparent;")
         si_layout.addWidget(self._status_text)
         si_layout.addStretch()
@@ -3214,15 +3217,14 @@ class MouseHubApp(QMainWindow):
                 pass
 
     def _update_sidebar_status(self):
-        """Indicador da sidebar reflete o estado combinado real —
-        nunca "Online" incondicional."""
+        """Indicador da sidebar descreve o estado local do dispositivo."""
         caps = self.full_capability_state()
         if caps.is_available("mouse_detected") and caps.is_available("hid_available"):
-            text, color = "Online", COLORS["success"]
+            text, color = _STATUS_CONNECTED_TEXT, COLORS["success"]
         elif caps.is_available("mouse_detected"):
-            text, color = "Detectado", COLORS["warning"]
+            text, color = _STATUS_DETECTED_TEXT, COLORS["warning"]
         else:
-            text, color = "Offline", COLORS["text_muted"]
+            text, color = _STATUS_NOT_DETECTED_TEXT, COLORS["text_muted"]
         self._status_dot.setStyleSheet(f"""
             background: {color};
             border-radius: 4px;
