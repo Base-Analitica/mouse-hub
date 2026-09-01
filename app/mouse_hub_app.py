@@ -1684,7 +1684,7 @@ class AutoClickerPage(QWidget):
         self.cps_display.setFixedWidth(80)
         self.cps_display.setAlignment(Qt.AlignCenter)
         self.cps_display.setStyleSheet(f"""
-            color: {COLORS['warning']};
+            color: {COLORS['accent_light']};
             font-size: 24px;
             font-weight: 900;
             background: transparent;
