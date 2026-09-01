@@ -886,8 +886,9 @@ class DashboardPage(QWidget):
         presets.addStretch()
         layout.addLayout(presets)
 
-        # Log area
-        layout.addWidget(self._spacer(10))
+        # Compactação adicional do intervalo que antecede o empty state:
+        # preserva o log inteiro no viewport oficial de 760×560.
+        layout.addWidget(self._spacer(8))
 
         log_title = QLabel("Log de Atividade")
         log_title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {COLORS['text_primary']}; background: transparent;")
