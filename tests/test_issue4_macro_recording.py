@@ -267,7 +267,7 @@ def test_ui_start_failure_shows_reason(qapp):
     page._toggle_record()
     assert _drain(page)
     assert "Não foi possível iniciar" in page.record_status.text()
-    assert "display indisponível" in page.record_status.text()
+    assert "sessão gráfica indisponível" in page.record_status.text()
 
 
 def test_ui_stop_saves_and_refreshes(qapp):

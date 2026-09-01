@@ -2050,6 +2050,22 @@ class MacrosPage(QWidget):
         super().showEvent(event)
         self._sync_caps()
 
+    @staticmethod
+    def _user_facing_automation_reason(reason) -> str:
+        """Traduz detalhes do backend em uma consequência compreensível.
+
+        A causa original continua no modelo/serviço para diagnóstico; somente
+        a mensagem operacional evita expor nomes de backend ao usuário.
+        """
+        text = str(reason or "").strip()
+        lowered = text.lower()
+        backend_markers = (
+            "x11", "xrecord", "xtest", "xlib", "display", "servidor x"
+        )
+        if any(marker in lowered for marker in backend_markers):
+            return "sessão gráfica indisponível"
+        return text or "capacidade não disponível no ambiente atual"
+
     def _sync_caps(self):
         """Reflete macro_capture_available com a causa real (issue #7).
 
@@ -2067,10 +2083,12 @@ class MacrosPage(QWidget):
         for child in self.macro_list_widget.findChildren(QPushButton):
             child.setEnabled(available)
         if available:
-            self.caps_hint.setText("● Captura de macros disponível (X11/XRecord)")
+            self.caps_hint.setText("● Gravação de macros disponível")
             self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["mc_green"])
         else:
-            self.caps_hint.setText(f"● Captura de macros indisponível: {reason}")
+            user_reason = self._user_facing_automation_reason(reason)
+            self.caps_hint.setText(
+                f"● Gravação de macros indisponível: {user_reason}")
             self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["danger"])
 
     def _set_recording_ui(self, recording: bool) -> None:
@@ -2120,7 +2138,7 @@ class MacrosPage(QWidget):
             self.name_input.setEnabled(False)
             self.cancel_btn.setVisible(True)
             self.record_status.setText(
-                " Iniciando captura XRecord… (aguardando o servidor X)")
+                " Iniciando gravação… (aguardando a sessão gráfica)")
             self._start_async("start", lambda: self.me.start_recording(name),
                               name=name)
 
@@ -2163,7 +2181,8 @@ class MacrosPage(QWidget):
             if error is not None:
                 self._set_recording_ui(False)
                 self.record_status.setText(
-                    f"Erro ao iniciar a gravação: {error}")
+                    "Erro ao iniciar a gravação: %s" %
+                    self._user_facing_automation_reason(error))
             elif result:
                 name = ctx.get("name", "")
                 self._set_recording_ui(True)
@@ -2173,14 +2192,16 @@ class MacrosPage(QWidget):
                     "qualquer janela.")
             else:
                 self._set_recording_ui(False)
-                reason = self.me.capture_failed or "capturador indisponível"
+                reason = self._user_facing_automation_reason(
+                    self.me.capture_failed or "capturador indisponível")
                 self.record_status.setText(
                     f"Não foi possível iniciar a gravação: {reason}")
         elif kind == "stop":
             self._set_recording_ui(False)
             if error is not None:
                 self.record_status.setText(
-                    f"Erro ao encerrar a gravação: {error}")
+                    "Erro ao encerrar a gravação: %s" %
+                    self._user_facing_automation_reason(error))
             elif result is None:
                 self.record_status.setText(
                     "⚠  Gravação descartada (sem eventos ou nome inválido)")
@@ -2205,7 +2226,8 @@ class MacrosPage(QWidget):
         if running:
             self.play_status.setText("Reproduzindo...")
         elif state == "failed":
-            reason = self.me.playback_error or "falha de emissão"
+            reason = self._user_facing_automation_reason(
+                self.me.playback_error or "falha de emissão")
             self.play_status.setText(f"Playback falhou: {reason}")
         else:
             self.play_status.setText("")
