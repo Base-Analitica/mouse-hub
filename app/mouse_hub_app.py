@@ -2821,11 +2821,14 @@ class SettingsPage(QWidget):
             self._permission_status.setStyleSheet(
                 f"font-size: 12px; color: {COLORS['text_muted']}; background: transparent;")
             self._permission_btn.setEnabled(False)
+            self._permission_btn.setToolTip("")
+            self._permission_btn.hide()
             return
         try:
             caps = self.state.capability_state()
         except Exception:  # noqa: BLE001
             self._permission_btn.setEnabled(False)
+            self._permission_btn.hide()
             return
         if caps.is_available("hid_available"):
             self._permission_status.setText(
@@ -2834,7 +2837,8 @@ class SettingsPage(QWidget):
                 f"font-size: 12px; color: {COLORS['success']}; background: transparent;")
             self._permission_btn.setEnabled(False)
             self._permission_btn.setToolTip("Acesso já concedido")
-            self._permission_btn.setText("✔  Acesso HID já concedido")
+            self._permission_btn.setText("Acesso HID já concedido")
+            self._permission_btn.hide()
             return
         reason = caps.reason_for("hid_available")
         if self._permission_btn.text() != _PERMISSION_BTN_LABEL:
@@ -2845,6 +2849,7 @@ class SettingsPage(QWidget):
                 "Clique abaixo e informe sua senha para o app resolver.")
             self._permission_status.setStyleSheet(
                 f"font-size: 12px; color: {COLORS['warning']}; background: transparent;")
+            self._permission_btn.show()
             self._permission_btn.setEnabled(True)
             self._permission_btn.setToolTip("")
         else:
@@ -2855,6 +2860,8 @@ class SettingsPage(QWidget):
             self._permission_status.setStyleSheet(
                 f"font-size: 12px; color: {COLORS['text_secondary']}; background: transparent;")
             self._permission_btn.setEnabled(False)
+            self._permission_btn.setToolTip("")
+            self._permission_btn.hide()
 
     def _grant_hid_access(self) -> None:
         """Roda o pkexec (prompt gráfico de senha) em thread dedicada —
@@ -2898,6 +2905,7 @@ class SettingsPage(QWidget):
             self._permission_status.setStyleSheet(
                 f"font-size: 12px; color: {COLORS['success']}; background: transparent;")
             self._permission_btn.setEnabled(False)
+            self._permission_btn.hide()
         else:
             self._permission_status.setText(
                 (" " if result.status.value == "permission_denied" else "⚠ ")
