@@ -27,6 +27,20 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
 
+
+# Issue #109: screenshots são artefatos PÚBLICOS — o texto de
+# "Informações do Sistema" não pode variar com o HOME/username da
+# máquina que captura. XDG fixo e neutro; nada é gravado nesses
+# caminhos durante a captura (leitura apenas, defaults determinísticos).
+NEUTRAL_XDG = {
+    "XDG_CONFIG_HOME": "/home/user/.config",
+    "XDG_DATA_HOME": "/home/user/.local/share",
+}
+
+
+def _apply_neutral_xdg():
+    os.environ.update(NEUTRAL_XDG)
+
 PAGES = [
     ("dashboard", "Dashboard"),
     ("dpi", "Controle de DPI"),
@@ -130,6 +144,9 @@ def main() -> int:
     ap.add_argument("--width", type=int, default=1050)
     ap.add_argument("--height", type=int, default=680)
     args = ap.parse_args()
+
+    # Issue #109: ANTES de qualquer import que resolva caminhos.
+    _apply_neutral_xdg()
 
     out_dir = REPO / args.out
     out_dir.mkdir(parents=True, exist_ok=True)
