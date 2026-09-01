@@ -173,6 +173,12 @@ class MouseController:
 UNKNOWN_VALUE_TEXT = "—"
 _PERMISSION_BTN_LABEL = " Conceder acesso ao hardware  (senha de administrador)"
 
+# Issue #107: o CTA do Auto-Clicker conta a mesma história do banner.
+# Contrato do motor (core): iniciar sem o jogo em foco ARMA o engine
+# (BLOCKED_BY_FOCUS — cliques suprimidos até a janela ganhar foco).
+_CLICKER_ARM_TEXT = "Armar Auto-Clicker (aguardando o jogo)"
+_CLICKER_START_TEXT = "Iniciar Auto-Clicker"
+_CLICKER_STOP_TEXT = "Parar Auto-Clicker"
 
 # Issue #88: ação destrutiva não pode ser um botão vazio — rótulo
 # textual curto (o subset de ícones não tem lixeira; ícone ausente
@@ -1748,6 +1754,10 @@ class AutoClickerPage(QWidget):
         self.timer.timeout.connect(self._update)
         self.timer.start(1000)
 
+        # Render inicial imediato (issue #107): o CTA já nasce contando
+        # a história do banner — sem esperar o primeiro tick do timer.
+        self._update()
+
         # issue #7: disponibilidade real do clicker dirige os controles.
         self._sync_caps()
 
@@ -1800,7 +1810,6 @@ class AutoClickerPage(QWidget):
         if self.ac.running:
             self.ac.stop()
             self._update()  # estado real como fonte (issue #5)
-            self.toggle_btn.setText("Iniciar Auto-Clicker")
             self.toggle_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -1832,7 +1841,7 @@ class AutoClickerPage(QWidget):
         else:
             self.ac.start()
             self._update()  # estado real como fonte (issue #5)
-            self.toggle_btn.setText("Parar Auto-Clicker")
+            self.toggle_btn.setText(_CLICKER_STOP_TEXT)
             self.toggle_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -1861,11 +1870,28 @@ class AutoClickerPage(QWidget):
                 }}
             """)
 
+    @staticmethod
+    def _cta_text_for(state_value: str, mc_active: bool) -> str:
+        """Issue #107: o CTA comunica a ação REAL do contrato do motor.
+
+        * parado + jogo em foco → iniciar (vai entrar clicando);
+        * parado sem jogo        → armar (motor fica aguardando o foco,
+          cliques suprimidos — BLOCKED_BY_FOCUS);
+        * ligado                 → parar."""
+        if state_value in ("running", "blocked_by_focus"):
+            return _CLICKER_STOP_TEXT
+        return _CLICKER_START_TEXT if mc_active else _CLICKER_ARM_TEXT
+
     def _update(self):
         # Foco via checker compartilhado (TTL 500ms) — o xdotool era
         # consultado a cada segundo; agora é memória até o cache expirar.
-        focused = self.svc.window_service.is_focused(tuple(focus_patterns()))
-        mc_active = focused.focused
+        # Sem serviço de janela (testes/captura), trata como não focado:
+        # o default seguro comunica o estado "armar e aguardar".
+        if self.svc is None:
+            mc_active = False
+        else:
+            focused = self.svc.window_service.is_focused(tuple(focus_patterns()))
+            mc_active = focused.focused
         if mc_active:
             self.mc_status.setText("Minecraft Detectado!")
             self.mc_status.setStyleSheet(f"""
@@ -1897,23 +1923,29 @@ class AutoClickerPage(QWidget):
             self.status_title.setText("Auto-Clicker Ativo!")
             self.status_sub.setText(f"{self.ac.cps} CPS — Botão {btn_name}")
             self.status_icon.setText("")
-            self.toggle_btn.setText("Parar Auto-Clicker")
+            self.toggle_btn.setText(_CLICKER_STOP_TEXT)
         elif state.value == "blocked_by_focus":
             self.status_title.setText("Aguardando jogo em foco...")
             self.status_sub.setText(
                 "Ligado, mas só clica com Minecraft/Lunar Client ativo")
             self.status_icon.setText("")
-            self.toggle_btn.setText("Parar Auto-Clicker")
+            self.toggle_btn.setText(_CLICKER_STOP_TEXT)
         elif state.value == "failed":
             self.status_title.setText("Auto-Clicker com erro")
             self.status_sub.setText(f"Falha: {self.ac.error or 'desconhecida'}")
             self.status_icon.setText("⚠")
-            self.toggle_btn.setText("Iniciar Auto-Clicker")
+            self.toggle_btn.setText(_CLICKER_START_TEXT)
         else:
             self.status_title.setText("Auto-Clicker Desligado")
-            self.status_sub.setText("Clique em iniciar para começar")
+            # Issue #107: parado sem o jogo, o CTA comunica armar —
+            # iniciar agora NÃO entra clicando, o motor fica aguardando.
+            self.status_sub.setText(
+                "Clique em iniciar para começar"
+                if mc_active
+                else "Ao armar, o motor aguarda o jogo em foco para clicar"
+            )
             self.status_icon.setText("")
-            self.toggle_btn.setText("Iniciar Auto-Clicker")
+            self.toggle_btn.setText(self._cta_text_for(state.value, mc_active))
 
 
 class MacrosPage(QWidget):
