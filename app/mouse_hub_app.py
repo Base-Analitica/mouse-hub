@@ -3126,13 +3126,21 @@ class MouseHubApp(QMainWindow):
 
         Todo QLabel da página recebe wordWrap: texto longo deixa a
         página ENCOLHER em vez de empurrar a largura mínima do layout
-        (causa raiz da sobreposição em janela pequena)."""
+        (causa raiz da sobreposição em janela pequena).
+
+        O layout também precisa ter sua altura mínima propagada ao widget:
+        sem isso, o QScrollArea pode comprimir as rows de um QGridLayout
+        quando a janela muda de desktop para small (issue #100)."""
         for lab in page.findChildren(QLabel):
             lab.setWordWrap(True)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setWidget(page)
+        if page.layout() is not None:
+            page.layout().activate()
+            page.setMinimumHeight(page.layout().minimumSize().height())
         return scroll
 
     def _switch_page(self, index):
