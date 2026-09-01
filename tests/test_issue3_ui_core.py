@@ -98,7 +98,10 @@ class TestIssue3DeviceAbsent:
         assert not caps.is_available("hid_available")
         assert not caps.is_available("hardware_dpi_available")
         assert core.applied_dpi is None  # estado físico real desconhecido
-        assert core.applied_sensitivity is None
+        # Issue #102: a sensibilidade é estado do SISTEMA (ponteiro),
+        # lida no startup — não depende do device do mouse. O fake
+        # default responde accel 0.0 → 50%.
+        assert core.applied_sensitivity == 50
 
     def test_operation_on_absent_device_is_device_not_found(self):
         core, _ = _make_controller_with()
