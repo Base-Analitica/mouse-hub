@@ -8,10 +8,11 @@ Suggests: xdotool
 Recommends: libgtk-3-0 | gtk-update-icon-cache
 Maintainer: Pedro Labsabs <pedro-labsabs@users.noreply.github.com>
 Homepage: https://github.com/Base-Analitica/mouse-hub
-Description: Controlador nativo do Logitech G403 HERO para Linux Mint
- Aplicativo desktop PyQt5 para configurar e usar o G403 HERO:
- DPI físico via HID++ com confirmação do hardware, sensibilidade do
- sistema (libinput), perfis, auto-clicker (1-50 CPS) e macros com
- captura XRecord e reprodução XTest — sem servidor HTTP e sem
+Description: Controle e automação local de entrada para Linux Mint
+ Aplicativo desktop PyQt5 para mouse e teclado, com automações locais,
+ perfis e controle de hardware baseado em capabilities. O Logitech G403
+ HERO é o primeiro dispositivo suportado: DPI físico via HID++ com
+ confirmação do hardware e sensibilidade do sistema via libinput.
+ Auto-clicker e macros usam XTest/XRecord, sem servidor HTTP e sem
  navegador. Dados do usuário em XDG (~/.config/mouse-hub/ e
  ~/.local/share/mouse-hub/), preservados em upgrades e remoção.

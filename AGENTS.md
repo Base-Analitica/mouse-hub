@@ -7,18 +7,38 @@ responsável pelo projeto é o **Jcode** (configuração em `.jcode/`).
 
 ## O que é este projeto
 
-Controlador nativo (PyQt5) do mouse **Logitech G403 HERO** para Linux (alvo: Linux Mint): DPI, sensibilidade, perfis, macros e auto-clicker. Python ≥ 3.10. O produto suportado é o app desktop nativo (`start.sh`, `launcher.sh`, `app/run_app.sh` ou `app/mouse_hub_app.py`). O servidor/UI web legado foi removido na issue #10 e não deve ser recriado.
+Aplicativo desktop nativo (PyQt5) e motor local de **controle e automação de entrada** para Linux (alvo: Linux Mint). Mouse e teclado fazem parte do domínio de input; configuração proprietária de hardware é capability separada e entra somente por adapters explicitamente suportados.
+
+O Logitech G403 HERO é o primeiro hardware concreto do projeto e continua sendo o dispositivo atualmente suportado para DPI físico/HID++, mas **não define mais o limite conceitual do produto**. A direção arquitetural está documentada em `docs/ARCHITECTURE.md`.
+
+O produto suportado é o app desktop nativo (`start.sh`, `launcher.sh`, `app/run_app.sh` ou `app/mouse_hub_app.py`). O servidor/UI web legado foi removido na issue #10 e não deve ser recriado.
 
 ## Arquitetura
 
 | Caminho | Papel |
 |---|---|
-| `mouse_hub/core/` | Regras de domínio (DPI, sensibilidade, perfis, config, descoberta). **Única** implementação permitida dessas regras |
-| `mouse_hub/platform/` | Camada de plataforma: protocolo HID++ (`protocol.py`, `hidpp.py`) e backend Linux (`platform/linux/`) |
-| `app/mouse_hub_app.py` | UI nativa PyQt5. Não contém regras de domínio |
-| `tests/` | Suíte determinística **sem hardware** + benchmarks (`bench_*`) + smoke de UI |
+| `mouse_hub/core/` | Regras de domínio, estado, perfis e automações. Deve concentrar a evolução do Input Engine para mouse, teclado, timing e sequências. **Única** implementação permitida dessas regras. |
+| `mouse_hub/platform/` | Camada de plataforma: protocolo HID++ (`protocol.py`, `hidpp.py`), backend Linux (`platform/linux/`) e backends de input/hardware. |
+| `app/mouse_hub_app.py` | UI nativa PyQt5. Não contém regras de domínio. |
+| `tests/` | Suíte determinística **sem hardware** + benchmarks (`bench_*`) + smoke de UI. |
 
-**Regra de ouro** (declarada no próprio `mouse_hub/__init__.py`): regras de domínio vivem somente no `core`. Lógica de DPI/perfil/sensibilidade na UI ou na platform é bug de arquitetura.
+**Regra de ouro** (declarada no próprio `mouse_hub/__init__.py`): regras de domínio vivem somente no `core`. Lógica de DPI/perfil/sensibilidade/automação na UI ou duplicada na platform é bug de arquitetura.
+
+### Direção do Input Engine
+
+A arquitetura deve convergir, conforme necessidades reais surgirem, para primitivas tipadas equivalentes a movimento/botões/scroll de mouse, key down/up de teclado, espera, sequência, repetição e agendamento controlado.
+
+Auto-clicker, macros, hotkeys e outras features devem **compor essas primitivas**, não criar emissores paralelos quando o engine já representar a operação.
+
+Não faça uma reescrita especulativa nem crie um framework universal de dispositivos sem caso concreto. A migração deve ser incremental, guiada por issues e testes.
+
+### Fronteiras obrigatórias
+
+1. **Input genérico ≠ gerenciamento universal de periféricos.** Suporte a teclado no engine não autoriza implementar RGB, firmware, polling ou recursos proprietários de qualquer teclado sem adapter/capability explícito.
+2. **Emissão ≠ automação semântica.** Mouse Hub executa ações de input; reconhecimento de tela, interpretação de intenção e decisão sobre “o que clicar” pertencem a outra camada.
+3. **Captura explícita ≠ keylogger.** Captura de teclado/cliques só existe em modos explícitos, observáveis e com lifecycle claro. Não introduza monitoramento global contínuo do que o usuário digita.
+4. **Hardware real é autoridade.** Capability não confirmada não produz estado fictício de sucesso.
+5. **Standalone continua obrigatório.** O Mouse Hub deve permanecer útil sem Katherine, Ouroboros ou qualquer outro módulo da Anakyklos.
 
 ## Comandos
 
@@ -47,16 +67,18 @@ O CI (`.github/workflows/ci.yml`) roda em Python 3.12 com 2 jobs: `test` (compil
 
 ## Regras para agentes
 
-1. **Hardware não existe no CI.** Tudo que depende do mouse físico (HID++, udev, XTest/XRecord) deve ser testável via fakes (`tests/fakes.py`). Código novo que toque hardware precisa de caminho fakeável + teste determinístico correspondente.
+1. **Hardware não existe no CI.** Tudo que depende do mouse físico (HID++, udev, XTest/XRecord) ou de backends de input deve ser testável via fakes (`tests/fakes.py`). Código novo que toque hardware/input precisa de caminho fakeável + teste determinístico correspondente.
 2. **Teste de regressão junto do fix.** Toda correção de bug chega com teste que falha sem a mudança e passa com ela.
 3. **Menor mudança completa.** Cada linha rastreia até uma issue. Sem refatoração drive-by nem reformatação de código alheio.
 4. **Branch + PR, sempre.** Nunca pushar direto na `main`. Branches: `fix/<tema>` ou `feat/<tema>`; commits convencionais em inglês (`feat:`, `fix:`, `docs:`, `test:`).
-5. **PR vinculado à issue**: corpo com problema, abordagem, testes executados e riscos; fechar com `Closes #N`.
+5. **PR vinculado à issue**: corpo com problema, abordagem, testes executados e riscos; fechar com `Closes #N` quando houver issue correspondente.
 6. **UI**: PyQt5 fixado em `5.15.11` no CI — não atualizar versão sem discussão prévia. Mudanças de UI se verificam com `QT_QPA_PLATFORM=offscreen`.
 7. **Constantes de domínio**: respeite `mouse_hub/core/constants.py` (`DPI_MIN/MAX/STEP`, `DPI_PRESETS`, `SENSITIVITY_*`, `POLLING_RATES`). Nada de limites hardcoded em outro lugar.
 8. **Prioridades das issues**: P0 = bloqueia uso; P1 = importante; P2 = melhoria. Use a prioridade para calibrar escopo do PR.
 9. **Fluxo de dupla**: quem implementa entrega PR e NÃO faz merge — revisão e merge são do mantenedor (@mantenedor / Pedro). Requests de mudança do revisor têm prioridade máxima.
 10. **Web legado não volta.** Não recrie servidor HTTP, `static/index.html`, `mouse_hub.py` raiz ou lógica de domínio paralela para navegador.
+11. **Sem keylogging contínuo.** Não introduza captura global persistente/oculta de teclado. Gravação deve ser feature explícita, delimitada e cancelável.
+12. **Sem RPA semântico no core.** OCR, visão computacional, interpretação de UI e tomada autônoma de decisão sobre aplicações não pertencem ao Mouse Hub.
 
 ## Eficiência de tokens (agentes)
 
