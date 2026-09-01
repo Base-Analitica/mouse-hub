@@ -173,6 +173,13 @@ class MouseController:
 UNKNOWN_VALUE_TEXT = "—"
 _PERMISSION_BTN_LABEL = " Conceder acesso ao hardware  (senha de administrador)"
 
+# Issue #103: o slider de DPI é controle de ENTRADA — "valor desejado a
+# aplicar" — nunca representação implícita do estado aplicado. A legenda
+# é permanente: o slider não é readback mesmo com valor confirmado.
+_DPI_TARGET_LABEL = "Valor desejado (aplicar ao hardware)"
+# Sub-rótulo do hero enquanto o DPI físico não tem readback confirmado.
+_DPI_WAITING_TEXT = "AGUARDANDO LEITURA DO HARDWARE"
+
 # Issue #102: a página de Sensibilidade descreve ESTADO DO SISTEMA —
 # nunca leitura do hardware do mouse. Os textos do hero são separados
 # do unknown de DPI para os dois domínios não se fundirem na UI.
@@ -1102,6 +1109,16 @@ class DPIPage(QWidget):
         self.slider.sliderReleased.connect(self._commit_slider)
         layout.addWidget(self.slider)
 
+        # Issue #103: legenda PERMANENTE do papel do slider — controle
+        # de entrada (valor desejado), distinto do readback do hero.
+        self.target_hint = QLabel(_DPI_TARGET_LABEL)
+        self.target_hint.setAlignment(Qt.AlignCenter)
+        self.target_hint.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 11px; "
+            "font-weight: 700; background: transparent;"
+        )
+        layout.addWidget(self.target_hint)
+
         # Indicador de capacidade HID/DPI (issue #3)
         self.hid_hint = QLabel("")
         self.hid_hint.setWordWrap(True)
@@ -1113,7 +1130,7 @@ class DPIPage(QWidget):
                 # Desconhecido: exibe UNKNOWN; o slider fica em posição
                 # NEUTRA (controle de entrada — não alega estado aplicado).
                 self.dpi_value.setText(UNKNOWN_VALUE_TEXT)
-                self.dpi_state.setText("AGUARDANDO LEITURA DO HARDWARE")
+                self.dpi_state.setText(_DPI_WAITING_TEXT)
                 self.slider.setValue(DPI_DEFAULT)
             else:
                 self.dpi_value.setText(str(initial))
@@ -1238,13 +1255,20 @@ class DPIPage(QWidget):
             self.hid_hint.setStyleSheet(f"color: {COLORS['danger']}; font-size: 12px; background: transparent;")
 
     def _on_slider_preview(self, val):
-        """PREVIEW apenas (revisão PR #21): atualiza o display com o
-        valor em consideração. NENHUM efeito físico aqui — o commit
-        acontece em sliderReleased/Aplicar/preset. Arrastar o slider
-        nunca gera dezenas de comandos HID++."""
+        """PREVIEW apenas (revisão PR #21): atualiza o valor em
+        consideração. NENHUM efeito físico aqui — o commit acontece em
+        sliderReleased/Aplicar/preset. Arrastar o slider nunca gera
+        dezenas de comandos HID++.
+
+        Issue #103: o sub-rótulo do hero permanece reservado ao estado
+        APLICADO — sem readback confirmado, o preview não promove a
+        posição do slider a 'DOTS PER INCH' (estado aplicado)."""
         val = round_to_step(val)
         self.dpi_value.setText(str(val))
-        self.dpi_state.setText("DOTS PER INCH")
+        confirmed = None if self.state is None else self.state.applied_dpi
+        self.dpi_state.setText(
+            "DOTS PER INCH" if confirmed is not None else _DPI_WAITING_TEXT
+        )
         self.dpi_input.setText(str(val))
 
     def _commit_slider(self):
@@ -1287,7 +1311,7 @@ class DPIPage(QWidget):
                 self.slider.setValue(confirmed)
             else:
                 self.dpi_value.setText(UNKNOWN_VALUE_TEXT)
-                self.dpi_state.setText("AGUARDANDO LEITURA DO HARDWARE")
+                self.dpi_state.setText(_DPI_WAITING_TEXT)
         self._sync_hint()
 
     def _apply_manual(self):
@@ -1336,7 +1360,7 @@ class DPIPage(QWidget):
             self.slider.setValue(confirmed)
         else:
             self.dpi_value.setText(UNKNOWN_VALUE_TEXT)
-            self.dpi_state.setText("AGUARDANDO LEITURA DO HARDWARE")
+            self.dpi_state.setText(_DPI_WAITING_TEXT)
 
 
 class SensitivityPage(QWidget):
