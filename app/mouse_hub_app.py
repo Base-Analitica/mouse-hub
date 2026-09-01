@@ -1751,6 +1751,19 @@ class AutoClickerPage(QWidget):
         # issue #7: disponibilidade real do clicker dirige os controles.
         self._sync_caps()
 
+    def _set_status_icon(self, name=None, color=None):
+        """Atualiza o indicador com ícone vetorial ou fallback vazio.
+
+        O subset Remix é opcional no runtime: quando não carrega, o título
+        e o subtítulo continuam sendo a representação textual completa.
+        """
+        self.status_icon.clear()
+        if name is None:
+            return
+        icon = ui_icons.icon(name, color, 44)
+        if icon is not None:
+            self.status_icon.setPixmap(icon.pixmap(QSize(44, 44)))
+
     def showEvent(self, event):
         super().showEvent(event)
         self._sync_caps()
@@ -1819,7 +1832,7 @@ class AutoClickerPage(QWidget):
             """)
             self.status_title.setText("Auto-Clicker Desligado")
             self.status_sub.setText("Clique em iniciar para começar")
-            self.status_icon.setText("")
+            self._set_status_icon()
             self.status_frame.setObjectName("clickerStatus")
             self.status_frame            .setStyleSheet(f"""
                 QFrame#clickerStatus {{
@@ -1850,7 +1863,7 @@ class AutoClickerPage(QWidget):
                 }}
             """)
             self.status_title.setText("Auto-Clicker Ativo!")
-            self.status_icon.setText("")
+            self._set_status_icon()
             self.status_frame.setObjectName("clickerStatus")
             self.status_frame            .setStyleSheet(f"""
                 QFrame#clickerStatus {{
@@ -1896,23 +1909,23 @@ class AutoClickerPage(QWidget):
                 self.ac.button, "?")
             self.status_title.setText("Auto-Clicker Ativo!")
             self.status_sub.setText(f"{self.ac.cps} CPS — Botão {btn_name}")
-            self.status_icon.setText("")
+            self._set_status_icon()
             self.toggle_btn.setText("Parar Auto-Clicker")
         elif state.value == "blocked_by_focus":
             self.status_title.setText("Aguardando jogo em foco...")
             self.status_sub.setText(
                 "Ligado, mas só clica com Minecraft/Lunar Client ativo")
-            self.status_icon.setText("")
+            self._set_status_icon()
             self.toggle_btn.setText("Parar Auto-Clicker")
         elif state.value == "failed":
             self.status_title.setText("Auto-Clicker com erro")
             self.status_sub.setText(f"Falha: {self.ac.error or 'desconhecida'}")
-            self.status_icon.setText("⚠")
+            self._set_status_icon("alert", COLORS["warning"])
             self.toggle_btn.setText("Iniciar Auto-Clicker")
         else:
             self.status_title.setText("Auto-Clicker Desligado")
             self.status_sub.setText("Clique em iniciar para começar")
-            self.status_icon.setText("")
+            self._set_status_icon()
             self.toggle_btn.setText("Iniciar Auto-Clicker")
 
 
@@ -2183,7 +2196,7 @@ class MacrosPage(QWidget):
                     f"Erro ao encerrar a gravação: {error}")
             elif result is None:
                 self.record_status.setText(
-                    "⚠  Gravação descartada (sem eventos ou nome inválido)")
+                    "Gravação descartada (sem eventos ou nome inválido)")
             else:
                 count = self.me.macros.get(result, {}).get("count", 0)
                 suffix = " — TRUNCADA no teto de eventos" \
@@ -2194,7 +2207,7 @@ class MacrosPage(QWidget):
         elif kind == "cancel":
             self._set_recording_ui(False)
             self.record_status.setText(
-                "⚠  Gravação cancelada — eventos descartados")
+                "Gravação cancelada — eventos descartados")
 
     def _update_play_status(self) -> None:
         """Reflete o estado real do playback: em execução ou FAILED com
@@ -2565,7 +2578,7 @@ class ProfilesPage(QWidget):
             badge = widgets["active_badge"]
             card = widgets["card"]
             if name == active:
-                badge.setText("✔ Ativo")
+                badge.setText("Ativo")
                 badge.setStyleSheet(
                     "color: %s; font-size: 11px; font-weight: 700; background: transparent;"
                     % COLORS["mc_green"]
@@ -2628,15 +2641,15 @@ class ProfilesPage(QWidget):
         dpi_ok = dpi_result.status.ok
         sens_ok = sens_result.status.ok
         if dpi_ok and sens_ok:
-            text = "✔ Perfil '%s' aplicado: DPI e sensibilidade confirmados." % profile.name
+            text = "Perfil '%s' aplicado: DPI e sensibilidade confirmados." % profile.name
             color = COLORS["mc_green"]
         elif dpi_ok:
-            text = ("⚠ Perfil '%s' aplicado PARCIALMENTE: DPI "
+            text = ("Perfil '%s' aplicado PARCIALMENTE: DPI "
                     "confirmado; sensibilidade falhou (%s)." %
                     (profile.name, _result_text(sens_result)))
             color = COLORS["warning"]
         elif sens_ok:
-            text = ("⚠ Perfil '%s' aplicado PARCIALMENTE: "
+            text = ("Perfil '%s' aplicado PARCIALMENTE: "
                     "sensibilidade confirmada; DPI falhou (%s)." %
                     (profile.name, _result_text(dpi_result)))
             color = COLORS["warning"]
@@ -2657,7 +2670,7 @@ class ProfilesPage(QWidget):
         ilegivel) nunca vira sucesso e nunca sobrescreve o arquivo."""
         name = self.name_input.text().strip()
         if not name:
-            self.apply_hint.setText("⚠ Informe um nome para o perfil.")
+            self.apply_hint.setText("Informe um nome para o perfil.")
             self.apply_hint.setStyleSheet(
                 "color: %s; font-size: 12px; background: transparent;" % COLORS["warning"]
             )
@@ -2673,7 +2686,7 @@ class ProfilesPage(QWidget):
                 "color: %s; font-size: 12px; background: transparent;" % COLORS["danger"]
             )
             return
-        self.apply_hint.setText("✔ Perfil '%s' salvo na configuracao." % name)
+        self.apply_hint.setText("Perfil '%s' salvo na configuracao." % name)
         self.apply_hint.setStyleSheet(
             "color: %s; font-size: 12px; background: transparent;" % COLORS["mc_green"]
         )
@@ -2834,7 +2847,7 @@ class SettingsPage(QWidget):
                 f"font-size: 12px; color: {COLORS['success']}; background: transparent;")
             self._permission_btn.setEnabled(False)
             self._permission_btn.setToolTip("Acesso já concedido")
-            self._permission_btn.setText("✔  Acesso HID já concedido")
+            self._permission_btn.setText("Acesso HID já concedido")
             return
         reason = caps.reason_for("hid_available")
         if self._permission_btn.text() != _PERMISSION_BTN_LABEL:
@@ -2851,7 +2864,7 @@ class SettingsPage(QWidget):
             if self._permission_btn.text() != _PERMISSION_BTN_LABEL:
                 self._permission_btn.setText(_PERMISSION_BTN_LABEL)
             self._permission_status.setText(
-                f"⚠ Sem acesso HID por outra causa: {reason}")
+                f"Sem acesso HID por outra causa: {reason}")
             self._permission_status.setStyleSheet(
                 f"font-size: 12px; color: {COLORS['text_secondary']}; background: transparent;")
             self._permission_btn.setEnabled(False)
@@ -2894,14 +2907,12 @@ class SettingsPage(QWidget):
                     self.state.refresh()
             except Exception:  # noqa: BLE001
                 pass
-            self._permission_status.setText("" + result.message)
+            self._permission_status.setText(result.message)
             self._permission_status.setStyleSheet(
                 f"font-size: 12px; color: {COLORS['success']}; background: transparent;")
             self._permission_btn.setEnabled(False)
         else:
-            self._permission_status.setText(
-                (" " if result.status.value == "permission_denied" else "⚠ ")
-                + result.message)
+            self._permission_status.setText(result.message)
             self._permission_status.setStyleSheet(
                 f"font-size: 12px; color: {COLORS['warning']}; background: transparent;")
             self._sync_permission_ui()
