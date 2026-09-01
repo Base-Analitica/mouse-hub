@@ -1667,6 +1667,11 @@ class AutoClickerPage(QWidget):
         """)
         layout.addWidget(self.mc_status)
 
+        self.caps_hint = QLabel("")
+        self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["text_muted"])
+        self.caps_hint.setWordWrap(True)
+        layout.addWidget(self.caps_hint)
+
         # CPS Control
         cps_title = QLabel("CPS (Cliques por segundo)")
         cps_title.setStyleSheet(f"font-size: 16px; font-weight: 700; background: transparent;")
@@ -1729,10 +1734,6 @@ class AutoClickerPage(QWidget):
         layout.addLayout(btn_row)
 
         # Start / Stop
-        self.caps_hint = QLabel("")
-        self.caps_hint.setStyleSheet("color: %s; font-size: 12px; background: transparent;" % COLORS["text_muted"])
-        self.caps_hint.setWordWrap(True)
-
         self.toggle_btn = AccentButton("Iniciar Auto-Clicker")
         self.toggle_btn.setMinimumHeight(44)
         self.toggle_btn.setToolTip(
