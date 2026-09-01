@@ -1,7 +1,7 @@
 """Issue #67 — hotplug: plug/desplug reflete na UI em tempo real.
 
 Antes: o app só re-avaliava hardware em startup/showEvent/operação —
-desconectar mantinha "Online" mentiroso e conectar não acordava a UI.
+desconectar deixava a copy da conexão ambígua e conectar não acordava a UI.
 Agora: monitor de uevents (netlink, orientado a evento, sem polling)
 + debounce de rajada + refresh de capacidades na main thread.
 
@@ -178,7 +178,7 @@ def qapp():
 
 def test_window_hotplug_plug_e_desplug_atualizam_sidebar(qapp, monkeypatch):
     """E2E determinístico da janela: evento na fila → refresh único →
-    sidebar acorda (Offline → Detectado → Offline)."""
+    sidebar acorda (Mouse não detectado → G403 conectado → Mouse não detectado)."""
     from app import mouse_hub_app as app_module
     from tests.fakes import FakeHidAccess, FakeSystemInput
     from mouse_hub.core.mouse_controller import MouseController
@@ -214,7 +214,7 @@ def test_window_hotplug_plug_e_desplug_atualizam_sidebar(qapp, monkeypatch):
     w = app_module.MouseHubApp()
     try:
         assert DummyMonitor.started
-        assert w._status_text.text() == "Offline"
+        assert w._status_text.text() == "Mouse não detectado"
 
         discoveries = iter(
             [[fake] for fake in (None,)]  # placeholder, substituído abaixo
@@ -227,15 +227,15 @@ def test_window_hotplug_plug_e_desplug_atualizam_sidebar(qapp, monkeypatch):
         w._hotplug_queue.put(("add", "/devices/x/hidraw/hidraw2"))
         w._poll_hotplug(now=0.0)
         w._poll_hotplug(now=0.5)
-        # o FakeHidAccess responde ao probe completo → plug = Online
-        # (com hardware real sem regra udev seria "Detectado")
-        assert w._status_text.text() == "Online"
+        # o FakeHidAccess responde ao probe completo → G403 conectado
+        # (com hardware real sem regra udev seria "Mouse detectado")
+        assert w._status_text.text() == "G403 conectado"
 
         monkeypatch.setattr(app_module, "discover_candidates", lambda: [])
         w._hotplug_queue.put(("remove", "/devices/x/hidraw/hidraw2"))
         w._poll_hotplug(now=10.0)
         w._poll_hotplug(now=10.5)
-        assert w._status_text.text() == "Offline"
+        assert w._status_text.text() == "Mouse não detectado"
 
         # rajada: N eventos → UM refresh
         refreshes = {"n": 0}

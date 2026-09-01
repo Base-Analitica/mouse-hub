@@ -4,7 +4,7 @@ Cobre (Qt offscreen, sem hardware):
 
 1. composição de capacidades (hardware do core + evidências da
    instância de automação) sem colapsar verdades distintas;
-2. indicador da sidebar jamais "Online" incondicional;
+2. copy da sidebar identifica o estado local sem linguagem de serviço web;
 3. subtítulo do Dashboard declara DPI físico só com evidência;
 4. Sensibilidade/Auto-Clicker/Macros desabilitam controles COM a
    causa quando a capacidade correspondente está indisponível.
@@ -153,28 +153,28 @@ def test_automation_overrides_follow_display(qapp, monkeypatch):
         window.svc.cleanup()
 
 
-# ── 2) sidebar nunca "Online" incondicional ──────────────────────
+# ── 2) sidebar identifica o estado local sem copy de serviço web ───
 
 def test_sidebar_status_reflects_capabilities(qapp, monkeypatch):
     import app.mouse_hub_app as app_module
 
     window = app_module.MouseHubApp()
     try:
-        # Sem mouse (ambiente de teste): Offline
+        # Sem mouse (ambiente de teste): Mouse não detectado
         window.mouse_state = FakeState(UNAVAILABLE)
         window._update_sidebar_status()
-        assert window._status_text.text() == "Offline"
+        assert window._status_text.text() == "Mouse não detectado"
 
-        # Detectado mas sem HID: Detectado
+        # Detectado mas sem HID: Mouse detectado
         caps = all_available_model(hid_available=False).evaluate()
         window.mouse_state = FakeState(caps)
         window._update_sidebar_status()
-        assert window._status_text.text() == "Detectado"
+        assert window._status_text.text() == "Mouse detectado"
 
-        # Detectado + HID: Online
+        # Detectado + HID: G403 conectado
         window.mouse_state = FakeState(all_available_model().evaluate())
         window._update_sidebar_status()
-        assert window._status_text.text() == "Online"
+        assert window._status_text.text() == "G403 conectado"
     finally:
         window.close()
         window.me.cleanup()
@@ -189,10 +189,10 @@ def test_sidebar_status_updates_on_page_switch(qapp):
     try:
         window.mouse_state = FakeState(UNAVAILABLE)
         window._switch_page(2)
-        assert window._status_text.text() == "Offline"
+        assert window._status_text.text() == "Mouse não detectado"
         window.mouse_state = FakeState(all_available_model().evaluate())
         window._switch_page(0)
-        assert window._status_text.text() == "Online"
+        assert window._status_text.text() == "G403 conectado"
     finally:
         window.close()
         window.me.cleanup()
