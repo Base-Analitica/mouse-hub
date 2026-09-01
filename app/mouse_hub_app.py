@@ -104,6 +104,13 @@ POLLING_UNAVAILABLE_COPY = (
 
 STYLESHEET = build_app_stylesheet()
 
+_PROFILE_DISPLAY_NAMES = {
+    "minecraft": "Minecraft",
+    "csgo": "CS:GO",
+    "fortnite": "Fortnite",
+    "default": "Padrão",
+}
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  MOUSE CONTROLLER (DPI / Sensitivity / AutoClicker / Macros)
@@ -2503,21 +2510,18 @@ class ProfilesPage(QWidget):
         cl.setSpacing(4)
 
         top = QHBoxLayout()
-        ic = QLabel("")
-        ic.setStyleSheet("font-size: 20px; background: transparent;")
-        top.addWidget(ic)
-        top.addStretch()
-        active_badge = QLabel("")
-        active_badge.setStyleSheet("font-size: 11px; font-weight: 700; background: transparent;")
-        top.addWidget(active_badge)
-        cl.addLayout(top)
-
-        nm = QLabel(profile.name)
+        nm = QLabel(_PROFILE_DISPLAY_NAMES.get(profile.name, profile.name))
         nm.setStyleSheet(
             "font-size: 14px; font-weight: 700; color: %s; background: transparent;"
             % COLORS["text_primary"]
         )
-        cl.addWidget(nm)
+        top.addWidget(nm)
+        top.addStretch()
+        active_badge = QLabel("Ativo")
+        active_badge.setStyleSheet("font-size: 11px; font-weight: 700; background: transparent;")
+        active_badge.setVisible(False)
+        top.addWidget(active_badge)
+        cl.addLayout(top)
 
         det = QLabel("DPI: %d  •  Sens: %d%%" % (profile.dpi, profile.sensitivity))
         det.setStyleSheet(
@@ -2565,7 +2569,8 @@ class ProfilesPage(QWidget):
             badge = widgets["active_badge"]
             card = widgets["card"]
             if name == active:
-                badge.setText("✔ Ativo")
+                badge.setText("Ativo")
+                badge.setVisible(True)
                 badge.setStyleSheet(
                     "color: %s; font-size: 11px; font-weight: 700; background: transparent;"
                     % COLORS["mc_green"]
@@ -2576,7 +2581,7 @@ class ProfilesPage(QWidget):
                     % (COLORS["bg_card"], COLORS["mc_green"])
                 )
             else:
-                badge.setText("")
+                badge.setVisible(False)
                 card.setStyleSheet(
                     "QFrame#profileCard { background: %s; border: 2px solid %s;"
                     "border-radius: 16px; padding: 12px; }"
