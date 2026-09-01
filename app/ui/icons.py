@@ -29,10 +29,10 @@ _FONT_FAMILY = None  # cache; "" = tentou e falhou (modo texto)
 # nome semântico -> codepoint no subset (remixicon v5, Apache-2.0)
 _CODEPOINTS = {
     "dashboard":   0xEC14,  # ri-dashboard-line
-    "dpi":         0xF177,  # ri-speed-line
+    "dpi":         0xED4C,  # ri-focus-3-line
     "sensitivity": 0xEC0A,  # ri-cursor-line
     "clicker":     0xEF7D,  # ri-mouse-line
-    "macros":      0xED21,  # ri-film-line
+    "macros":      0xEE75,  # ri-keyboard-line
     "profiles":    0xF264,  # ri-user-line
     "settings":    0xF0E6,  # ri-settings-3-line
     "shield":      0xF100,  # ri-shield-check-line
