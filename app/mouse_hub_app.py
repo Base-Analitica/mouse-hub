@@ -104,6 +104,9 @@ POLLING_UNAVAILABLE_COPY = (
 
 STYLESHEET = build_app_stylesheet()
 
+ACTIVITY_LOG_EMPTY_HEIGHT = 64
+ACTIVITY_LOG_CONTENT_HEIGHT = 120
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  MOUSE CONTROLLER (DPI / Sensitivity / AutoClicker / Macros)
@@ -824,6 +827,7 @@ class DashboardPage(QWidget):
 
         # Title
         title = QLabel("Mouse Hub Dashboard")
+        title.setObjectName("dashboardPageTitle")
         title.setStyleSheet(f"font-size: 24px; font-weight: 900; color: {COLORS['text_primary']}; background: transparent;")
         title_icon = ui_icons.icon_label("dashboard", COLORS["accent_light"], 24)
         title_row = QHBoxLayout()
@@ -891,7 +895,6 @@ class DashboardPage(QWidget):
 
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMaximumHeight(120)
         self.log.setPlaceholderText(
             "Nenhuma atividade ainda — as ações do app aparecem aqui.")
         self.log.setStyleSheet(f"""
@@ -905,6 +908,8 @@ class DashboardPage(QWidget):
                 color: {COLORS['text_secondary']};
             }}
         """)
+        self.log.textChanged.connect(self._sync_log_height)
+        self._sync_log_height()
         layout.addWidget(self.log)
 
         layout.addStretch()
@@ -962,6 +967,15 @@ class DashboardPage(QWidget):
     def log_msg(self, msg):
         ts = datetime.now().strftime("%H:%M:%S")
         self.log.append(f"[{ts}] {msg}")
+
+    def _sync_log_height(self):
+        """Ajusta a densidade do log ao conteúdo real da sessão."""
+        height = (
+            ACTIVITY_LOG_CONTENT_HEIGHT
+            if self.log.toPlainText().strip()
+            else ACTIVITY_LOG_EMPTY_HEIGHT
+        )
+        self.log.setFixedHeight(height)
 
     def _sync_subtitle(self):
         """Reflete o estado real do mouse (core): presença e HID."""
@@ -3128,7 +3142,8 @@ class MouseHubApp(QMainWindow):
         página ENCOLHER em vez de empurrar a largura mínima do layout
         (causa raiz da sobreposição em janela pequena)."""
         for lab in page.findChildren(QLabel):
-            lab.setWordWrap(True)
+            if lab.objectName() != "dashboardPageTitle":
+                lab.setWordWrap(True)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
