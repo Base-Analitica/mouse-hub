@@ -1424,18 +1424,6 @@ class SensitivityPage(QWidget):
                 w.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; background: transparent;")
         layout.addLayout(hint)
 
-        # Speed bar
-        bar_frame = QFrame()
-        bar_frame.setFixedHeight(8)
-        bar_frame.setObjectName("speedBar")
-        bar_frame        .setStyleSheet(f"""
-            QFrame#speedBar {{
-                background: {COLORS['bg_input']};
-                border-radius: 4px;
-            }}
-        """)
-        layout.addWidget(bar_frame)
-
         # Polling rate — issue #6. O G403 HERO não tem alteração de
         # polling rate confirmável pelo stack HID++ atual (feature
         # Report Rate 0x8060 não implementada na descoberta de
